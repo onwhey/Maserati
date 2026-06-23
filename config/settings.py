@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
@@ -43,6 +44,17 @@ def env_int(name: str, *, default: int) -> int:
         raise ImproperlyConfigured(f"环境变量 {name} 必须是整数") from exc
 
 
+def env_decimal(name: str, *, default: str) -> Decimal:
+    raw = os.environ.get(name, default)
+    try:
+        value = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ImproperlyConfigured(f"环境变量 {name} 必须是 Decimal") from exc
+    if not value.is_finite():
+        raise ImproperlyConfigured(f"环境变量 {name} 必须是有限 Decimal")
+    return value
+
+
 def csv_env(name: str, *, default: Iterable[str]) -> list[str]:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -71,6 +83,9 @@ INSTALLED_APPS = [
     "apps.alerts",
     "apps.audit",
     "apps.runtime_config",
+    "apps.binance_gateway",
+    "apps.market_data",
+    "apps.strategy_analysis",
 ]
 
 MIDDLEWARE = [
@@ -163,8 +178,31 @@ ACTIVE_SYMBOL = env_str("ACTIVE_SYMBOL", default="BTCUSDT" if TESTING else None,
 DEPLOYMENT_REAL_TRADING_ENABLED = env_bool("DEPLOYMENT_REAL_TRADING_ENABLED", default=False)
 ALLOW_REAL_EXTERNAL_SERVICES = env_bool("ALLOW_REAL_EXTERNAL_SERVICES", default=False)
 
+DATA_COLLECTION_EXCHANGE = env_str("DATA_COLLECTION_EXCHANGE", default="binance")
+DATA_COLLECTION_MARKET_TYPE = env_str("DATA_COLLECTION_MARKET_TYPE", default="usds_m_futures")
+DATA_COLLECTION_SYMBOL = env_str("DATA_COLLECTION_SYMBOL", default="BTCUSDT")
+DATA_COLLECTION_TIMEFRAMES = csv_env("DATA_COLLECTION_TIMEFRAMES", default=["4h", "1d"])
+DATA_COLLECTION_4H_LOOKBACK_COUNT = env_int("DATA_COLLECTION_4H_LOOKBACK_COUNT", default=10)
+DATA_COLLECTION_1D_LOOKBACK_COUNT = env_int("DATA_COLLECTION_1D_LOOKBACK_COUNT", default=5)
+DATA_BACKFILL_KLINE_PAGE_LIMIT = env_int("DATA_BACKFILL_KLINE_PAGE_LIMIT", default=1000)
+DATA_BACKFILL_MAX_PAGES_PER_RUN = env_int("DATA_BACKFILL_MAX_PAGES_PER_RUN", default=10)
+DATA_BACKFILL_MAX_BARS_PER_RUN = env_int("DATA_BACKFILL_MAX_BARS_PER_RUN", default=5000)
+MARKET_SNAPSHOT_4H_LOOKBACK_COUNT = env_int("MARKET_SNAPSHOT_4H_LOOKBACK_COUNT", default=500)
+MARKET_SNAPSHOT_1D_LOOKBACK_COUNT = env_int("MARKET_SNAPSHOT_1D_LOOKBACK_COUNT", default=365)
+
+FEATURE_SCHEMA_VERSION = env_str("FEATURE_SCHEMA_VERSION", default="1.0")
+SIGNAL_SCHEMA_VERSION = env_str("SIGNAL_SCHEMA_VERSION", default="1.0")
+ATOMIC_SIGNAL_FAILURE_BLOCK_RATIO = env_decimal("ATOMIC_SIGNAL_FAILURE_BLOCK_RATIO", default="0.3")
+
+BINANCE_GATEWAY_ENABLED = env_bool("BINANCE_GATEWAY_ENABLED", default=False)
+BINANCE_PUBLIC_DATA_ENABLED = env_bool("BINANCE_PUBLIC_DATA_ENABLED", default=False)
 BINANCE_BASE_URL = env_str("BINANCE_BASE_URL", default="")
+BINANCE_USDS_M_BASE_URL = env_str("BINANCE_USDS_M_BASE_URL", default=BINANCE_BASE_URL)
+BINANCE_COIN_M_BASE_URL = env_str("BINANCE_COIN_M_BASE_URL", default="")
 BINANCE_RECV_WINDOW_MS = env_int("BINANCE_RECV_WINDOW_MS", default=5000)
+BINANCE_CONNECT_TIMEOUT_SECONDS = env_int("BINANCE_CONNECT_TIMEOUT_SECONDS", default=10)
+BINANCE_READ_TIMEOUT_SECONDS = env_int("BINANCE_READ_TIMEOUT_SECONDS", default=10)
+BINANCE_SAFE_READ_MAX_ATTEMPTS = env_int("BINANCE_SAFE_READ_MAX_ATTEMPTS", default=2)
 EXTERNAL_REQUEST_TIMEOUT_SECONDS = env_int("EXTERNAL_REQUEST_TIMEOUT_SECONDS", default=10)
 SAFE_READ_MAX_TECHNICAL_RETRIES = env_int("SAFE_READ_MAX_TECHNICAL_RETRIES", default=2)
 

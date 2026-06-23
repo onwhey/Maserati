@@ -1,0 +1,21 @@
+"""StrategyAnalysis 模块：Django app 配置；不访问外部服务，不涉及交易执行。"""
+
+from __future__ import annotations
+
+from django.apps import AppConfig
+
+
+class StrategyAnalysisConfig(AppConfig):
+    default_auto_field = "django.db.models.BigAutoField"
+    name = "apps.strategy_analysis"
+    verbose_name = "策略分析"
+
+    def ready(self) -> None:
+        from apps.strategy_calculator.atomic_signal import FeatureCompareCalculator
+        from apps.strategy_calculator.errors import DuplicateCalculatorError
+        from apps.strategy_calculator.registry import default_registry
+
+        try:
+            default_registry.register(FeatureCompareCalculator())
+        except DuplicateCalculatorError:
+            pass
