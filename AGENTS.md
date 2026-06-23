@@ -118,6 +118,10 @@ Celery
 Celery Beat
 Python logging / Django logging
 pytest / pytest-django 或 Django test framework
+Node.js LTS（仅 OpsConsole 前端）
+Next.js + TypeScript（仅 OpsConsole 前端）
+shadcn/ui
+Recharts
 ```
 
 版本约束：
@@ -133,7 +137,7 @@ celery>=5.6,<5.7
 
 不得随意升级或降级核心版本，除非先有架构决策文档并完成兼容性验证。
 
-依赖版本应在 `pyproject.toml` 中使用兼容范围，锁文件固定实际安装版本。
+Python 依赖版本应在 `pyproject.toml` 中使用兼容范围；OpsConsole 前端依赖应写入 `package.json`；后端与前端锁文件分别固定实际安装版本。
 
 ## 4. 文档优先级
 
@@ -495,9 +499,11 @@ AIReview 不自动下单。
 
 ## 15. 不得预设未定人工恢复能力
 
-OrderStatusSync 和 FillSync 模块不定义人工补查、人工补同步或对应额外运行开关。
+OrderStatusSync 和 FillSync 模块不自行定义独立人工补查页面、人工补同步页面或对应额外运行开关。
 
-如果未来需要后台人工恢复或人工对账能力，必须先制定独立 OpsConsole / 后台需求，并明确：
+当前受控人工恢复和人工对账入口统一由 `docs/requirements/ops_console.md` 定义。OpsConsole 只负责权限、明确对象选择、二次确认、原因、审计和结果展示；实际补查、补同步仍必须调用 OrderStatusSync / FillSync 对应业务 service。
+
+任何新增或扩展的后台人工恢复能力，必须先修改独立 OpsConsole / 后台需求，并明确：
 
 ```text
 入口权限
@@ -512,7 +518,7 @@ AlertEvent
 是否影响真实交易
 ```
 
-不得在订单状态同步或成交同步模块中提前埋入未定人工入口。
+不得在订单状态同步或成交同步模块中自行埋入未由 OpsConsole 需求授权的人工入口、通用查询入口或额外开关。
 
 ## 16. 业务逻辑组织规则
 
@@ -942,7 +948,7 @@ Hermes 入站交易命令
 
 Codex 必须优先使用项目已选定框架的内建能力。
 
-本项目使用 Django、Django ORM、Django migrations、Django settings、Celery、Celery Beat、Redis、Python logging 和 pytest / Django test framework。
+本项目后端使用 Django、Django ORM、Django migrations、Django settings、Celery、Celery Beat、Redis、Python logging 和 pytest / Django test framework；OpsConsole 前端使用 Next.js、TypeScript、shadcn/ui 和 Recharts。
 
 Codex 不得自研 ORM、migration、配置系统、日志系统、任务队列、调度系统、测试框架或数据库连接池。
 

@@ -778,7 +778,7 @@ RuntimeGuard 能发现投递卡住但不替代通知发送。
 
 Hermes fake 必须能够证明消息中不存在密钥、签名和完整外部原始响应。
 
-## 19. PerformanceMetrics 与 AIReview 测试
+## 19. 后台、PerformanceMetrics 与 AIReview 测试
 
 ### 19.1 PerformanceMetrics
 
@@ -811,6 +811,25 @@ AIReviewFinding 和 Suggestion 只用于人工查看；
 不会修改策略、风控、权限、订单或 ActiveLock；
 不会触发交易；
 RuntimeGuard 不巡检其任务状态。
+```
+
+### 19.3 OpsConsole
+
+OpsConsole 必须同时覆盖 Next.js 前端测试和 Django API 权限测试，并证明：
+
+```text
+未登录用户不能读取后台数据或执行后台动作；
+前端使用 HttpOnly session cookie，不把登录凭据保存到 localStorage；
+所有写操作具备 CSRF 防护；
+前端隐藏按钮不替代 Django 后端权限校验；
+危险操作要求明确目标、二次确认、原因和 AuditRecord；
+前端不能直接访问 MySQL、Redis、BinanceGateway、DeepSeekGateway 或 Hermes；
+前端不复制交易状态机、绩效算法或 ActiveLock 规则；
+账户刷新只生成 ops_display 事实；
+订单补查、成交补同步和 ActiveLock 人工收尾只调用已授权业务 service；
+任何后台入口都不能重新提交订单；
+真实交易运行开关不能突破部署级硬权限；
+API 响应、页面错误和浏览器日志不暴露密钥、签名、完整外部响应或未脱敏大模型内容。
 ```
 
 ## 20. dry-run、回测与 real 隔离测试
@@ -885,6 +904,8 @@ Django system checks；
 migration consistency；
 禁止真实密钥和危险测试配置；
 必要依赖和 Python / Django 版本符合约束。
+OpsConsole 的 Node.js 版本、package.json 和唯一锁文件符合约束；
+Next.js lint、TypeScript typecheck 和 production build 通过。
 ```
 
 ### 23.2 快速测试
@@ -893,6 +914,7 @@ migration consistency；
 calculator 单元测试；
 纯 domain 规则测试；
 序列化和输入合同测试。
+OpsConsole 组件、权限显示、确认对话框和 API client 单元测试。
 ```
 
 ### 23.3 数据库和模块测试
@@ -903,6 +925,7 @@ service 合同；
 幂等和唯一约束；
 模块 AlertEvent；
 fake Gateway 交互。
+OpsConsole Django API 的认证、CSRF、权限、审计和敏感字段过滤测试。
 ```
 
 ### 23.4 编排和异步测试
@@ -942,6 +965,8 @@ dry-run / 回测 / real 隔离。
 ```text
 测试尝试访问真实 Binance、DeepSeek 或 Hermes；
 测试读取到真实密钥；
+OpsConsole lint、typecheck、build 或前端测试失败；
+后台写接口缺少认证、CSRF、后端权限或危险操作审计；
 相同 PreparedOrderIntent 触发超过一次订单提交调用；
 unknown 被自动当成成功或失败；
 风控未通过却生成 ApprovedOrderIntent；

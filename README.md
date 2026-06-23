@@ -20,11 +20,12 @@ docs/
 
 ```text
 需求和架构已经确定；
-正在制定实施路线；
+实施路线和八份阶段计划已经形成；
+正在完成最终一致性复核与查漏补缺；
 尚未依据当前文档开始分阶段编码。
 ```
 
-在 `implementation_roadmap` 和对应阶段开发计划完成前，不得根据本文档目录自行猜测数据库字段、代码结构、接口名称或任务名称。
+编码必须按照 `implementation_roadmap`、`coding_execution_plan` 和对应阶段实施计划推进。计划没有确定的业务规则、具体算法或长期架构选择，仍不得根据目录自行猜测。
 
 ## 3. 系统主链路
 
@@ -100,7 +101,8 @@ Codex 开始任何任务前，首先阅读：
 4. [`core_contracts.md`](./docs/requirements/core_contracts.md)
 5. [`requirements/README.md`](./docs/requirements/README.md)
 6. [`architecture/README.md`](./docs/architecture/README.md)
-7. [`document_development_plan.md`](./docs/plans/document_development_plan.md)
+7. [`implementation_roadmap.md`](./docs/plans/implementation_roadmap.md)
+8. [`coding_execution_plan.md`](./docs/plans/coding_execution_plan.md)
 
 ### 5.3 开发某个模块
 
@@ -187,9 +189,11 @@ testing_and_safety_architecture.md。
 
 ### 7.4 Plans
 
-当前文档计划：[`docs/plans/document_development_plan.md`](./docs/plans/document_development_plan.md)
+编码路线：[`docs/plans/implementation_roadmap.md`](./docs/plans/implementation_roadmap.md)
 
-下一阶段将通过 `implementation_roadmap.md` 把需求和架构拆成可交付的编码阶段。
+编码执行计划：[`docs/plans/coding_execution_plan.md`](./docs/plans/coding_execution_plan.md)
+
+八份阶段实施计划已经位于 `docs/plans/`，分别覆盖项目底座、行情数据、策略分析、账户与价格事实、交易准备、订单生命周期、编排运行和后台复盘。
 
 ### 7.5 Decisions
 
@@ -223,11 +227,15 @@ Redis
 Celery 5.6.x
 Celery Beat
 pytest / Django test framework
+Node.js LTS（仅 OpsConsole 前端）
+Next.js + TypeScript（仅 OpsConsole 前端）
+shadcn/ui
+Recharts
 ```
 
 具体版本范围、配置、存储、日志、任务和测试要求见 [`project_foundation.md`](./docs/requirements/project_foundation.md)。
 
-本文不提供安装或启动命令，因为代码结构和分阶段实现计划尚未形成。进入基础设施开发阶段后，应根据实际代码补充可执行命令，不能提前伪造。
+当前分阶段实施计划已经形成，但代码工程尚未开始。安装、启动和迁移命令应在对应代码阶段根据实际项目结构补充，不能提前伪造。
 
 ## 10. 真实交易安全提示
 
@@ -271,7 +279,6 @@ pytest / Django test framework
 最终 Django app 目录；
 具体 REST API；
 具体 Celery task 和 queue 名称；
-前端页面结构；
 未确定的特征、信号和策略算法；
 生产部署拓扑与容量；
 超出当前需求的人工恢复能力。
@@ -281,15 +288,15 @@ pytest / Django test framework
 
 ## 14. 当前下一步
 
-需求、规则和主要架构文档已经完成。
+需求、规则、主要架构、编码路线和八份阶段实施计划已经完成。
 
-下一步是制定：
+完成一致性复核后，下一步从阶段 0 开始：
 
 ```text
-docs/plans/implementation_roadmap.md
+docs/plans/foundation_implementation_plan.md
 ```
 
-该路线图将按照实际业务依赖拆分编码阶段，而不是按照文件列表机械实现。
+后续按路线图逐阶段实现和验收；进入尚未确定的正式策略算法前，必须先补充对应算法 requirements，不得用测试算法代替生产算法。
 
 ## 15. 最终说明
 

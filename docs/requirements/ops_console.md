@@ -148,6 +148,17 @@ OpsConsole 是独立 Web Console。
 
 正式后台不以 Django Admin 作为主产品后台。Django Admin 如存在，只能作为开发便利或内部临时查看工具，不属于本模块正式交互入口。
 
+正式前端技术方向：
+
+```text
+Next.js；
+shadcn/ui；
+图表使用 Recharts 或 ECharts；
+后端继续使用 Django、现有 application service 和受控 API。
+```
+
+OpsConsole 前端与 Django 后端保持独立工程边界。前端只通过受控 API 读取数据和提交人工操作，不把 Django Templates 或 Django Admin 作为正式产品后台。
+
 前端通过后端 API 使用系统能力：
 
 ```text
@@ -169,7 +180,7 @@ OpsConsole UI → 直接改锁；
 OpsConsole UI → 直接提交订单。
 ```
 
-前端技术栈、组件库和图表库由架构与开发计划确定；需求层只要求它是受控 API 驱动的独立控制台。
+具体 Next.js、shadcn/ui 与图表依赖版本由实施阶段写入前端依赖清单并由锁文件固定；不得在不修改需求或架构决策的情况下改用另一套正式前端框架。
 
 ## 7. 页面结构
 

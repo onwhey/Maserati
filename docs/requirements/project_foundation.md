@@ -111,7 +111,11 @@ MySQL；
 Redis；
 Celery；
 Celery Beat；
-pytest / pytest-django 或 Django test framework。
+pytest / pytest-django 或 Django test framework；
+Node.js LTS（仅 OpsConsole 前端）；
+Next.js + TypeScript（仅 OpsConsole 前端）；
+shadcn/ui；
+Recharts。
 ```
 
 禁止自研：
@@ -211,7 +215,11 @@ Django 5.2.x LTS；
 MySQL；
 Redis；
 Celery；
-Celery Beat。
+Celery Beat；
+Node.js LTS（仅 OpsConsole 前端）；
+Next.js + TypeScript（仅 OpsConsole 前端）；
+shadcn/ui；
+Recharts。
 ```
 
 版本约束：
@@ -229,10 +237,13 @@ celery>=5.6,<5.7。
 
 ```text
 不得随意升级或降级核心版本；
-依赖范围写入 pyproject.toml；
-锁文件固定实际安装版本；
+Python 依赖范围写入 pyproject.toml；
+OpsConsole 前端依赖写入 package.json；
+后端与前端锁文件分别固定实际安装版本；
 核心版本变化必须先有架构决策和兼容性验证。
 ```
+
+OpsConsole 是独立 Web Console，不使用 Django Templates 或 Django Admin 作为正式产品后台。前端通过受控 Django API 使用系统能力，具体边界以 `ops_console.md` 为准。
 
 ## 5. Django 项目框架要求
 

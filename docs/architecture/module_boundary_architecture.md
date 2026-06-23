@@ -149,8 +149,8 @@ data_collection.md
 | RiskCheck / `risk_check.md` | CandidateOrderIntent、OrderPlan、账户事实、PriceSnapshot、symbol rule | ApprovedOrderIntent 或阻断结果 | 不消费 DecisionSnapshot，不生成新 CandidateOrderIntent，不任意改数量，不下单 |
 | ExecutionPreparation / `execution_preparation.md` | ApprovedOrderIntent、账户事实、PriceSnapshot、ActiveLock | PreparedOrderIntent | 不提交订单，不重新设计订单，不释放锁 |
 | Execution / `order_submission.md` | PreparedOrderIntent、ActiveLock | OrderSubmissionAttempt | 不生成订单计划，不做风控，不重试提交，不根据本地推测生成成交 |
-| OrderStatusSync / `order_status_sync.md` | OrderSubmissionAttempt | OrderStatusSyncRecord；明确终态后交给 FillSync | 不重新提交订单，不查询成交，不生成 TradeFill，不定义人工补查入口 |
-| FillSync / `fill_sync.md` | 明确可同步的 OrderStatusSyncRecord | TradeFill、OrderFillSummary、锁安全收尾请求 | 不提交订单，不生成订单状态，不修改账户快照，不定义人工补同步入口 |
+| OrderStatusSync / `order_status_sync.md` | OrderSubmissionAttempt | OrderStatusSyncRecord；明确终态后交给 FillSync | 不重新提交订单，不查询成交，不生成 TradeFill；不自行提供后台入口或开关，OpsConsole 受控补查仍调用本模块 service |
+| FillSync / `fill_sync.md` | 明确可同步的 OrderStatusSyncRecord | TradeFill、OrderFillSummary、锁安全收尾请求 | 不提交订单，不生成订单状态，不修改账户快照；不自行提供后台入口或开关，OpsConsole 受控补同步仍调用本模块 service |
 
 ## 5. 横切模块边界
 

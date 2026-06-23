@@ -598,7 +598,7 @@ TradeFill 必须按交易所成交身份幂等；
 OrderFillSummary 必须能追溯到 OrderSubmissionAttempt 和终态 OrderStatusSyncRecord；
 incomplete、unknown、查询前失败或身份冲突不得作为解锁证据；
 关闭新交易权限不能停止既有订单的状态与成交同步；
-OrderStatusSync 和 FillSync 不得定义未确定的人工补查、人工补同步入口或额外开关。
+OrderStatusSync 和 FillSync 不得自行定义未由 OpsConsole 需求授权的人工补查、人工补同步入口或额外开关；已授权后台入口只负责权限、确认和审计，实际动作仍由对应业务 service 执行。
 ```
 
 FillSync 不得直接更新 BinancePositionSnapshot，也不得根据本地 TradeFill 推导交易所真实持仓。
