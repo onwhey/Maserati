@@ -627,15 +627,37 @@ fake 外部服务覆盖真实外部调用；
 
 不得为了继续推进而自行猜测这些问题。
 
-## 12. 当前下一步
+## 12. 当前进度与下一步
+
+当前编码进度：
+
+```text
+阶段 0：项目底座与公共合同，已完成基础落地。
+阶段 1：行情数据与市场事实，已完成基础落地。
+阶段 2：策略分析框架，已推进到 DecisionSnapshot。
+阶段 3：账户与价格事实，已完成 BinanceGateway 受限接口、Binance Account Sync 与 PriceSnapshot。
+```
+
+阶段 2 已形成以下链路的代码基础：
+
+```text
+FeatureLayer
+→ AtomicSignal
+→ DomainSignal
+→ MarketRegime
+→ StrategyRouting
+→ StrategySignal
+→ StrategySignalQuality
+→ DecisionSnapshot
+```
 
 下一步编码入口为：
 
 ```text
-docs/plans/foundation_implementation_plan.md
+docs/plans/trading_execution_implementation_plan.md
 ```
 
-开始阶段 0 前，应先读取：
+进入阶段 4 前，应先读取：
 
 ```text
 AGENTS.md
@@ -644,24 +666,24 @@ docs/requirements/project_scope.md
 docs/requirements/system_capabilities.md
 docs/requirements/core_contracts.md
 docs/requirements/project_foundation.md
-docs/requirements/notifications.md
+docs/requirements/decision_snapshot.md
+docs/requirements/binance_account_sync.md
+docs/requirements/price_snapshot.md
+docs/requirements/order_plan.md
+docs/requirements/risk_check.md
+docs/requirements/execution_preparation.md
 docs/architecture/system_architecture.md
 docs/architecture/module_boundary_architecture.md
 docs/architecture/runtime_task_architecture.md
-docs/architecture/testing_and_safety_architecture.md
-docs/plans/foundation_implementation_plan.md
+docs/plans/trading_execution_implementation_plan.md
 ```
 
-阶段 0 的第一批次建议为：
+阶段 4 第一批次建议为：
 
 ```text
-创建 Django 项目结构；
-创建 pyproject.toml；
-配置 Python / Django / MySQL / Redis / Celery 依赖；
-实现 settings 显式读取 .env；
-创建 .env.example；
-建立基础测试框架；
-确认真实交易默认关闭。
+实现 OrderPlan 所需模型、OrderPlanActiveLock 和 CandidateOrderIntent；
+实现真实交易权限检查早于 OrderPlan 和 ActiveLock；
+保证 OrderPlan 只消费明确的 DecisionSnapshot、trade_preparation BinanceSyncRun 和 PriceSnapshot。
 ```
 
-阶段 0 第一批次不创建业务主链路模型，不请求外部服务，不实现交易相关业务。
+阶段 4 不提交真实订单，不实现 OrderStatusSync 或 FillSync。

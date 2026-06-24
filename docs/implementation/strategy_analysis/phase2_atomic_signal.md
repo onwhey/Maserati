@@ -29,7 +29,7 @@ AtomicSignalService 只消费明确 FeatureSet，不读取 Kline，不调用 Fea
 
 dry-run 执行相同校验和计算，但不写 AtomicSignalSet、AtomicSignalValue 或正式 AlertEvent。
 
-当前尚未实现 DomainSignalDefinition 的正式模型及其后续完整版本包组件，因此完整 StrategyAnalysisRelease 仍不能进入正式批准；本切片不使用测试对象绕过正式批准 service。
+后续切片已补充 DomainSignalDefinition / DomainSignalSet / DomainSignalValue。MarketRegime、路由、策略和目标仓位正式定义模型仍未实现，因此完整 StrategyAnalysisRelease 仍不能进入正式批准；本切片不使用测试对象绕过正式批准 service。
 
 ## 配置
 

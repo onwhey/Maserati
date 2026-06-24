@@ -61,7 +61,7 @@ expected_definition_set_hash
 
 数据库使用唯一启用槽位保证同一时刻最多存在一个当前版本。版本切换、Activation 审计和 AlertEvent 在同一事务内完成。
 
-当前尚未实现 AtomicSignal、DomainSignal、MarketRegime、路由、策略和目标仓位正式定义模型及完整依赖校验，因此包含这些占位组件的版本包会在批准阶段保守阻断；测试 fake calculator 不能通过正式批准 service 伪装成完整版本包。
+后续切片已补充 AtomicSignal 与 DomainSignal 的正式定义模型和部分依赖校验。MarketRegime、路由、策略和目标仓位正式定义模型仍未实现，因此包含这些未实现正式组件的完整版本包仍会在批准阶段保守阻断；测试 fake calculator 不能通过正式批准 service 伪装成完整版本包。
 
 FeatureLayer 只读取 MarketSnapshot 固定窗口内的 Kline，并重新核对采集域、数量、连续时间索引、已收盘边界和窗口身份。FeatureDefinition 的代码、算法版本、参数内容与指纹必须同时一致。
 

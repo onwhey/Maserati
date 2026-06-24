@@ -18,14 +18,32 @@ from apps.strategy_calculator.registry import CalculatorRegistry, default_regist
 from apps.strategy_calculator.utils import stable_hash
 
 from ..definition_hashes import (
+    STRATEGY_ROUTE_CONDITION_SCHEMA_VERSION,
     atomic_signal_definition_hash,
     atomic_signal_dependency_hash,
+    decision_policy_definition_hash,
+    domain_signal_definition_hash,
     domain_atomic_membership_hash,
+    market_regime_definition_hash,
+    market_regime_domain_membership_hash,
+    normalize_atomic_signal_codes,
+    normalize_domain_codes,
     normalize_feature_codes,
+    normalize_regime_codes,
+    normalize_route_conditions,
+    strategy_definition_dependency_hash,
+    strategy_definition_hash,
+    strategy_signal_quality_rule_set_hash,
+    strategy_route_policy_hash,
+    strategy_route_rule_hash,
+    strategy_route_rule_set_hash,
 )
 from ..models import (
     AtomicSignalDefinition,
     DefinitionLifecycleStatus,
+    DecisionPolicyDefinition,
+    DomainSignalDefinition,
+    MarketRegimeDefinition,
     ReleaseAction,
     ReleaseApprovalStatus,
     ReleaseItemComponentType,
@@ -35,12 +53,23 @@ from ..models import (
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
     StrategyAnalysisReleaseValidationEvidence,
+    StrategyDefinition,
+    StrategyRoutePolicy,
+    StrategyRouteRule,
+    StrategySignalQualityRuleSet,
 )
 
 
 IMPLEMENTED_FORMAL_COMPONENT_TYPES = {
     ReleaseItemComponentType.FEATURE_DEFINITION,
     ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION,
+    ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION,
+    ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
+    ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+    ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+    ReleaseItemComponentType.STRATEGY_DEFINITION,
+    ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET,
+    ReleaseItemComponentType.DECISION_POLICY_DEFINITION,
 }
 
 
@@ -184,6 +213,175 @@ def create_validation_evidence(
     )
 
 
+def _validate_strategy_routing_components(
+    items: list[StrategyAnalysisReleaseItem],
+    *,
+    registry: CalculatorRegistry,
+) -> list[str]:
+    errors: list[str] = []
+    domain_codes = {
+        item.component_code for item in items if item.component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION
+    }
+    strategy_items = [item for item in items if item.component_type == ReleaseItemComponentType.STRATEGY_DEFINITION]
+    strategies = {
+        definition.id: definition
+        for definition in StrategyDefinition.objects.filter(
+            id__in=[item.component_object_id for item in strategy_items if item.component_object_id is not None]
+        )
+    }
+    for item in strategy_items:
+        definition = strategies.get(item.component_object_id)
+        if definition is None:
+            errors.append(f"strategy_definition:{item.component_code} 指向的真实定义不存在")
+            continue
+        if definition.status != DefinitionLifecycleStatus.ACTIVE or not definition.enabled:
+            errors.append(f"strategy_definition:{item.component_code} 不是 active + enabled")
+        actual_params_hash = stable_hash(definition.params)
+        try:
+            allowed = normalize_domain_codes(definition.allowed_domain_codes)
+            required = normalize_domain_codes(definition.required_domain_codes, allow_empty=True)
+            actual_definition_hash = strategy_definition_hash(
+                strategy_code=definition.strategy_code,
+                strategy_version=definition.strategy_version,
+                algorithm_name=definition.algorithm_name,
+                algorithm_version=definition.algorithm_version,
+                input_schema_version=definition.input_schema_version,
+                output_schema_version=definition.output_schema_version,
+                params_hash=actual_params_hash,
+                allowed_domain_codes=allowed,
+                required_domain_codes=required,
+                uses_input_weights=definition.uses_input_weights,
+                domain_input_weights=definition.domain_input_weights,
+                prediction_horizon=definition.prediction_horizon,
+            )
+            dependency_hash = strategy_definition_dependency_hash(
+                {"allowed_domain_codes": list(allowed), "required_domain_codes": list(required)}
+            )
+            item_dependency_hash = strategy_definition_dependency_hash(item.payload_summary or {})
+        except ValueError as exc:
+            errors.append(f"strategy_definition:{item.component_code} 定义不合法：{exc}")
+            continue
+        if (
+            item.component_code != definition.strategy_code
+            or item.algorithm_name != definition.algorithm_name
+            or item.algorithm_version != definition.algorithm_version
+            or definition.params_hash != actual_params_hash
+            or item.params_hash != actual_params_hash
+            or definition.definition_hash != actual_definition_hash
+            or item.definition_hash != actual_definition_hash
+            or item.dependency_hash != dependency_hash
+            or item.dependency_hash != item_dependency_hash
+        ):
+            errors.append(f"strategy_definition:{item.component_code} 定义身份或指纹不一致")
+        if not set(required).issubset(set(allowed)) or not set(allowed).issubset(domain_codes):
+            errors.append(f"strategy_definition:{item.component_code} 领域依赖不属于版本包领域切片")
+        try:
+            calculator = registry.resolve(
+                calculator_type=CalculatorType.STRATEGY_SIGNAL,
+                algorithm_name=definition.algorithm_name,
+                algorithm_version=definition.algorithm_version,
+            )
+            if (
+                calculator.metadata.input_schema_version != definition.input_schema_version
+                or calculator.metadata.output_schema_version != definition.output_schema_version
+                or calculator.metadata.uses_input_weights != definition.uses_input_weights
+            ):
+                errors.append(f"strategy_definition:{item.component_code} schema 或权重合同与 calculator 不一致")
+        except StrategyCalculatorError as exc:
+            errors.append(f"strategy_definition:{item.component_code} calculator 不可解析：{exc}")
+
+    regime_items = [item for item in items if item.component_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION]
+    regime = MarketRegimeDefinition.objects.filter(
+        id__in=[item.component_object_id for item in regime_items if item.component_object_id is not None]
+    ).first()
+    allowed_regime_codes = regime.allowed_regime_codes if regime is not None else []
+    policy_items = [item for item in items if item.component_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY]
+    rule_items = [item for item in items if item.component_type == ReleaseItemComponentType.STRATEGY_ROUTE_RULE]
+    policies = {
+        policy.id: policy
+        for policy in StrategyRoutePolicy.objects.filter(
+            id__in=[item.component_object_id for item in policy_items if item.component_object_id is not None]
+        )
+    }
+    rules = {
+        rule.id: rule
+        for rule in StrategyRouteRule.objects.filter(
+            id__in=[item.component_object_id for item in rule_items if item.component_object_id is not None]
+        )
+    }
+    if len(policy_items) != 1:
+        return errors
+    policy_item = policy_items[0]
+    policy = policies.get(policy_item.component_object_id)
+    if policy is None:
+        errors.append(f"strategy_route_policy:{policy_item.component_code} 指向的真实 Policy 不存在")
+        return errors
+    if policy.status != DefinitionLifecycleStatus.ACTIVE or not policy.enabled:
+        errors.append(f"strategy_route_policy:{policy.policy_code} 不是 active + enabled")
+    if policy.condition_schema_version != STRATEGY_ROUTE_CONDITION_SCHEMA_VERSION:
+        errors.append(f"strategy_route_policy:{policy.policy_code} condition schema 不受支持")
+    strategy_ids = set(strategies)
+    rule_payloads: list[dict[str, object]] = []
+    for item in rule_items:
+        rule = rules.get(item.component_object_id)
+        if rule is None:
+            errors.append(f"strategy_route_rule:{item.component_code} 指向的真实 Rule 不存在")
+            continue
+        if rule.strategy_route_policy_id != policy.id:
+            errors.append(f"strategy_route_rule:{item.component_code} 不属于版本包 Policy")
+        if rule.status != DefinitionLifecycleStatus.ACTIVE or not rule.enabled:
+            errors.append(f"strategy_route_rule:{item.component_code} 不是 active + enabled")
+        try:
+            conditions = normalize_route_conditions(rule.match_conditions, allowed_regime_codes=allowed_regime_codes)
+            actual_rule_hash = strategy_route_rule_hash(
+                policy_id=policy.id,
+                rule_code=rule.rule_code,
+                priority=rule.priority,
+                action=rule.action,
+                match_conditions=conditions,
+                selected_strategy_definition_id=rule.selected_strategy_definition_id,
+                valid_from_utc=rule.valid_from_utc,
+                valid_to_utc=rule.valid_to_utc,
+                allowed_regime_codes=allowed_regime_codes,
+            )
+        except ValueError as exc:
+            errors.append(f"strategy_route_rule:{item.component_code} 配置不合法：{exc}")
+            continue
+        if item.component_code != rule.rule_code or item.definition_hash != actual_rule_hash or rule.rule_hash != actual_rule_hash:
+            errors.append(f"strategy_route_rule:{item.component_code} 规则身份或指纹不一致")
+        if rule.selected_strategy_definition_id is not None and rule.selected_strategy_definition_id not in strategy_ids:
+            errors.append(f"strategy_route_rule:{item.component_code} 目标策略不在版本包策略切片")
+        rule_payloads.append(
+            {"rule_id": rule.id, "rule_code": rule.rule_code, "priority": rule.priority, "rule_hash": actual_rule_hash}
+        )
+    if set(policy.rules.values_list("id", flat=True)) != set(rules):
+        errors.append(f"strategy_route_policy:{policy.policy_code} Rule 集合与版本包切片不一致")
+    try:
+        rule_set_hash = strategy_route_rule_set_hash(rule_payloads)
+        actual_policy_hash = strategy_route_policy_hash(
+            policy_code=policy.policy_code,
+            policy_version=policy.policy_version,
+            condition_schema_version=policy.condition_schema_version,
+            rule_set_hash=rule_set_hash,
+            fallback_policy=policy.fallback_policy,
+            fallback_strategy_definition_id=policy.fallback_strategy_definition_id,
+        )
+    except ValueError as exc:
+        errors.append(f"strategy_route_policy:{policy.policy_code} 配置不合法：{exc}")
+        return errors
+    if policy.fallback_strategy_definition_id is not None and policy.fallback_strategy_definition_id not in strategy_ids:
+        errors.append(f"strategy_route_policy:{policy.policy_code} fallback 不在版本包策略切片")
+    if (
+        policy_item.component_code != policy.policy_code
+        or policy.rule_set_hash != rule_set_hash
+        or policy_item.dependency_hash != rule_set_hash
+        or policy.definition_hash != actual_policy_hash
+        or policy_item.definition_hash != actual_policy_hash
+    ):
+        errors.append(f"strategy_route_policy:{policy.policy_code} Policy 身份或指纹不一致")
+    return errors
+
+
 def validate_release_integrity(
     release: StrategyAnalysisRelease,
     *,
@@ -206,6 +404,8 @@ def validate_release_integrity(
     missing_types = sorted(str(item) for item in required_types - component_types)
     if missing_types:
         errors.append(f"版本包缺少组件类型：{','.join(missing_types)}")
+
+    errors.extend(_validate_strategy_routing_components(items, registry=registry))
 
     for item in items:
         if item.component_object_id is None:
@@ -253,6 +453,61 @@ def validate_release_integrity(
         codes = set(payload.get("allowed_atomic_signal_codes", [])) | set(payload.get("required_atomic_signal_codes", []))
         for code in codes:
             domain_memberships[str(code)] = domain_memberships.get(str(code), 0) + 1
+    atomic_codes = {item.component_code for item in atomic_items}
+    domain_items = [item for item in items if item.component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION]
+    domain_definitions = {
+        definition.id: definition
+        for definition in DomainSignalDefinition.objects.filter(
+            id__in=[item.component_object_id for item in domain_items if item.component_object_id is not None]
+        )
+    }
+    for domain_item in domain_items:
+        definition = domain_definitions.get(domain_item.component_object_id)
+        if definition is None:
+            errors.append(f"domain_signal_definition:{domain_item.component_code} 指向的真实定义不存在")
+            continue
+        if definition.status != DefinitionLifecycleStatus.ACTIVE or not definition.enabled:
+            errors.append(f"domain_signal_definition:{domain_item.component_code} 不是 active + enabled")
+        actual_params_hash = stable_hash(definition.params)
+        try:
+            allowed_codes = normalize_atomic_signal_codes(definition.allowed_atomic_signal_codes)
+            required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes)
+            actual_definition_hash = domain_signal_definition_hash(
+                domain_code=definition.domain_code,
+                output_mode=definition.output_mode,
+                algorithm_name=definition.algorithm_name,
+                algorithm_version=definition.algorithm_version,
+                params_hash=actual_params_hash,
+                is_required=definition.is_required,
+                allowed_atomic_signal_codes=allowed_codes,
+                required_atomic_signal_codes=required_codes,
+                minimum_coverage_ratio=definition.minimum_coverage_ratio,
+                agreement_threshold=definition.agreement_threshold,
+            )
+        except ValueError as exc:
+            errors.append(f"domain_signal_definition:{domain_item.component_code} 原子依赖不合法：{exc}")
+            continue
+        expected_payload = {
+            "allowed_atomic_signal_codes": list(allowed_codes),
+            "required_atomic_signal_codes": list(required_codes),
+        }
+        if (
+            domain_item.component_code != definition.domain_code
+            or domain_item.algorithm_name != definition.algorithm_name
+            or domain_item.algorithm_version != definition.algorithm_version
+            or definition.params_hash != actual_params_hash
+            or domain_item.params_hash != actual_params_hash
+            or definition.definition_hash != actual_definition_hash
+            or domain_item.definition_hash != actual_definition_hash
+            or domain_item.dependency_hash != domain_atomic_membership_hash(expected_payload)
+            or domain_item.dependency_hash != domain_atomic_membership_hash(domain_item.payload_summary or {})
+        ):
+            errors.append(f"domain_signal_definition:{domain_item.component_code} 定义身份或指纹不一致")
+        if not set(required_codes).issubset(set(allowed_codes)):
+            errors.append(f"domain_signal_definition:{domain_item.component_code} required 原子信号不在 allowed 内")
+        if not set(allowed_codes).issubset(atomic_codes):
+            errors.append(f"domain_signal_definition:{domain_item.component_code} 引用了版本包原子切片之外的信号")
+
     for item in atomic_items:
         definition = atomic_definitions.get(item.component_object_id)
         if definition is None:
@@ -301,6 +556,64 @@ def validate_release_integrity(
         if code not in domain_codes:
             errors.append(f"版本包缺少正式领域：{code}")
 
+    market_regime_items = [
+        item for item in items if item.component_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION
+    ]
+    market_regime_definitions = {
+        definition.id: definition
+        for definition in MarketRegimeDefinition.objects.filter(
+            id__in=[item.component_object_id for item in market_regime_items if item.component_object_id is not None]
+        )
+    }
+    for regime_item in market_regime_items:
+        definition = market_regime_definitions.get(regime_item.component_object_id)
+        if definition is None:
+            errors.append(f"market_regime_definition:{regime_item.component_code} 指向的真实定义不存在")
+            continue
+        if definition.status != DefinitionLifecycleStatus.ACTIVE or not definition.enabled:
+            errors.append(f"market_regime_definition:{regime_item.component_code} 不是 active + enabled")
+        actual_params_hash = stable_hash(definition.params)
+        try:
+            allowed_domain_codes = normalize_domain_codes(definition.allowed_domain_codes)
+            required_domain_codes = normalize_domain_codes(definition.required_domain_codes, allow_empty=True)
+            allowed_regime_codes = normalize_regime_codes(definition.allowed_regime_codes)
+            item_dependency_hash = market_regime_domain_membership_hash(regime_item.payload_summary or {})
+            actual_definition_hash = market_regime_definition_hash(
+                definition_code=definition.definition_code,
+                algorithm_name=definition.algorithm_name,
+                algorithm_version=definition.algorithm_version,
+                input_schema_version=definition.input_schema_version,
+                output_schema_version=definition.output_schema_version,
+                params_hash=actual_params_hash,
+                allowed_domain_codes=allowed_domain_codes,
+                required_domain_codes=required_domain_codes,
+                allowed_regime_codes=allowed_regime_codes,
+            )
+        except ValueError as exc:
+            errors.append(f"market_regime_definition:{regime_item.component_code} 定义依赖不合法：{exc}")
+            continue
+        expected_payload = {
+            "allowed_domain_codes": list(allowed_domain_codes),
+            "required_domain_codes": list(required_domain_codes),
+            "allowed_regime_codes": list(allowed_regime_codes),
+        }
+        if (
+            regime_item.component_code != definition.definition_code
+            or regime_item.algorithm_name != definition.algorithm_name
+            or regime_item.algorithm_version != definition.algorithm_version
+            or definition.params_hash != actual_params_hash
+            or regime_item.params_hash != actual_params_hash
+            or definition.definition_hash != actual_definition_hash
+            or regime_item.definition_hash != actual_definition_hash
+            or regime_item.dependency_hash != market_regime_domain_membership_hash(expected_payload)
+            or regime_item.dependency_hash != item_dependency_hash
+        ):
+            errors.append(f"market_regime_definition:{regime_item.component_code} 定义身份或指纹不一致")
+        if not set(required_domain_codes).issubset(set(allowed_domain_codes)):
+            errors.append(f"market_regime_definition:{regime_item.component_code} required 领域不在 allowed 内")
+        if not set(allowed_domain_codes).issubset(domain_codes):
+            errors.append(f"market_regime_definition:{regime_item.component_code} 引用了版本包领域切片之外的领域")
+
     for component_type in (
         ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
         ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
@@ -310,6 +623,89 @@ def validate_release_integrity(
         count = sum(1 for item in items if item.component_type == component_type)
         if count != 1:
             errors.append(f"{component_type} 必须恰好一个，当前 {count}")
+
+    quality_items = [
+        item for item in items if item.component_type == ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET
+    ]
+    quality_rule_sets = {
+        rule_set.id: rule_set
+        for rule_set in StrategySignalQualityRuleSet.objects.filter(
+            id__in=[item.component_object_id for item in quality_items if item.component_object_id is not None]
+        )
+    }
+    for quality_item in quality_items:
+        rule_set = quality_rule_sets.get(quality_item.component_object_id)
+        if rule_set is None:
+            errors.append(f"strategy_signal_quality_rule_set:{quality_item.component_code} 指向的真实规则集不存在")
+            continue
+        if rule_set.status != DefinitionLifecycleStatus.ACTIVE or not rule_set.enabled:
+            errors.append(f"strategy_signal_quality_rule_set:{quality_item.component_code} 不是 active + enabled")
+        actual_params_hash = stable_hash(rule_set.params)
+        try:
+            actual_rule_set_hash = strategy_signal_quality_rule_set_hash(
+                rule_set_code=rule_set.rule_set_code,
+                rule_set_version=rule_set.rule_set_version,
+                quality_schema_version=rule_set.quality_schema_version,
+                max_staleness_seconds=rule_set.max_staleness_seconds,
+                warning_blocks_decision=rule_set.warning_blocks_decision,
+                fail_alert_enabled=rule_set.fail_alert_enabled,
+                warning_alert_enabled=rule_set.warning_alert_enabled,
+                consecutive_failure_threshold=rule_set.consecutive_failure_threshold,
+                params_hash=actual_params_hash,
+            )
+        except ValueError as exc:
+            errors.append(f"strategy_signal_quality_rule_set:{quality_item.component_code} 配置不合法：{exc}")
+            continue
+        if (
+            quality_item.component_code != rule_set.rule_set_code
+            or rule_set.params_hash != actual_params_hash
+            or quality_item.params_hash != actual_params_hash
+            or rule_set.rule_set_hash != actual_rule_set_hash
+            or quality_item.definition_hash != actual_rule_set_hash
+        ):
+            errors.append(f"strategy_signal_quality_rule_set:{quality_item.component_code} 规则集身份或指纹不一致")
+
+    decision_policy_items = [
+        item for item in items if item.component_type == ReleaseItemComponentType.DECISION_POLICY_DEFINITION
+    ]
+    decision_policies = {
+        definition.id: definition
+        for definition in DecisionPolicyDefinition.objects.filter(
+            id__in=[item.component_object_id for item in decision_policy_items if item.component_object_id is not None]
+        )
+    }
+    for decision_item in decision_policy_items:
+        definition = decision_policies.get(decision_item.component_object_id)
+        if definition is None:
+            errors.append(f"decision_policy_definition:{decision_item.component_code} 指向的真实定义不存在")
+            continue
+        if definition.status != DefinitionLifecycleStatus.ACTIVE or not definition.enabled:
+            errors.append(f"decision_policy_definition:{decision_item.component_code} 不是 active + enabled")
+        actual_params_hash = stable_hash(definition.params)
+        try:
+            actual_definition_hash = decision_policy_definition_hash(
+                policy_code=definition.policy_code,
+                policy_version=definition.policy_version,
+                algorithm_name=definition.algorithm_name,
+                algorithm_version=definition.algorithm_version,
+                input_schema_version=definition.input_schema_version,
+                output_schema_version=definition.output_schema_version,
+                target_schema_version=definition.target_schema_version,
+                params_hash=actual_params_hash,
+            )
+        except ValueError as exc:
+            errors.append(f"decision_policy_definition:{decision_item.component_code} 配置不合法：{exc}")
+            continue
+        if (
+            decision_item.component_code != definition.policy_code
+            or decision_item.algorithm_name != definition.algorithm_name
+            or decision_item.algorithm_version != definition.algorithm_version
+            or definition.params_hash != actual_params_hash
+            or decision_item.params_hash != actual_params_hash
+            or definition.definition_hash != actual_definition_hash
+            or decision_item.definition_hash != actual_definition_hash
+        ):
+            errors.append(f"decision_policy_definition:{decision_item.component_code} 定义身份或指纹不一致")
 
     for item in items:
         calculator_type = CALCULATOR_TYPE_BY_COMPONENT.get(item.component_type)
@@ -328,6 +724,20 @@ def validate_release_integrity(
                 definition = feature_definitions.get(item.component_object_id)
                 if definition and calculator.metadata.output_schema_version != definition.output_schema_version:
                     errors.append(f"feature_definition:{item.component_code} 输出 schema 与 calculator 不一致")
+            if item.component_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION:
+                definition = market_regime_definitions.get(item.component_object_id)
+                if definition and (
+                    calculator.metadata.input_schema_version != definition.input_schema_version
+                    or calculator.metadata.output_schema_version != definition.output_schema_version
+                ):
+                    errors.append(f"market_regime_definition:{item.component_code} schema 与 calculator 不一致")
+            if item.component_type == ReleaseItemComponentType.DECISION_POLICY_DEFINITION:
+                definition = decision_policies.get(item.component_object_id)
+                if definition and (
+                    calculator.metadata.input_schema_version != definition.input_schema_version
+                    or calculator.metadata.output_schema_version != definition.output_schema_version
+                ):
+                    errors.append(f"decision_policy_definition:{item.component_code} schema 与 calculator 不一致")
         except StrategyCalculatorError as exc:
             errors.append(f"{item.component_type}:{item.component_code} calculator 不可解析：{exc}")
     return errors

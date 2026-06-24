@@ -685,7 +685,7 @@ def build_atomic_signals(
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     existing = AtomicSignalSet.objects.filter(business_request_key=business_request_key).first()
-    if existing:
+    if existing and not dry_run:
         return _existing_result(existing, trace_id=trace_id, trigger_source=trigger_source)
     feature_set = _load_feature_set_for_atomic(
         feature_set_id=feature_set_id,
@@ -779,7 +779,7 @@ def build_atomic_signals(
         }
     )
     existing_by_key = AtomicSignalSet.objects.filter(atomic_signal_set_key=atomic_signal_set_key).first()
-    if existing_by_key:
+    if existing_by_key and not dry_run:
         return _existing_result(existing_by_key, trace_id=trace_id, trigger_source=trigger_source)
 
     drafts = [

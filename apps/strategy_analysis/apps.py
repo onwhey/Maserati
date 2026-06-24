@@ -12,10 +12,12 @@ class StrategyAnalysisConfig(AppConfig):
 
     def ready(self) -> None:
         from apps.strategy_calculator.atomic_signal import FeatureCompareCalculator
+        from apps.strategy_calculator.domain_signal import SingleAtomicPassthroughCalculator
         from apps.strategy_calculator.errors import DuplicateCalculatorError
         from apps.strategy_calculator.registry import default_registry
 
-        try:
-            default_registry.register(FeatureCompareCalculator())
-        except DuplicateCalculatorError:
-            pass
+        for calculator in (FeatureCompareCalculator(), SingleAtomicPassthroughCalculator()):
+            try:
+                default_registry.register(calculator)
+            except DuplicateCalculatorError:
+                pass

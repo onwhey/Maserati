@@ -361,6 +361,21 @@ def test_atomic_signal_dry_run_does_not_write_business_objects_or_alerts() -> No
 
 
 @pytest.mark.django_db
+def test_atomic_signal_dry_run_recalculates_without_reusing_persisted_result() -> None:
+    feature_set, release, _definition = build_fixture()
+
+    persisted = run_service(feature_set, release, key="atomic-build")
+    dry_run = run_service(feature_set, release, key="atomic-build", dry_run=True)
+
+    assert persisted.status.value == "succeeded"
+    assert dry_run.status.value == "succeeded"
+    assert dry_run.data["persisted"] is False
+    assert "atomic_signal_set_id" not in dry_run.data
+    assert AtomicSignalSet.objects.count() == 1
+    assert AtomicSignalValue.objects.count() == 1
+
+
+@pytest.mark.django_db
 def test_atomic_signal_keeps_frozen_release_after_background_switch() -> None:
     feature_set, release, _definition = build_fixture(release_active=False)
 

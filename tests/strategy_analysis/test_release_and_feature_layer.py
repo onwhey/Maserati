@@ -316,7 +316,7 @@ def test_release_requires_validation_evidence_before_approval() -> None:
 
 
 @pytest.mark.django_db
-def test_release_rejects_fake_components_without_formal_validators() -> None:
+def test_release_rejects_fake_component_objects() -> None:
     registry = register_required_calculators()
     release, _feature = create_full_release()
     freeze_release_for_validation(release_id=release.id, trace_id="trace_release", trigger_source="test")
@@ -340,7 +340,7 @@ def test_release_rejects_fake_components_without_formal_validators() -> None:
     )
     assert approved.status == ResultStatus.BLOCKED
     assert approved.reason_code == "release_integrity_failed"
-    assert any("正式组件校验尚未实现" in error for error in approved.data["errors"])
+    assert any("指向的真实定义不存在" in error or "缺少真实组件对象" in error for error in approved.data["errors"])
     release.refresh_from_db()
     assert release.is_active is False
 

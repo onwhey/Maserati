@@ -36,6 +36,7 @@ class CalculatorMetadata:
     supports_dry_run: bool
     algorithm_requirement_document_path: str
     implementation_document_path: str
+    uses_input_weights: bool = False
 
     def __post_init__(self) -> None:
         required = {
