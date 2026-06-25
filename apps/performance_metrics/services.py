@@ -16,7 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -51,6 +51,8 @@ from .models import OrchestrationRunPerformance, PerformanceCalculationStatus
 
 FORMULA_VERSION = "p0_position_quantity_delta_v1"
 TRIGGER_SOURCE_BACKFILL = "ops_console_performance_backfill"
+MAIN_PIPELINE_CODE = "main_trading_pipeline"
+PERIOD_LENGTH = timedelta(hours=4)
 
 
 @dataclass(frozen=True)
@@ -198,6 +200,16 @@ def calculate_period_performance(
 ) -> ServiceResult:
     start_run = OrchestrationRun.objects.get(id=start_orchestration_run_id)
     end_run = OrchestrationRun.objects.get(id=end_orchestration_run_id)
+    gap_reason = _pair_period_gap_reason(BoundaryPair(start_run=start_run, end_run=end_run))
+    if gap_reason:
+        return _blocked_result(
+            reason_code=gap_reason,
+            message="开始边界和结束边界不是同一个 UTC 4 小时已关闭周期，不能补算绩效。",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            start_run=start_run,
+            end_run=end_run,
+        )
     start_facts = _boundary_facts(start_run, None, None, None)
     end_facts = _boundary_facts(end_run, None, None, None)
     if start_facts.sync_run is None or end_facts.sync_run is None:
@@ -285,6 +297,7 @@ def calculate_period_performance(
 def _closed_boundary_pairs(reference_time_utc: datetime) -> list[BoundaryPair]:
     runs = list(
         OrchestrationRun.objects.filter(
+            pipeline_code=MAIN_PIPELINE_CODE,
             trigger_mode=OrchestrationTriggerMode.AUTOMATIC,
             status__in=_CLOSED_RUN_STATUSES,
             scheduled_for_utc__lte=reference_time_utc,
@@ -296,6 +309,7 @@ def _closed_boundary_pairs(reference_time_utc: datetime) -> list[BoundaryPair]:
 def _preview_pair(pair: BoundaryPair) -> dict[str, Any]:
     start_facts = _boundary_facts(pair.start_run, None, None, None)
     end_facts = _boundary_facts(pair.end_run, None, None, None)
+    gap_reason = _pair_period_gap_reason(pair)
     base = {
         "start_orchestration_run_id": pair.start_run.id,
         "end_orchestration_run_id": pair.end_run.id,
@@ -305,6 +319,8 @@ def _preview_pair(pair: BoundaryPair) -> dict[str, Any]:
         "calculable": False,
         "reason_code": "",
     }
+    if gap_reason:
+        return base | {"reason_code": gap_reason}
     if start_facts.sync_run is None:
         return base | {"reason_code": start_facts.reason_code}
     if end_facts.sync_run is None:
@@ -393,6 +409,10 @@ def _identity_mismatch(start_sync: BinanceSyncRun, end_sync: BinanceSyncRun) -> 
 
 
 def _missing_boundary_reason(start_facts: BoundaryFacts, end_facts: BoundaryFacts) -> str:
+    if start_facts.sync_run is not None and not _sync_symbol(start_facts.sync_run):
+        return "performance_start_symbol_missing"
+    if end_facts.sync_run is not None and not _sync_symbol(end_facts.sync_run):
+        return "performance_end_symbol_missing"
     if start_facts.account_snapshot is None:
         return "performance_start_account_snapshot_missing"
     if end_facts.account_snapshot is None:
@@ -401,6 +421,10 @@ def _missing_boundary_reason(start_facts: BoundaryFacts, end_facts: BoundaryFact
         return "performance_start_position_snapshot_missing"
     if end_facts.position_snapshot is None:
         return "performance_end_position_snapshot_missing"
+    if start_facts.position_snapshot.position_amount is None:
+        return "performance_start_position_quantity_missing"
+    if end_facts.position_snapshot.position_amount is None:
+        return "performance_end_position_quantity_missing"
     if start_facts.position_snapshot.mark_price is None:
         return "performance_start_mark_price_missing"
     if end_facts.position_snapshot.mark_price is None:
@@ -707,8 +731,22 @@ def _sync_symbol(sync_run: BinanceSyncRun) -> str:
 
 
 def _period_time(run: OrchestrationRun, sync_run: BinanceSyncRun | None) -> datetime:
-    value = getattr(sync_run, "as_of_utc", None) or run.scheduled_for_utc
-    return _ensure_utc(value)
+    _ = sync_run
+    return _cycle_boundary_time(run)
+
+
+def _cycle_boundary_time(run: OrchestrationRun) -> datetime:
+    scheduled = _ensure_utc(run.scheduled_for_utc)
+    boundary_hour = (scheduled.hour // 4) * 4
+    return scheduled.replace(hour=boundary_hour, minute=0, second=0, microsecond=0)
+
+
+def _pair_period_gap_reason(pair: BoundaryPair) -> str:
+    start_boundary = _cycle_boundary_time(pair.start_run)
+    end_boundary = _cycle_boundary_time(pair.end_run)
+    if end_boundary - start_boundary != PERIOD_LENGTH:
+        return "performance_period_boundary_not_adjacent"
+    return ""
 
 
 def _decimal_or_zero(value: Decimal | None) -> Decimal:

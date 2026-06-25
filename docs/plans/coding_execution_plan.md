@@ -757,3 +757,30 @@ TradeFill 与 OrderFillSummary；
 ```text
 docs/plans/orchestration_runtime_implementation_plan.md
 ```
+
+阶段 7 已完成第三批次：
+
+```text
+DeepSeekGateway；
+DeepSeekReviewGateway 受限接口；
+Model Profile 编号选择与受控解析；
+请求前配置、调用方、套餐、内容和敏感信息阻断；
+OpenAI-compatible chat completions 非流式请求；
+DeepSeekGatewayResult 进程内标准返回；
+FakeDeepSeekReviewGateway 测试替身；
+本批次不建立 DeepSeekGateway 数据库表，不实现 AIReview 业务对象。
+```
+
+阶段 7 已完成第四批次：
+
+```text
+AIReview 后端业务对象；
+AIReviewRequest / AIReviewPackage / AIReviewAttempt / AIReviewReport / AIReviewFinding / AIReviewSuggestion；
+离线复盘范围冻结；
+已落库事实脱敏打包；
+通过 DeepSeekGateway 受限接口调用 DeepSeek；
+模型输出报告、发现和人工建议持久化；
+unknown 不自动重试；
+AIReview 只写 AlertEvent / AuditRecord，不参与实时交易、不修改策略、不修改交易配置、不下单；
+本批次不实现 OpsConsole AIReview 页面，不实现 AIReview Celery 自动调度，不实现真实 DeepSeek 调用。
+```

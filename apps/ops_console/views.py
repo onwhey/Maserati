@@ -7,7 +7,6 @@ from collections.abc import Callable
 from typing import Any
 
 from django.http import HttpRequest, JsonResponse
-from django.views.decorators.csrf import csrf_exempt
 
 from apps.performance_metrics.selectors import get_performance_record, list_performance_records
 from apps.performance_metrics.services import backfill_missing_closed_period_performance, preview_missing_closed_period_performance
@@ -124,7 +123,6 @@ def performance_preview_view(_request: HttpRequest) -> JsonResponse:
     return ok_response(preview_missing_closed_period_performance())
 
 
-@csrf_exempt
 @require_ops_permission("backfill_performance_metrics", methods=("POST",))
 def performance_backfill_view(request: HttpRequest) -> JsonResponse:
     try:

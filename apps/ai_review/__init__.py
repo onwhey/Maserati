@@ -1,0 +1,2 @@
+"""AIReview app."""
+

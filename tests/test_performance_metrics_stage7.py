@@ -55,7 +55,13 @@ def _client_with_group(group_name: str) -> Client:
     return client
 
 
-def _boundary(*, key: str, scheduled_at, position: str, purpose: str = BinanceSyncPurpose.TRADE_PREPARATION) -> OrchestrationRun:
+def _boundary(
+    *,
+    key: str,
+    scheduled_at,
+    position: str | None,
+    purpose: str = BinanceSyncPurpose.TRADE_PREPARATION,
+) -> OrchestrationRun:
     run = OrchestrationRun.objects.create(
         run_key=f"perf-run-{key}",
         pipeline_code="main_trading_pipeline",
@@ -116,17 +122,18 @@ def _boundary(*, key: str, scheduled_at, position: str, purpose: str = BinanceSy
         source_operation="account_info",
         snapshot_hash=f"account-{key}",
     )
+    position_amount = Decimal(position) if position is not None else None
     BinancePositionSnapshot.objects.create(
         sync_run=sync_run,
         market_type=sync_run.market_type,
         account_domain=sync_run.account_domain,
         symbol="BTCUSDT",
         normalized_position_side="BOTH",
-        position_amount=Decimal(position),
+        position_amount=position_amount,
         entry_price=Decimal("50000"),
         mark_price=Decimal("51000"),
         unrealized_pnl=Decimal("0"),
-        notional=Decimal(position) * Decimal("51000"),
+        notional=position_amount * Decimal("51000") if position_amount is not None else None,
         position_mode_observed=BinancePositionMode.ONE_WAY,
         source_operation="position_risk",
         snapshot_hash=f"position-{key}",
@@ -258,7 +265,7 @@ def _record_terminal_fill(attempt, *, trade_time, quantity: str = "0.1", side: s
 
 
 def test_backfill_uses_trade_preparation_boundaries_and_basic_position_delta() -> None:
-    now = timezone.now()
+    now = timezone.now().replace(minute=5, second=0, microsecond=0)
     _boundary(key="00", scheduled_at=now - timedelta(hours=8), position="0.2")
     _boundary(key="04", scheduled_at=now - timedelta(hours=4), position="0.21")
 
@@ -271,6 +278,8 @@ def test_backfill_uses_trade_preparation_boundaries_and_basic_position_delta() -
     assert performance.net_fill_quantity == Decimal("0")
     assert performance.start_position_quantity == Decimal("0.200000000000000000")
     assert performance.end_position_quantity == Decimal("0.210000000000000000")
+    assert performance.period_start_utc.minute == 0
+    assert performance.period_end_utc.minute == 0
     assert AlertEvent.objects.filter(source_module="performance_metrics").count() == 1
     assert AuditRecord.objects.filter(operation_type="performance_metrics_backfill").count() == 1
 
@@ -312,6 +321,38 @@ def test_ops_display_sync_is_not_used_for_performance_boundary() -> None:
     assert preview["not_calculable_reason_counts"]["performance_trade_preparation_sync_missing"] == 1
     assert result.data["skipped_count"] == 1
     assert OrchestrationRunPerformance.objects.count() == 0
+
+
+def test_non_adjacent_four_hour_boundaries_are_not_calculated() -> None:
+    now = timezone.now()
+    _boundary(key="gap-00", scheduled_at=now - timedelta(hours=12), position="0.1")
+    _boundary(key="gap-08", scheduled_at=now - timedelta(hours=4), position="0.2")
+
+    preview = preview_missing_closed_period_performance(reference_time_utc=now)
+    result = backfill_missing_closed_period_performance(operator_id="tester", reason="补算测试", trace_id="trace-perf-gap")
+
+    assert preview["calculable_missing_period_count"] == 0
+    assert preview["not_calculable_reason_counts"]["performance_period_boundary_not_adjacent"] == 1
+    assert result.data["skipped_count"] == 1
+    assert OrchestrationRunPerformance.objects.count() == 0
+
+
+def test_missing_position_quantity_is_recorded_as_insufficient_instead_of_zero() -> None:
+    now = timezone.now()
+    _boundary(key="missing-position-00", scheduled_at=now - timedelta(hours=8), position=None)
+    _boundary(key="missing-position-04", scheduled_at=now - timedelta(hours=4), position="0.2")
+
+    result = backfill_missing_closed_period_performance(
+        operator_id="tester",
+        reason="补算测试",
+        trace_id="trace-perf-missing-position",
+    )
+
+    performance = OrchestrationRunPerformance.objects.get()
+    assert result.data["skipped_count"] == 1
+    assert performance.calculation_status == PerformanceCalculationStatus.INSUFFICIENT_SNAPSHOT
+    assert performance.reason_code == "performance_start_position_quantity_missing"
+    assert performance.cycle_floating_pnl is None
 
 
 def test_backfill_is_idempotent() -> None:
