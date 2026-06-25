@@ -8,7 +8,7 @@ from typing import Any
 
 from django.contrib.auth.models import AbstractBaseUser
 from django.http import HttpRequest, JsonResponse
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_http_methods
 
 from .responses import error_response
 
@@ -17,6 +17,7 @@ VIEW_GROUPS = frozenset({"readonly", "ops_operator", "review_exporter", "admin"}
 
 ACTION_GROUPS: dict[str, frozenset[str]] = {
     "view_ops_console": VIEW_GROUPS,
+    "backfill_performance_metrics": frozenset({"ops_operator", "admin"}),
 }
 
 
@@ -31,10 +32,14 @@ def has_ops_permission(user: AbstractBaseUser, action: str) -> bool:
     return user.groups.filter(name__in=allowed_groups).exists()
 
 
-def require_ops_permission(action: str) -> Callable[[Callable[..., JsonResponse]], Callable[..., JsonResponse]]:
+def require_ops_permission(
+    action: str,
+    *,
+    methods: tuple[str, ...] = ("GET",),
+) -> Callable[[Callable[..., JsonResponse]], Callable[..., JsonResponse]]:
     def decorator(view_func: Callable[..., JsonResponse]) -> Callable[..., JsonResponse]:
         @wraps(view_func)
-        @require_GET
+        @require_http_methods(methods)
         def wrapper(request: HttpRequest, *args: Any, **kwargs: Any) -> JsonResponse:
             if not request.user.is_authenticated:
                 return error_response(
@@ -53,4 +58,3 @@ def require_ops_permission(action: str) -> Callable[[Callable[..., JsonResponse]
         return wrapper
 
     return decorator
-

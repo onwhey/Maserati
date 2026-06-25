@@ -28,6 +28,7 @@ from apps.foundation.redaction import sanitize_mapping, sanitize_value
 from apps.orchestration.models import OrchestrationBusinessObjectLink, OrchestrationRun
 from apps.orchestration.selectors.detail import orchestration_run_detail
 from apps.order_plan.models import ActiveLockStatus, OrderPlanActiveLock
+from apps.performance_metrics.selectors import latest_performance_summary
 from apps.order_status_sync.models import OrderStatusSyncRecord
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
@@ -169,10 +170,7 @@ def dashboard_summary() -> dict[str, Any]:
         "latest_trade_preparation_account_sync": _sync_run_row(latest_trade_sync),
         "latest_ops_display_account_sync": _sync_run_row(latest_ops_sync),
         "real_trading": real_trading_status(),
-        "performance_metrics": {
-            "available": False,
-            "reason_code": "performance_metrics_not_implemented_in_current_codebase",
-        },
+        "performance_metrics": latest_performance_summary(),
     }
 
 

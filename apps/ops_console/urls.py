@@ -22,5 +22,8 @@ urlpatterns = [
     path("alerts/<int:alert_id>/", views.alert_detail_view, name="alert_detail"),
     path("real-trading/", views.real_trading_view, name="real_trading"),
     path("audit-log/", views.audit_log_view, name="audit_log"),
+    path("performance/", views.performance_records_view, name="performance_records"),
+    path("performance/<int:performance_id>/", views.performance_record_detail_view, name="performance_record_detail"),
+    path("performance/preview/", views.performance_preview_view, name="performance_preview"),
+    path("performance/backfill/", views.performance_backfill_view, name="performance_backfill"),
 ]
-
