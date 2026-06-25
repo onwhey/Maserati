@@ -637,6 +637,7 @@ fake 外部服务覆盖真实外部调用；
 阶段 2：策略分析框架，已推进到 DecisionSnapshot。
 阶段 3：账户与价格事实，已完成 BinanceGateway 受限接口、Binance Account Sync 与 PriceSnapshot。
 阶段 4：已完成 OrderPlan、CandidateOrderIntent、ActiveLock、RiskCheck、ApprovedOrderIntent、ExecutionPreparation 与 PreparedOrderIntent。
+阶段 5：已完成 Execution、OrderSubmissionAttempt、OrderStatusSync、FillSync、TradeFill 与 OrderFillSummary。
 ```
 
 阶段 2 已形成以下链路的代码基础：
@@ -655,10 +656,10 @@ FeatureLayer
 下一步编码入口为：
 
 ```text
-docs/plans/trading_execution_implementation_plan.md
+docs/plans/orchestration_runtime_implementation_plan.md
 ```
 
-进入阶段 4 前，应先读取：
+进入阶段 6 前，应先读取：
 
 ```text
 AGENTS.md
@@ -667,16 +668,18 @@ docs/requirements/project_scope.md
 docs/requirements/system_capabilities.md
 docs/requirements/core_contracts.md
 docs/requirements/project_foundation.md
-docs/requirements/decision_snapshot.md
 docs/requirements/binance_account_sync.md
 docs/requirements/price_snapshot.md
 docs/requirements/order_plan.md
-docs/requirements/risk_check.md
-docs/requirements/execution_preparation.md
+docs/requirements/order_status_sync.md
+docs/requirements/fill_sync.md
+docs/requirements/pipeline_orchestrator.md
+docs/requirements/notifications.md
+docs/requirements/runtime_guard.md
 docs/architecture/system_architecture.md
 docs/architecture/module_boundary_architecture.md
 docs/architecture/runtime_task_architecture.md
-docs/plans/trading_execution_implementation_plan.md
+docs/plans/orchestration_runtime_implementation_plan.md
 ```
 
 阶段 4 第一批次已完成：
@@ -705,8 +708,36 @@ PreparedOrderIntent；
 
 阶段 4 已完成；本阶段不提交真实订单，不实现 OrderStatusSync 或 FillSync。
 
-下一步编码入口为：
+阶段 5 已完成第一批次：
 
 ```text
-docs/plans/order_lifecycle_implementation_plan.md
+Execution；
+OrderSubmissionAttempt；
+订单提交绝不重试；
+accepted / rejected / unknown 的保守边界；
+明确未发送或交易所拒绝时通过 ActiveLockService 安全收尾。
+```
+
+阶段 5 已完成第二批次：
+
+```text
+OrderStatusSync；
+订单状态查询 Gateway 受限接口；
+unknown 不推断成功或失败；
+终态确认后允许进入 FillSync，但不释放 ActiveLock。
+```
+
+阶段 5 已完成第三批次：
+
+```text
+FillSync；
+成交查询 Gateway 受限接口；
+TradeFill 与 OrderFillSummary；
+成交事实完整后通过 OrderPlanActiveLockService 安全释放 ActiveLock。
+```
+
+阶段 6 下一步编码入口为：
+
+```text
+docs/plans/orchestration_runtime_implementation_plan.md
 ```
