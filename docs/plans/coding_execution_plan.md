@@ -382,6 +382,22 @@ FillSync 只记录成交事实，不生成账户快照；
 docs/plans/orchestration_runtime_implementation_plan.md
 ```
 
+阶段 6 已完成第一批可运行落地：
+
+```text
+PipelineOrchestrator：OrchestrationRun、OrchestrationStepRun、OrchestrationBusinessObjectLink、Registry、StepAdapter、编排推进 service 与 Celery task；
+Notifications：AlertEvent 到 NotificationDeliveryAttempt / NotificationSuppression 的投递决策闭环；
+RuntimeGuard：独立只读巡检 run / issue 记录、默认巡检项、dry-run / confirm-write 边界与 Celery task。
+```
+
+本阶段没有实现自动恢复、自动补跑、自动释放 ActiveLock、真实 Hermes 外发、AIReview 巡检、PerformanceMetrics 巡检或后台人工补算。
+
+阶段 7 下一步编码入口为：
+
+```text
+docs/plans/operations_review_implementation_plan.md
+```
+
 核心目标：
 
 ```text

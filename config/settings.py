@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable
 
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
@@ -82,6 +83,8 @@ INSTALLED_APPS = [
     "apps.foundation",
     "apps.alerts",
     "apps.audit",
+    "apps.orchestration",
+    "apps.runtime_guard",
     "apps.runtime_config",
     "apps.binance_gateway",
     "apps.binance_account_sync",
@@ -169,6 +172,28 @@ CELERY_RESULT_BACKEND = env_str(
 CELERY_TIMEZONE = "UTC"
 CELERY_ENABLE_UTC = True
 CELERY_BEAT_SCHEDULE: dict[str, object] = {}
+ORCHESTRATION_MAIN_CYCLE_BEAT_ENABLED = env_bool("ORCHESTRATION_MAIN_CYCLE_BEAT_ENABLED", default=False)
+RUNTIME_GUARD_BEAT_ENABLED = env_bool("RUNTIME_GUARD_BEAT_ENABLED", default=False)
+NOTIFICATIONS_PENDING_SCAN_BEAT_ENABLED = env_bool("NOTIFICATIONS_PENDING_SCAN_BEAT_ENABLED", default=False)
+
+if ORCHESTRATION_MAIN_CYCLE_BEAT_ENABLED:
+    CELERY_BEAT_SCHEDULE["orchestration-main-trading-cycle"] = {
+        "task": "orchestration.start_main_trading_cycle",
+        "schedule": crontab(minute=5, hour="*/4"),
+        "kwargs": {},
+    }
+if RUNTIME_GUARD_BEAT_ENABLED:
+    CELERY_BEAT_SCHEDULE["runtime-guard-run"] = {
+        "task": "runtime_guard.run",
+        "schedule": crontab(minute="*/10"),
+        "kwargs": {"dry_run": False, "confirm_write": True, "trace_id": ""},
+    }
+if NOTIFICATIONS_PENDING_SCAN_BEAT_ENABLED:
+    CELERY_BEAT_SCHEDULE["notifications-scan-pending"] = {
+        "task": "notifications.scan_pending",
+        "schedule": crontab(minute="*/1"),
+        "kwargs": {"limit": 50},
+    }
 
 LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "UTC"
@@ -295,6 +320,12 @@ DEEPSEEK_DEFAULT_MODEL_PROFILE = env_str("DEEPSEEK_DEFAULT_MODEL_PROFILE", defau
 
 NOTIFICATIONS_DELIVERY_ENABLED = env_bool("NOTIFICATIONS_DELIVERY_ENABLED", default=False)
 NOTIFICATIONS_DEFAULT_CHANNEL = env_str("NOTIFICATIONS_DEFAULT_CHANNEL", default="console_only")
+NOTIFICATIONS_FAKE_DELIVERY_SUCCESS = env_bool("NOTIFICATIONS_FAKE_DELIVERY_SUCCESS", default=TESTING)
+RUNTIME_GUARD_ORCHESTRATION_STALE_MINUTES = env_int("RUNTIME_GUARD_ORCHESTRATION_STALE_MINUTES", default=30)
+RUNTIME_GUARD_STEP_STALE_MINUTES = env_int("RUNTIME_GUARD_STEP_STALE_MINUTES", default=20)
+RUNTIME_GUARD_ACTIVE_LOCK_STALE_MINUTES = env_int("RUNTIME_GUARD_ACTIVE_LOCK_STALE_MINUTES", default=40)
+RUNTIME_GUARD_ORDER_STATUS_STALE_MINUTES = env_int("RUNTIME_GUARD_ORDER_STATUS_STALE_MINUTES", default=45)
+RUNTIME_GUARD_NOTIFICATION_STALE_MINUTES = env_int("RUNTIME_GUARD_NOTIFICATION_STALE_MINUTES", default=10)
 
 LOGGING = {
     "version": 1,
