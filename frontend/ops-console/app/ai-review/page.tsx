@@ -11,6 +11,8 @@ import type { Paginated } from "@/lib/api/types";
 import { asRecord, asRows } from "@/lib/ops-data";
 import { formatUtc, toSearchParams } from "@/lib/utils";
 
+import { AIReviewCreateRequestForm } from "./create-request-form";
+
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -30,6 +32,7 @@ export default async function AIReviewPage({ searchParams }: PageProps) {
         title="AI Review"
         description="离线 AI 复盘请求、数据包、模型调用结果和人工建议查看入口；本页不参与实时交易。"
       />
+      <AIReviewCreateRequestForm />
       <FilterBar
         fields={[
           { type: "input", name: "status", label: "状态", placeholder: "created / completed / failed", defaultValue: String(params.status ?? "") },

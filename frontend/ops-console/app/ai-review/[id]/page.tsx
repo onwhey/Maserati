@@ -11,12 +11,15 @@ import { opsFetch } from "@/lib/api/client";
 import { asRecord, asRows } from "@/lib/ops-data";
 import { formatUtc } from "@/lib/utils";
 
+import { AIReviewRequestOperationPanel, AIReviewSuggestionStatusForm } from "../detail-operation-forms";
+
 type PageProps = {
   params: Promise<{ id: string }>;
 };
 
 export default async function AIReviewDetailPage({ params }: PageProps) {
   const { id } = await params;
+  const requestId = Number(id);
   const result = await opsFetch<Record<string, unknown>>(`/api/ops/ai-review/${id}/`);
   if (!result.ok) {
     return <ApiError reason={result.reason_code} message={result.message_zh} />;
@@ -65,6 +68,8 @@ export default async function AIReviewDetailPage({ params }: PageProps) {
           </div>
         </div>
       </section>
+
+      <AIReviewRequestOperationPanel requestId={requestId} requestStatus={String(request.status ?? "")} />
 
       <section className="mt-8 space-y-3">
         <h2 className="text-lg font-semibold">当前数据包</h2>
@@ -148,7 +153,18 @@ export default async function AIReviewDetailPage({ params }: PageProps) {
             { key: "priority", label: "优先级" },
             { key: "title", label: "标题" },
             { key: "target_area", label: "目标区域" },
-            { key: "decision_note", label: "人工说明" }
+            { key: "decision_note", label: "人工说明" },
+            {
+              key: "status_action",
+              label: "人工状态操作",
+              render: (row) => (
+                <AIReviewSuggestionStatusForm
+                  requestId={requestId}
+                  suggestionId={Number(row.id ?? 0)}
+                  currentStatus={String(row.status ?? "")}
+                />
+              )
+            }
           ]}
         />
       </section>
