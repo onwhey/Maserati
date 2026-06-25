@@ -460,14 +460,8 @@ def _persist_page_fills(result: FillSyncResult, fills: list[Any]) -> dict[str, A
                 conflict += 1
                 conflicts.append(normalized["evidence"])
                 continue
-            existing = TradeFill.objects.select_for_update().filter(
-                exchange=locked_result.exchange,
-                market_type=locked_result.market_type,
-                account_domain=locked_result.account_domain,
-                symbol=locked_result.symbol,
-                exchange_order_id=locked_result.exchange_order_id,
-                exchange_trade_id=normalized["exchange_trade_id"],
-            ).first()
+            trade_identity_hash = _trade_identity_hash(locked_result, normalized["exchange_trade_id"])
+            existing = TradeFill.objects.select_for_update().filter(trade_identity_hash=trade_identity_hash).first()
             if existing is not None:
                 if existing.raw_fill_hash == normalized["raw_fill_hash"]:
                     duplicate += 1
@@ -494,6 +488,7 @@ def _persist_page_fills(result: FillSyncResult, fills: list[Any]) -> dict[str, A
                     client_order_id=locked_result.client_order_id,
                     exchange_order_id=locked_result.exchange_order_id,
                     exchange_trade_id=normalized["exchange_trade_id"],
+                    trade_identity_hash=trade_identity_hash,
                     side=normalized["side"],
                     position_side=normalized["position_side"],
                     price=normalized["price"],
@@ -613,6 +608,19 @@ def _invalid_raw_fill_reason(result: FillSyncResult, fill: dict[str, Any]) -> st
     if position_side not in {"BOTH", "LONG", "SHORT"}:
         return "trade_fill_position_side_invalid"
     return ""
+
+
+def _trade_identity_hash(result: FillSyncResult, exchange_trade_id: str) -> str:
+    return trade_fill_hash(
+        {
+            "exchange": result.exchange,
+            "market_type": result.market_type,
+            "account_domain": result.account_domain,
+            "symbol": result.symbol,
+            "exchange_order_id": result.exchange_order_id,
+            "exchange_trade_id": exchange_trade_id,
+        }
+    )
 
 
 def _finalize_result_from_stats(result_id: int, stats: PageStats) -> FillSyncResult:

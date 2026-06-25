@@ -353,15 +353,19 @@ def _persist_step_result(step_run: OrchestrationStepRun, result: OrchestrationSt
 
 def _persist_object_links(step_run: OrchestrationStepRun, refs: tuple[BusinessObjectRef, ...]) -> None:
     for ref in refs:
+        object_identity_hash = _stable_hash(
+            {"object_role": ref.role, "object_type": ref.object_type, "object_id": ref.object_id}
+        )
         OrchestrationBusinessObjectLink.objects.get_or_create(
-            orchestration_run=step_run.orchestration_run,
             step_run=step_run,
-            object_role=ref.role,
-            object_type=ref.object_type,
-            object_id=ref.object_id,
+            object_identity_hash=object_identity_hash,
             defaults={
+                "orchestration_run": step_run.orchestration_run,
                 "step_code": step_run.step_code,
                 "module_code": step_run.module_code,
+                "object_role": ref.role,
+                "object_type": ref.object_type,
+                "object_id": ref.object_id,
                 "object_label": ref.object_label,
                 "ref_strategy": ref.ref_strategy,
                 "trace_id": step_run.trace_id,

@@ -169,6 +169,7 @@ class OrchestrationBusinessObjectLink(models.Model):
     object_role = models.CharField("对象角色", max_length=40, choices=OrchestrationObjectRole.choices)
     object_type = models.CharField("对象类型", max_length=120)
     object_id = models.CharField("对象 ID", max_length=120)
+    object_identity_hash = models.CharField("对象链接身份 hash", max_length=64, null=True, blank=True)
     object_label = models.CharField("对象标签", max_length=200, blank=True)
     ref_strategy = models.CharField("引用策略", max_length=40, default="explicit_refs")
     trace_id = models.CharField("技术追踪 ID", max_length=80)
@@ -177,7 +178,7 @@ class OrchestrationBusinessObjectLink(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["step_run", "object_role", "object_type", "object_id"],
+                fields=["step_run", "object_identity_hash"],
                 name="uniq_orchestration_object_link",
             )
         ]

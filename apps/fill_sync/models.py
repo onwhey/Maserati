@@ -127,6 +127,7 @@ class TradeFill(models.Model):
     client_order_id = models.CharField("Binance clientOrderId", max_length=120, blank=True)
     exchange_order_id = models.CharField("交易所订单 ID", max_length=120)
     exchange_trade_id = models.CharField("交易所成交 ID", max_length=120)
+    trade_identity_hash = models.CharField("成交身份 hash", max_length=64, unique=True, null=True, blank=True)
     side = models.CharField("订单方向", max_length=10)
     position_side = models.CharField("持仓方向", max_length=20)
     price = models.DecimalField("成交价格", max_digits=38, decimal_places=18)
@@ -148,12 +149,6 @@ class TradeFill(models.Model):
     created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["exchange", "market_type", "account_domain", "symbol", "exchange_order_id", "exchange_trade_id"],
-                name="uniq_trade_fill_exchange_identity",
-            )
-        ]
         indexes = [
             models.Index(fields=["order_submission_attempt", "trade_time_utc"]),
             models.Index(fields=["market_type", "account_domain", "symbol"]),

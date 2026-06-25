@@ -25,6 +25,7 @@ class BinancePositionMode(models.TextChoices):
 
 class BinanceSyncRun(models.Model):
     business_request_key = models.CharField("业务幂等键", max_length=191)
+    request_identity_hash = models.CharField("请求身份 hash", max_length=64, unique=True, null=True, blank=True)
     exchange = models.CharField("交易所", max_length=40, default="binance")
     market_type = models.CharField("市场类型", max_length=40)
     account_domain = models.CharField("账户域", max_length=120)
@@ -51,12 +52,6 @@ class BinanceSyncRun(models.Model):
     created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
 
     class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["business_request_key", "market_type", "account_domain", "sync_purpose"],
-                name="uniq_binance_sync_run_request",
-            )
-        ]
         indexes = [
             models.Index(fields=["market_type", "account_domain", "sync_purpose", "status"]),
             models.Index(fields=["status", "started_at_utc"]),
@@ -197,4 +192,3 @@ class BinanceSymbolRuleSnapshot(models.Model):
             models.Index(fields=["market_type", "account_domain", "symbol"]),
             models.Index(fields=["snapshot_hash"]),
         ]
-

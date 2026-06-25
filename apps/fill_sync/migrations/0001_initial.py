@@ -111,6 +111,7 @@ class Migration(migrations.Migration):
                 ('client_order_id', models.CharField(blank=True, max_length=120, verbose_name='Binance clientOrderId')),
                 ('exchange_order_id', models.CharField(max_length=120, verbose_name='交易所订单 ID')),
                 ('exchange_trade_id', models.CharField(max_length=120, verbose_name='交易所成交 ID')),
+                ('trade_identity_hash', models.CharField(blank=True, max_length=64, null=True, unique=True, verbose_name='成交身份 hash')),
                 ('side', models.CharField(max_length=10, verbose_name='订单方向')),
                 ('position_side', models.CharField(max_length=20, verbose_name='持仓方向')),
                 ('price', models.DecimalField(decimal_places=18, max_digits=38, verbose_name='成交价格')),
@@ -173,9 +174,5 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name='tradefill',
             index=models.Index(fields=['exchange_trade_id'], name='fill_sync_t_exchang_85ef14_idx'),
-        ),
-        migrations.AddConstraint(
-            model_name='tradefill',
-            constraint=models.UniqueConstraint(fields=('exchange', 'market_type', 'account_domain', 'symbol', 'exchange_order_id', 'exchange_trade_id'), name='uniq_trade_fill_exchange_identity'),
         ),
     ]

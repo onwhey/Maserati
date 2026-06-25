@@ -142,10 +142,7 @@ def run_account_sync(
         return blocked_without_run(request=request, reason_code=validation_error)
 
     existing = BinanceSyncRun.objects.filter(
-        business_request_key=request.business_request_key,
-        market_type=request.market_type,
-        account_domain=request.account_domain,
-        sync_purpose=request.sync_purpose,
+        request_identity_hash=sync_request_identity_hash(request),
     ).first()
     if existing is not None:
         return result_from_run(existing)
@@ -207,16 +204,28 @@ def validate_request(request: SyncRequest) -> str:
 
 def create_running_run(request: SyncRequest) -> tuple[BinanceSyncRun, bool]:
     return BinanceSyncRun.objects.get_or_create(
-        business_request_key=request.business_request_key,
-        market_type=request.market_type,
-        account_domain=request.account_domain,
-        sync_purpose=request.sync_purpose,
+        request_identity_hash=sync_request_identity_hash(request),
         defaults={
+            "business_request_key": request.business_request_key,
+            "market_type": request.market_type,
+            "account_domain": request.account_domain,
+            "sync_purpose": request.sync_purpose,
             "requested_symbols": list(request.symbols),
             "trace_id": request.trace_id,
             "trigger_source": request.trigger_source,
             "operator_id": request.operator_id,
         },
+    )
+
+
+def sync_request_identity_hash(request: SyncRequest) -> str:
+    return stable_hash(
+        {
+            "business_request_key": request.business_request_key,
+            "market_type": request.market_type,
+            "account_domain": request.account_domain,
+            "sync_purpose": request.sync_purpose,
+        }
     )
 
 

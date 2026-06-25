@@ -18,6 +18,7 @@ class Migration(migrations.Migration):
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
                 ('business_request_key', models.CharField(max_length=191, verbose_name='业务幂等键')),
+                ('request_identity_hash', models.CharField(blank=True, max_length=64, null=True, unique=True, verbose_name='请求身份 hash')),
                 ('exchange', models.CharField(default='binance', max_length=40, verbose_name='交易所')),
                 ('market_type', models.CharField(max_length=40, verbose_name='市场类型')),
                 ('account_domain', models.CharField(max_length=120, verbose_name='账户域')),
@@ -40,7 +41,6 @@ class Migration(migrations.Migration):
             ],
             options={
                 'indexes': [models.Index(fields=['market_type', 'account_domain', 'sync_purpose', 'status'], name='binance_acc_market__2afd47_idx'), models.Index(fields=['status', 'started_at_utc'], name='binance_acc_status_2dbc43_idx'), models.Index(fields=['expires_at_utc'], name='binance_acc_expires_a3a020_idx'), models.Index(fields=['trace_id'], name='binance_acc_trace_i_86b533_idx')],
-                'constraints': [models.UniqueConstraint(fields=('business_request_key', 'market_type', 'account_domain', 'sync_purpose'), name='uniq_binance_sync_run_request')],
             },
         ),
         migrations.CreateModel(

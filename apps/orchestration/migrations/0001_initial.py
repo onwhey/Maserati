@@ -111,6 +111,7 @@ class Migration(migrations.Migration):
                 ('object_role', models.CharField(choices=[('primary', '主对象'), ('input', '输入对象'), ('output', '输出对象'), ('related', '相关对象'), ('audit', '审计对象')], max_length=40, verbose_name='对象角色')),
                 ('object_type', models.CharField(max_length=120, verbose_name='对象类型')),
                 ('object_id', models.CharField(max_length=120, verbose_name='对象 ID')),
+                ('object_identity_hash', models.CharField(blank=True, max_length=64, null=True, verbose_name='对象链接身份 hash')),
                 ('object_label', models.CharField(blank=True, max_length=200, verbose_name='对象标签')),
                 ('ref_strategy', models.CharField(default='explicit_refs', max_length=40, verbose_name='引用策略')),
                 ('trace_id', models.CharField(max_length=80, verbose_name='技术追踪 ID')),
@@ -157,6 +158,6 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='orchestrationbusinessobjectlink',
-            constraint=models.UniqueConstraint(fields=('step_run', 'object_role', 'object_type', 'object_id'), name='uniq_orchestration_object_link'),
+            constraint=models.UniqueConstraint(fields=('step_run', 'object_identity_hash'), name='uniq_orchestration_object_link'),
         ),
     ]
