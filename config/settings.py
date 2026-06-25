@@ -86,6 +86,7 @@ INSTALLED_APPS = [
     "apps.orchestration",
     "apps.runtime_guard",
     "apps.runtime_config",
+    "apps.ops_console",
     "apps.binance_gateway",
     "apps.binance_account_sync",
     "apps.price_snapshot",

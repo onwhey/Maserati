@@ -1,0 +1,2 @@
+"""OpsConsole app."""
+
