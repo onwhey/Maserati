@@ -17,6 +17,11 @@ class PreparedOrderIntentStatus(models.TextChoices):
     PREPARED = "prepared", "待提交"
     EXPIRED = "expired", "已过期"
     CONSUMED = "consumed", "已进入执行"
+    SUBMITTED = "submitted", "已提交"
+    SUBMISSION_REJECTED = "submission_rejected", "提交被拒绝"
+    SUBMISSION_UNKNOWN = "submission_unknown", "提交结果未知"
+    SUBMISSION_BLOCKED = "submission_blocked", "提交前阻断"
+    SUBMISSION_FAILED = "submission_failed", "提交前失败"
 
 
 class ExecutionPreparationResult(models.Model):

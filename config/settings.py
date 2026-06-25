@@ -89,6 +89,7 @@ INSTALLED_APPS = [
     "apps.order_plan",
     "apps.risk_check",
     "apps.execution_preparation",
+    "apps.execution",
     "apps.market_data",
     "apps.strategy_analysis",
 ]

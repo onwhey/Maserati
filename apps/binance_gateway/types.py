@@ -18,7 +18,9 @@ ERROR_GATEWAY_DISABLED = "gateway_disabled"
 ERROR_CAPABILITY_DISABLED = "capability_disabled"
 ERROR_PUBLIC_DATA_DISABLED = "public_data_disabled"
 ERROR_ACCOUNT_READ_DISABLED = "account_read_disabled"
+ERROR_ORDER_SUBMISSION_DISABLED = "order_submission_disabled"
 ERROR_REAL_EXTERNAL_SERVICES_DISABLED = "real_external_services_disabled"
+ERROR_REAL_TRADING_DISABLED = "real_trading_disabled"
 ERROR_INVALID_MARKET_TYPE = "invalid_market_type"
 ERROR_COLLECTION_DOMAIN_MISMATCH = "collection_domain_mismatch"
 ERROR_REQUEST_VALIDATION_FAILED = "request_validation_failed"
@@ -47,6 +49,7 @@ class BinanceGatewayCallContext:
     business_object_type: str = ""
     business_object_id: str = ""
     request_time_utc: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

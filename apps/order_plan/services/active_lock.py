@@ -167,6 +167,82 @@ def release_for_pre_execution_stop(
         return ActiveLockReleaseResult(False, "active_lock_not_found", None)
 
 
+def release_for_order_submission_stop(
+    *,
+    active_lock_id: int,
+    order_plan_id: int,
+    source_module: str,
+    source_object_id: int,
+    reason_code: str,
+    evidence: dict[str, object],
+    trace_id: str,
+    trigger_source: str,
+) -> ActiveLockReleaseResult:
+    """在订单明确未被接受或确认未发出时，基于提交阶段事实释放 ActiveLock。"""
+
+    try:
+        with transaction.atomic():
+            lock = OrderPlanActiveLock.objects.select_for_update().get(id=active_lock_id)
+            if lock.status == ActiveLockStatus.RELEASED:
+                return ActiveLockReleaseResult(True, "active_lock_already_released", lock)
+            if lock.status != ActiveLockStatus.ACTIVE:
+                return ActiveLockReleaseResult(False, "active_lock_not_active", lock)
+            if lock.current_order_plan_id != order_plan_id:
+                return ActiveLockReleaseResult(False, "active_lock_order_plan_mismatch", lock)
+
+            previous_status = lock.status
+            now = timezone.now()
+            lock.status = ActiveLockStatus.RELEASED
+            lock.current_order_plan = None
+            lock.released_at_utc = now
+            lock.reason_code = reason_code
+            lock.version += 1
+            lock.save(
+                update_fields=[
+                    "status",
+                    "current_order_plan",
+                    "released_at_utc",
+                    "reason_code",
+                    "version",
+                    "updated_at_utc",
+                ]
+            )
+            order_plan = OrderPlan.objects.get(id=order_plan_id)
+            _record_event(
+                lock=lock,
+                order_plan=order_plan,
+                event_type="released_after_order_submission_stop",
+                from_status=previous_status,
+                to_status=ActiveLockStatus.RELEASED,
+                reason_code=reason_code,
+                evidence={
+                    **evidence,
+                    "source_module": source_module,
+                    "source_object_id": source_object_id,
+                },
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+            )
+            record_order_plan_alert(
+                event_type="active_lock_released",
+                business_request_key=order_plan.business_request_key,
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+                status=ActiveLockStatus.RELEASED,
+                reason_code=reason_code,
+                message="订单提交阶段已明确未发出或未被交易所接受，ActiveLock 已由锁服务安全释放。",
+                order_plan_id=order_plan.id,
+                payload_summary={
+                    "active_lock_id": lock.id,
+                    "source_module": source_module,
+                    "source_object_id": source_object_id,
+                },
+            )
+            return ActiveLockReleaseResult(True, "active_lock_released", lock)
+    except OrderPlanActiveLock.DoesNotExist:
+        return ActiveLockReleaseResult(False, "active_lock_not_found", None)
+
+
 def _get_or_create_locked_identity(order_plan: OrderPlan) -> OrderPlanActiveLock:
     identity = {
         "exchange": order_plan.exchange,
