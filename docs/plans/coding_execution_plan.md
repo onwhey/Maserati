@@ -784,3 +784,28 @@ unknown 不自动重试；
 AIReview 只写 AlertEvent / AuditRecord，不参与实时交易、不修改策略、不修改交易配置、不下单；
 本批次不实现 OpsConsole AIReview 页面，不实现 AIReview Celery 自动调度，不实现真实 DeepSeek 调用。
 ```
+阶段 7 已完成第五批次：
+
+```text
+OpsConsole AIReview 后端 API 接入；
+AIReviewRequest 列表与详情查询；
+通过 OpsConsole 创建 AIReviewRequest、构建 AIReviewPackage、触发 AIReview service 离线复盘、更新 AIReviewSuggestion 人工状态；
+OpsConsole 不直接调用 DeepSeekGateway，不访问 DeepSeek API；
+AIReview 前端列表页与详情页只读展示 request / package / attempt / report / finding / suggestion / AlertEvent / AuditRecord；
+本批次不实现 AIReview 自动调度，不实现前端完整创建表单，不实现真实 DeepSeek 调用。
+```
+
+阶段 7 已完成第六批次：
+
+```text
+OpsConsole 受控人工操作入口；
+账户展示刷新入口调用 Binance Account Sync ops_display service；
+订单状态受控补查入口调用 OrderStatusSync recovery service；
+成交受控补同步入口调用 FillSync recovery service；
+ActiveLock 人工收尾入口调用 ActiveLockService，并且只在正式事实满足安全收尾条件时释放锁；
+RuntimeGuardIssue 人工状态入口只修改巡检问题自身状态，不修改原业务对象；
+所有写入口要求权限、confirm_write、reason 和 AuditRecord；
+Ops Actions 前端页面展示受控入口和边界；
+本批次不实现订单重提、自动撤单、自动补单、自动修复交易或复杂人工操作表单。
+```
+

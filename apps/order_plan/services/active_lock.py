@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
+from apps.audit.services import record_audit
+from apps.execution.models import OrderSubmissionAttempt, OrderSubmissionAttemptStatus
 from apps.foundation.idempotency import build_idempotency_key
+from apps.foundation.results import ResultStatus, ServiceResult
+from apps.fill_sync.models import OrderFillSummary, OrderFillSummaryStatus
 
 from ..models import ActiveLockStatus, OrderPlan, OrderPlanActiveLock, OrderPlanActiveLockEvent
 from .alerts import record_order_plan_alert
@@ -101,6 +105,7 @@ def release_for_pre_execution_stop(
     evidence: dict[str, object],
     trace_id: str,
     trigger_source: str,
+    operator_id: str = "",
 ) -> ActiveLockReleaseResult:
     """在订单尚未进入执行准备前，基于明确阻断/拒绝事实释放 ActiveLock。"""
 
@@ -146,6 +151,7 @@ def release_for_pre_execution_stop(
                 },
                 trace_id=trace_id,
                 trigger_source=trigger_source,
+                operator_id=operator_id,
             )
             record_order_plan_alert(
                 event_type="active_lock_released",
@@ -177,6 +183,7 @@ def release_for_order_submission_stop(
     evidence: dict[str, object],
     trace_id: str,
     trigger_source: str,
+    operator_id: str = "",
 ) -> ActiveLockReleaseResult:
     """在订单明确未被接受或确认未发出时，基于提交阶段事实释放 ActiveLock。"""
 
@@ -222,6 +229,7 @@ def release_for_order_submission_stop(
                 },
                 trace_id=trace_id,
                 trigger_source=trigger_source,
+                operator_id=operator_id,
             )
             record_order_plan_alert(
                 event_type="active_lock_released",
@@ -253,6 +261,7 @@ def finalize_after_fill_sync(
     evidence: dict[str, object],
     trace_id: str,
     trigger_source: str,
+    operator_id: str = "",
 ) -> ActiveLockReleaseResult:
     """订单进入明确终态且成交同步完整后，由锁服务统一释放 ActiveLock。"""
 
@@ -298,6 +307,7 @@ def finalize_after_fill_sync(
                 },
                 trace_id=trace_id,
                 trigger_source=trigger_source,
+                operator_id=operator_id,
             )
             record_order_plan_alert(
                 event_type="active_lock_released",
@@ -317,6 +327,157 @@ def finalize_after_fill_sync(
             return ActiveLockReleaseResult(True, "active_lock_released", lock)
     except OrderPlanActiveLock.DoesNotExist:
         return ActiveLockReleaseResult(False, "active_lock_not_found", None)
+
+
+def manual_closeout_active_lock(
+    *,
+    active_lock_id: int,
+    operator_id: str,
+    reason: str,
+    evidence: dict[str, object],
+    trace_id: str,
+    trigger_source: str = "ops_console_active_lock_closeout",
+) -> ServiceResult:
+    reason = reason.strip()
+    if not reason:
+        return _manual_closeout_result(ResultStatus.BLOCKED, "active_lock_closeout_reason_required", "ActiveLock 人工收尾需要记录原因。", trace_id, trigger_source)
+    if not operator_id:
+        return _manual_closeout_result(ResultStatus.BLOCKED, "operator_required", "ActiveLock 人工收尾需要记录操作者。", trace_id, trigger_source)
+    if not evidence:
+        return _manual_closeout_result(ResultStatus.BLOCKED, "active_lock_closeout_evidence_required", "ActiveLock 人工收尾需要记录证据。", trace_id, trigger_source)
+
+    try:
+        lock = OrderPlanActiveLock.objects.select_related("current_order_plan").get(id=active_lock_id)
+    except OrderPlanActiveLock.DoesNotExist:
+        return _manual_closeout_result(ResultStatus.BLOCKED, "active_lock_not_found", "ActiveLock 不存在。", trace_id, trigger_source)
+
+    before = _lock_summary(lock)
+    release = _manual_release_from_safe_fact(
+        lock=lock,
+        operator_id=operator_id,
+        reason=reason,
+        evidence=evidence,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    after = _lock_summary(release.active_lock) if release.active_lock is not None else before
+    status = ResultStatus.SUCCEEDED if release.released else ResultStatus.BLOCKED
+    audit = record_audit(
+        operator_id=operator_id,
+        operation_type="active_lock_manual_closeout",
+        target_object_type="OrderPlanActiveLock",
+        target_object_id=str(active_lock_id),
+        before_state_summary=before,
+        after_state_summary=after,
+        reason=reason[:500],
+        evidence=evidence,
+        result=status.value,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return _manual_closeout_result(
+        status,
+        release.reason_code,
+        "ActiveLock 人工收尾已由锁服务处理。" if release.released else "ActiveLock 人工收尾未满足安全收尾条件。",
+        trace_id,
+        trigger_source,
+        active_lock=release.active_lock,
+        audit_record_id=audit.id,
+    )
+
+
+def _manual_release_from_safe_fact(
+    *,
+    lock: OrderPlanActiveLock,
+    operator_id: str,
+    reason: str,
+    evidence: dict[str, object],
+    trace_id: str,
+    trigger_source: str,
+) -> ActiveLockReleaseResult:
+    if lock.status == ActiveLockStatus.RELEASED:
+        return ActiveLockReleaseResult(True, "active_lock_already_released", lock)
+    if lock.status != ActiveLockStatus.ACTIVE:
+        return ActiveLockReleaseResult(False, "active_lock_not_active", lock)
+    if lock.current_order_plan_id is None:
+        return ActiveLockReleaseResult(False, "active_lock_current_order_plan_missing", lock)
+
+    summary = (
+        OrderFillSummary.objects.filter(
+            latest_fill_sync_result__active_lock=lock,
+            latest_fill_sync_result__order_plan_id=lock.current_order_plan_id,
+            status__in=[OrderFillSummaryStatus.COMPLETE, OrderFillSummaryStatus.EMPTY],
+        )
+        .order_by("-updated_at_utc", "-id")
+        .first()
+    )
+    if summary is not None:
+        return finalize_after_fill_sync(
+            active_lock_id=lock.id,
+            order_plan_id=lock.current_order_plan_id,
+            source_module="ops_console_manual_active_lock_closeout",
+            source_object_id=summary.id,
+            reason_code="manual_closeout_after_fill_sync_complete",
+            evidence={**evidence, "operator_id": operator_id, "operator_reason": reason, "order_fill_summary_id": summary.id},
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            operator_id=operator_id,
+        )
+
+    attempt = (
+        OrderSubmissionAttempt.objects.filter(active_lock=lock, order_plan_id=lock.current_order_plan_id)
+        .order_by("-created_at_utc", "-id")
+        .first()
+    )
+    if attempt is None:
+        return ActiveLockReleaseResult(False, "active_lock_no_submission_fact", lock)
+    if attempt.status in {OrderSubmissionAttemptStatus.FAILED_BEFORE_SUBMIT, OrderSubmissionAttemptStatus.BLOCKED_BEFORE_SUBMIT} and not attempt.request_sent:
+        reason_code = "manual_closeout_submission_not_sent"
+    elif attempt.status == OrderSubmissionAttemptStatus.REJECTED:
+        reason_code = "manual_closeout_submission_rejected"
+    else:
+        return ActiveLockReleaseResult(False, "active_lock_closeout_unsafe_order_state", lock)
+    return release_for_order_submission_stop(
+        active_lock_id=lock.id,
+        order_plan_id=lock.current_order_plan_id,
+        source_module="ops_console_manual_active_lock_closeout",
+        source_object_id=attempt.id,
+        reason_code=reason_code,
+        evidence={**evidence, "operator_id": operator_id, "operator_reason": reason, "order_submission_attempt_id": attempt.id},
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+        operator_id=operator_id,
+    )
+
+
+def _manual_closeout_result(
+    status: ResultStatus,
+    reason_code: str,
+    message: str,
+    trace_id: str,
+    trigger_source: str,
+    *,
+    active_lock: OrderPlanActiveLock | None = None,
+    audit_record_id: int | None = None,
+) -> ServiceResult:
+    data = {
+        "active_lock_id": active_lock.id if active_lock is not None else None,
+        "lock_status": active_lock.status if active_lock is not None else "",
+        "audit_record_id": audit_record_id,
+    }
+    return ServiceResult(status, reason_code, message, trace_id, trigger_source, data)
+
+
+def _lock_summary(lock: OrderPlanActiveLock | None) -> dict[str, object]:
+    if lock is None:
+        return {}
+    return {
+        "id": lock.id,
+        "status": lock.status,
+        "current_order_plan_id": lock.current_order_plan_id,
+        "reason_code": lock.reason_code,
+        "version": lock.version,
+    }
 
 
 def _get_or_create_locked_identity(order_plan: OrderPlan) -> OrderPlanActiveLock:
@@ -383,6 +544,7 @@ def _record_event(
     evidence: dict[str, object],
     trace_id: str,
     trigger_source: str,
+    operator_id: str = "",
 ) -> None:
     event_key = build_idempotency_key(
         "active_lock_event",
@@ -402,6 +564,7 @@ def _record_event(
             "to_status": to_status,
             "reason_code": reason_code,
             "evidence": evidence,
+            "operator_id": operator_id,
             "trace_id": trace_id,
             "trigger_source": trigger_source,
         },

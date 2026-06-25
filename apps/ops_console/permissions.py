@@ -17,7 +17,13 @@ VIEW_GROUPS = frozenset({"readonly", "ops_operator", "review_exporter", "admin"}
 
 ACTION_GROUPS: dict[str, frozenset[str]] = {
     "view_ops_console": VIEW_GROUPS,
+    "refresh_account_overview": frozenset({"ops_operator", "admin"}),
+    "controlled_order_status_recheck": frozenset({"ops_operator", "admin"}),
+    "controlled_fill_sync": frozenset({"ops_operator", "admin"}),
+    "manual_active_lock_closeout": frozenset({"ops_operator", "admin"}),
+    "manage_runtime_guard_issue": frozenset({"ops_operator", "admin"}),
     "backfill_performance_metrics": frozenset({"ops_operator", "admin"}),
+    "manage_ai_review": frozenset({"ops_operator", "review_exporter", "admin"}),
 }
 
 

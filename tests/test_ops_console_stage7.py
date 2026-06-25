@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 
 import pytest
@@ -9,8 +10,11 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.ai_review.models import AIReviewRequest, AIReviewRequestStatus, AIReviewSuggestion, AIReviewSuggestionStatus
+from apps.ai_review.services import create_review_request, run_ai_review
 from apps.alerts.models import AlertEvent
 from apps.alerts.services import record_alert_event
+from apps.binance_gateway.fill_query import FakeBinanceFillQueryGateway
 from apps.audit.models import AuditRecord
 from apps.binance_account_sync.models import (
     BinanceAccountSnapshot,
@@ -23,6 +27,7 @@ from apps.binance_account_sync.models import (
     BinanceSyncStatus,
 )
 from apps.execution.models import OrderSubmissionAttempt
+from apps.fill_sync.models import FillSyncResult, OrderFillSummary
 from apps.orchestration.models import (
     OrchestrationBusinessObjectLink,
     OrchestrationObjectRole,
@@ -32,11 +37,15 @@ from apps.orchestration.models import (
     OrchestrationStepRunStatus,
     OrchestrationTriggerMode,
 )
+from apps.order_plan.models import ActiveLockStatus, OrderPlanActiveLock
+from apps.order_status_sync.models import OrderStatusSyncRecord
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueSeverity, RuntimeGuardIssueStatus
 from tests.test_execution_order_submission_stage5 import _prepared, _submit
 from apps.binance_gateway.order_submission import FakeBinanceOrderSubmissionGateway
 from apps.binance_gateway.types import MARKET_TYPE_USDS_M
+from apps.deepseek_gateway.review import FakeDeepSeekReviewGateway
+from tests.test_fill_sync_stage5 import _fill, _sync, _terminal_attempt
 
 
 pytestmark = pytest.mark.django_db
@@ -425,3 +434,295 @@ def test_alert_issue_and_audit_queries_are_sanitized() -> None:
     item = audit_response.json()["data"]["items"][0]
     assert item["before_state_summary"]["api_key"] == "[REDACTED]"
     assert item["evidence"]["password"] == "[REDACTED]"
+
+
+def test_ai_review_readonly_can_list_and_view_but_cannot_create() -> None:
+    run = _run_with_step_and_link()
+    create_result = create_review_request(
+        review_mode="cycle_review",
+        range_selector={"type": "run_ids", "ids": [run.id]},
+        filters={},
+        manual_question="",
+        model_profile_code="default_review",
+        requested_by="tester",
+        request_key="ops-ai-review-readonly",
+        trace_id="trace-ops-ai-review-readonly",
+        trigger_source="test",
+    )
+    request_id = create_result.data["ai_review_request_id"]
+    client = _client_with_group("readonly")
+
+    list_response = client.get(reverse("ops_console:ai_review_requests"))
+    detail_response = client.get(reverse("ops_console:ai_review_request_detail", kwargs={"request_id": request_id}))
+    create_response = client.post(
+        reverse("ops_console:ai_review_create_request"),
+        data=json.dumps(
+            {
+                "request_key": "readonly-should-not-create",
+                "review_mode": "cycle_review",
+                "range_selector": {"type": "run_ids", "ids": [run.id]},
+                "model_profile_code": "default_review",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert list_response.status_code == 200
+    assert list_response.json()["data"]["items"][0]["id"] == request_id
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["request"]["id"] == request_id
+    assert create_response.status_code == 403
+
+
+@override_settings(DEEPSEEK_GATEWAY_ENABLED=False)
+def test_ai_review_ops_api_creates_package_and_blocks_disabled_model_call_without_network() -> None:
+    run = _run_with_step_and_link()
+    client = _client_with_group("ops_operator")
+
+    create_response = client.post(
+        reverse("ops_console:ai_review_create_request"),
+        data=json.dumps(
+            {
+                "request_key": "ops-ai-review-flow",
+                "review_mode": "cycle_review",
+                "range_selector": {"type": "run_ids", "ids": [run.id]},
+                "filters": {},
+                "manual_question": "",
+                "model_profile_code": "default_review",
+                "trace_id": "trace-ops-ai-review-flow",
+            }
+        ),
+        content_type="application/json",
+    )
+    request_id = create_response.json()["data"]["ai_review_request_id"]
+
+    package_response = client.post(
+        reverse("ops_console:ai_review_build_package", kwargs={"request_id": request_id}),
+        data=json.dumps({"trace_id": "trace-ops-ai-review-package"}),
+        content_type="application/json",
+    )
+    run_response = client.post(
+        reverse("ops_console:ai_review_run", kwargs={"request_id": request_id}),
+        data=json.dumps({"trace_id": "trace-ops-ai-review-run"}),
+        content_type="application/json",
+    )
+
+    assert create_response.status_code == 200
+    assert create_response.json()["data"]["request_status"] == AIReviewRequestStatus.CREATED
+    assert package_response.status_code == 200
+    assert package_response.json()["data"]["ai_review_package_id"]
+    assert run_response.status_code == 200
+    request = AIReviewRequest.objects.get(id=request_id)
+    assert request.status == AIReviewRequestStatus.FAILED
+    assert request.attempts.count() == 1
+    assert request.completed_report is None
+
+
+def test_ai_review_suggestion_status_update_uses_ai_review_service_only() -> None:
+    run = _run_with_step_and_link()
+    request_result = create_review_request(
+        review_mode="cycle_review",
+        range_selector={"type": "run_ids", "ids": [run.id]},
+        filters={},
+        manual_question="",
+        model_profile_code="default_review",
+        requested_by="tester",
+        request_key="ops-ai-review-suggestion",
+        trace_id="trace-ops-ai-review-suggestion",
+        trigger_source="test",
+    )
+    output = json.dumps(
+        {
+            "report_title": "review",
+            "executive_summary": "summary",
+            "suggestions": [
+                {
+                    "suggestion_type": "manual_task",
+                    "title": "manual follow-up",
+                    "description": "human review only",
+                }
+            ],
+        }
+    )
+    run_ai_review(
+        ai_review_request_id=request_result.data["ai_review_request_id"],
+        gateway=FakeDeepSeekReviewGateway(output_text=output),
+        trace_id="trace-ops-ai-review-suggestion-run",
+        trigger_source="test",
+    )
+    suggestion = AIReviewSuggestion.objects.get()
+    client = _client_with_group("review_exporter")
+
+    response = client.post(
+        reverse("ops_console:ai_review_update_suggestion", kwargs={"suggestion_id": suggestion.id}),
+        data=json.dumps(
+            {
+                "new_status": AIReviewSuggestionStatus.ACCEPTED,
+                "decision_note": "accepted for manual follow-up only",
+                "trace_id": "trace-ops-ai-review-suggestion-status",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    suggestion.refresh_from_db()
+    assert response.status_code == 200
+    assert suggestion.status == AIReviewSuggestionStatus.ACCEPTED
+    assert AuditRecord.objects.filter(target_object_type="AIReviewSuggestion", target_object_id=str(suggestion.id)).exists()
+
+
+def test_ops_action_requires_confirm_write_before_account_refresh() -> None:
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:account_overview_refresh"),
+        data=json.dumps({"reason": "manual refresh"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["reason_code"] == "ops_console_confirm_write_required"
+
+
+def test_ops_order_status_recheck_uses_order_status_service_and_audit(settings) -> None:
+    settings.ORDER_STATUS_SYNC_ENABLED = False
+    prepared = _prepared(settings, key="ops-recheck")
+    submit_result = _submit(prepared, FakeBinanceOrderSubmissionGateway(), key="ops-recheck")
+    attempt_id = submit_result.data["order_submission_attempt_id"]
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:order_status_recheck", kwargs={"attempt_id": attempt_id}),
+        data=json.dumps({"confirm_write": True, "reason": "recover order status", "trace_id": "trace-ops-recheck"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    record = OrderStatusSyncRecord.objects.get(order_submission_attempt_id=attempt_id, poll_mode="recovery")
+    assert data["reason_code"] == "order_status_sync_disabled"
+    assert data["order_status_sync_record_id"] == record.id
+    assert record.request_sent is False
+    assert AuditRecord.objects.filter(operation_type="order_status_controlled_recheck", target_object_id=str(attempt_id)).exists()
+
+
+def test_ops_fill_resync_uses_fill_sync_service_and_audit(settings) -> None:
+    attempt, terminal = _terminal_attempt(settings, key="ops-fill-resync")
+    settings.FILL_SYNC_ENABLED = False
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:fill_sync_resync", kwargs={"attempt_id": attempt.id}),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "reason": "recover fills",
+                "terminal_order_status_sync_record_id": terminal.id,
+                "trace_id": "trace-ops-fill-resync",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    result = FillSyncResult.objects.get(order_submission_attempt=attempt, sync_mode="recovery")
+    assert data["reason_code"] == "fill_sync_disabled"
+    assert data["fill_sync_result_id"] == result.id
+    assert result.returned_fill_count == 0
+    assert AuditRecord.objects.filter(operation_type="fill_sync_controlled_resync", target_object_id=str(attempt.id)).exists()
+
+
+def test_ops_active_lock_closeout_calls_lock_service_with_safe_fill_fact(settings) -> None:
+    attempt, terminal = _terminal_attempt(settings, key="ops-lock-closeout")
+    _sync(
+        attempt,
+        terminal,
+        FakeBinanceFillQueryGateway(pages=[{"fills": [_fill(attempt)], "pagination_complete": True}]),
+        key="ops-lock-closeout",
+    )
+    summary = OrderFillSummary.objects.get(order_submission_attempt=attempt)
+    lock = OrderPlanActiveLock.objects.get(id=attempt.active_lock_id)
+    lock.status = ActiveLockStatus.ACTIVE
+    lock.current_order_plan = attempt.order_plan
+    lock.released_at_utc = None
+    lock.reason_code = "manual_test_reset"
+    lock.save(update_fields=["status", "current_order_plan", "released_at_utc", "reason_code", "updated_at_utc"])
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:active_lock_closeout", kwargs={"active_lock_id": lock.id}),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "reason": "summary complete but lock remained active",
+                "evidence": {"order_fill_summary_id": summary.id},
+                "trace_id": "trace-ops-lock-closeout",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    lock.refresh_from_db()
+    assert response.status_code == 200
+    assert response.json()["data"]["reason_code"] == "active_lock_released"
+    assert lock.status == ActiveLockStatus.RELEASED
+    assert AuditRecord.objects.filter(operation_type="active_lock_manual_closeout", target_object_id=str(lock.id)).exists()
+
+
+def test_ops_runtime_guard_issue_status_update_only_changes_issue() -> None:
+    issue = RuntimeGuardIssue.objects.create(
+        issue_key="ops-issue-status",
+        issue_type="active_lock_stale",
+        severity=RuntimeGuardIssueSeverity.HIGH,
+        status=RuntimeGuardIssueStatus.OPEN,
+        first_seen_at_utc=timezone.now(),
+        last_seen_at_utc=timezone.now(),
+        related_object_type="OrderPlanActiveLock",
+        related_object_id="1",
+        related_trace_id="trace-issue-status",
+        description_zh="锁需要关注",
+    )
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:runtime_guard_issue_status", kwargs={"issue_id": issue.id}),
+        data=json.dumps({"confirm_write": True, "new_status": RuntimeGuardIssueStatus.IGNORED, "reason": "manual checked"}),
+        content_type="application/json",
+    )
+
+    issue.refresh_from_db()
+    assert response.status_code == 200
+    assert issue.status == RuntimeGuardIssueStatus.IGNORED
+    assert issue.needs_manual_attention is False
+    assert AuditRecord.objects.filter(operation_type="runtime_guard_issue_status_update", target_object_id=str(issue.id)).exists()
+
+
+def test_ops_runtime_guard_issue_resolve_records_operator() -> None:
+    issue = RuntimeGuardIssue.objects.create(
+        issue_key="ops-issue-resolve",
+        issue_type="orchestration_missing",
+        severity=RuntimeGuardIssueSeverity.WARNING,
+        status=RuntimeGuardIssueStatus.OPEN,
+        first_seen_at_utc=timezone.now(),
+        last_seen_at_utc=timezone.now(),
+        related_object_type="OrchestrationRun",
+        related_object_id="2",
+        related_trace_id="trace-issue-resolve",
+        description_zh="orchestration issue needs review",
+    )
+    client = _client_with_group("ops_operator")
+
+    response = client.post(
+        reverse("ops_console:runtime_guard_issue_status", kwargs={"issue_id": issue.id}),
+        data=json.dumps({"confirm_write": True, "new_status": RuntimeGuardIssueStatus.RESOLVED, "reason": "manual resolved"}),
+        content_type="application/json",
+    )
+
+    issue.refresh_from_db()
+    assert response.status_code == 200
+    assert issue.status == RuntimeGuardIssueStatus.RESOLVED
+    assert issue.needs_manual_attention is False
+    assert issue.resolved_at_utc is not None
+    assert issue.acknowledged_by == "user-ops_operator"
+    assert AuditRecord.objects.filter(operation_type="runtime_guard_issue_status_update", target_object_id=str(issue.id)).exists()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -11,6 +11,7 @@ from django.conf import settings
 from django.db import DatabaseError, IntegrityError, transaction
 from django.utils import timezone
 
+from apps.audit.services import record_audit
 from apps.binance_gateway.fill_query import BinanceFillQueryGateway, get_fill_query_gateway
 from apps.binance_gateway.types import (
     MARKET_TYPE_COIN_M,
@@ -21,6 +22,7 @@ from apps.binance_gateway.types import (
 from apps.execution.models import OrderSubmissionAttempt
 from apps.foundation.redaction import sanitize_mapping
 from apps.foundation.results import ResultStatus, ServiceResult
+from apps.order_plan.models import ActiveLockStatus
 from apps.order_plan.services.active_lock import finalize_after_fill_sync
 from apps.order_status_sync.models import OrderStatusQueryOutcome, OrderStatusSyncRecord
 
@@ -73,6 +75,7 @@ def sync_order_fills(
     trace_id: str,
     trigger_source: str,
     gateway: BinanceFillQueryGateway | None = None,
+    sync_mode: str = FillSyncMode.NORMAL,
 ) -> ServiceResult:
     request_error = _request_error(
         order_submission_attempt_id=order_submission_attempt_id,
@@ -90,6 +93,7 @@ def sync_order_fills(
             business_request_key=business_request_key,
             trace_id=trace_id,
             trigger_source=trigger_source,
+            sync_mode=sync_mode,
         )
     except OrderSubmissionAttempt.DoesNotExist:
         return _result_without_sync("order_submission_attempt_not_found", "OrderSubmissionAttempt 不存在。", trace_id, trigger_source)
@@ -118,6 +122,73 @@ def sync_order_fills(
     return _service_result_from_result(result)
 
 
+def recover_order_fills(
+    *,
+    order_submission_attempt_id: int,
+    terminal_order_status_sync_record_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str = "ops_console_fill_sync_recovery",
+    gateway: BinanceFillQueryGateway | None = None,
+) -> ServiceResult:
+    reason = reason.strip()
+    if not reason:
+        return _result_without_sync("fill_sync_recovery_reason_required", "成交受控补同步需要记录人工原因。", trace_id, trigger_source)
+    if not operator_id:
+        return _result_without_sync("operator_required", "成交受控补同步需要记录操作者。", trace_id, trigger_source)
+    if _has_complete_summary(order_submission_attempt_id):
+        result = ServiceResult(
+            ResultStatus.NO_ACTION,
+            "fill_summary_already_complete",
+            "订单成交汇总已经完整，不重复发起成交补同步。",
+            trace_id,
+            trigger_source,
+            {
+                "order_submission_attempt_id": order_submission_attempt_id,
+                "terminal_order_status_sync_record_id": terminal_order_status_sync_record_id,
+                "fill_sync_result_id": None,
+                "allows_active_lock_finalization": False,
+                "flow_action": "STOP",
+            },
+        )
+    else:
+        result = sync_order_fills(
+            order_submission_attempt_id=order_submission_attempt_id,
+            terminal_order_status_sync_record_id=terminal_order_status_sync_record_id,
+            business_request_key=f"ops_fill_sync_recovery:{order_submission_attempt_id}:{terminal_order_status_sync_record_id}:{trace_id}",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            gateway=gateway,
+            sync_mode=FillSyncMode.RECOVERY,
+        )
+
+    audit = record_audit(
+        operator_id=operator_id,
+        operation_type="fill_sync_controlled_resync",
+        target_object_type="OrderSubmissionAttempt",
+        target_object_id=str(order_submission_attempt_id),
+        before_state_summary={
+            "terminal_order_status_sync_record_id": terminal_order_status_sync_record_id,
+            "has_complete_summary": _has_complete_summary(order_submission_attempt_id),
+        },
+        after_state_summary=result.data,
+        reason=reason[:500],
+        evidence={"sync_mode": FillSyncMode.RECOVERY, "trace_id": trace_id},
+        result=result.status.value,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        result.status,
+        result.reason_code,
+        result.message,
+        result.trace_id,
+        result.trigger_source,
+        {**result.data, "audit_record_id": audit.id},
+    )
+
+
 def _claim_fill_sync_result(
     *,
     order_submission_attempt_id: int,
@@ -125,6 +196,7 @@ def _claim_fill_sync_result(
     business_request_key: str,
     trace_id: str,
     trigger_source: str,
+    sync_mode: str,
 ) -> SyncClaim:
     now = timezone.now()
     with transaction.atomic():
@@ -138,7 +210,7 @@ def _claim_fill_sync_result(
                 return SyncClaim(existing, should_call_gateway=False, service_result=_in_progress_result(existing))
             return SyncClaim(existing, should_call_gateway=False, replay=True)
 
-        pre_error = _pre_query_error(attempt, terminal, now)
+        pre_error = _pre_query_error(attempt, terminal, now, sync_mode=sync_mode)
         status = _status_for_pre_error(pre_error)
         sequence = (
             FillSyncResult.objects.select_for_update()
@@ -149,7 +221,7 @@ def _claim_fill_sync_result(
         result = FillSyncResult.objects.create(
             fill_sync_result_key=_result_key(attempt.id, terminal.id, business_request_key),
             sync_sequence=sequence,
-            sync_mode=FillSyncMode.NORMAL,
+            sync_mode=sync_mode,
             status=FillSyncResultStatus.SYNCING if not pre_error else status,
             reason_code="fill_sync_claimed" if not pre_error else pre_error,
             reason_message="FillSync 已取得本次成交同步资格。" if not pre_error else _reason_message(pre_error),
@@ -196,7 +268,7 @@ def _locked_terminal_record(terminal_order_status_sync_record_id: int) -> OrderS
     )
 
 
-def _pre_query_error(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncRecord, now: datetime) -> str:
+def _pre_query_error(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncRecord, now: datetime, *, sync_mode: str) -> str:
     if not getattr(settings, "FILL_SYNC_ENABLED", False):
         return "fill_sync_disabled"
     if terminal.order_submission_attempt_id != attempt.id:
@@ -215,6 +287,10 @@ def _pre_query_error(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncR
         return "sync_time_before_order_submission_fact"
     if terminal.query_finished_at_utc and now < _ensure_utc(terminal.query_finished_at_utc):
         return "sync_time_before_terminal_status_fact"
+    if sync_mode == FillSyncMode.RECOVERY:
+        recovery_error = _recovery_pre_query_error(attempt, terminal, now)
+        if recovery_error:
+            return recovery_error
     latest_finished = (
         FillSyncResult.objects.filter(order_submission_attempt=attempt, sync_finished_at_utc__isnull=False)
         .order_by("-sync_finished_at_utc")
@@ -223,6 +299,25 @@ def _pre_query_error(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncR
     if latest_finished is not None and now < _ensure_utc(latest_finished.sync_finished_at_utc):
         return "sync_time_before_existing_fill_sync_fact"
     return ""
+
+
+def _recovery_pre_query_error(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncRecord, now: datetime) -> str:
+    if attempt.active_lock_id is None or attempt.active_lock.status != ActiveLockStatus.ACTIVE:
+        return "active_lock_not_active_for_recovery"
+    if _has_complete_summary(attempt.id):
+        return "fill_summary_already_complete"
+    recovery_window = max(0, int(getattr(settings, "FILL_SYNC_RECOVERY_WINDOW_SECONDS", 86400)))
+    terminal_time = terminal.query_finished_at_utc or terminal.updated_at_utc
+    if terminal_time and now > _ensure_utc(terminal_time) + timedelta(seconds=recovery_window):
+        return "fill_sync_recovery_out_of_window"
+    return ""
+
+
+def _has_complete_summary(order_submission_attempt_id: int) -> bool:
+    return OrderFillSummary.objects.filter(
+        order_submission_attempt_id=order_submission_attempt_id,
+        status__in=[OrderFillSummaryStatus.COMPLETE, OrderFillSummaryStatus.EMPTY],
+    ).exists()
 
 
 def _market_identity_mismatch(attempt: OrderSubmissionAttempt, terminal: OrderStatusSyncRecord) -> bool:
@@ -770,6 +865,8 @@ def _request_error(**values: Any) -> str:
 def _status_for_pre_error(reason_code: str) -> str:
     if not reason_code:
         return ""
+    if reason_code == "fill_sync_recovery_out_of_window":
+        return FillSyncResultStatus.RECOVERY_SKIPPED_OUT_OF_WINDOW
     if reason_code in {
         "missing_exchange_order_id",
         "sync_time_before_order_submission_fact",
@@ -792,6 +889,9 @@ def _reason_message(reason_code: str) -> str:
         "sync_time_before_order_submission_fact": "成交同步时间早于订单提交尝试完成事实时间。",
         "sync_time_before_terminal_status_fact": "成交同步时间早于终态订单状态事实时间。",
         "sync_time_before_existing_fill_sync_fact": "成交同步时间早于已有成交同步完成事实时间。",
+        "active_lock_not_active_for_recovery": "ActiveLock 未处于 active 状态，不进入成交受控补同步。",
+        "fill_summary_already_complete": "订单成交汇总已经完整，不重复发起成交补同步。",
+        "fill_sync_recovery_out_of_window": "成交受控补同步已超过恢复窗口，不请求 Binance。",
         "fill_query_failed_before_send": "Gateway 确认成交查询未发出。",
         "fill_query_unknown": "无法确认 Binance 成交查询结果。",
         "fill_query_response_schema_error": "成交查询响应结构不符合约定。",

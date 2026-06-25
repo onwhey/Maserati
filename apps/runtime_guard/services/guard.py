@@ -19,6 +19,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.alerts.services import record_alert_event
+from apps.audit.services import record_audit
+from apps.foundation.results import ResultStatus, ServiceResult
 
 from ..checks.default import IssueDraft, collect_default_issue_drafts
 from ..models import RuntimeGuardIssue, RuntimeGuardIssueStatus, RuntimeGuardRun, RuntimeGuardRunStatus
@@ -33,6 +35,89 @@ class RuntimeGuardSummary:
     updated_issue_count: int
     alert_event_count: int
     issue_types: tuple[str, ...]
+
+
+def update_runtime_guard_issue_status(
+    *,
+    issue_id: int,
+    new_status: str,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str = "ops_console_runtime_guard_issue",
+) -> ServiceResult:
+    reason = reason.strip()
+    if not reason:
+        return ServiceResult(ResultStatus.BLOCKED, "runtime_guard_issue_reason_required", "RuntimeGuardIssue 状态操作需要记录原因。", trace_id, trigger_source)
+    if not operator_id:
+        return ServiceResult(ResultStatus.BLOCKED, "operator_required", "RuntimeGuardIssue 状态操作需要记录操作者。", trace_id, trigger_source)
+    if new_status not in {
+        RuntimeGuardIssueStatus.ACKNOWLEDGED,
+        RuntimeGuardIssueStatus.RESOLVED,
+        RuntimeGuardIssueStatus.IGNORED,
+    }:
+        return ServiceResult(ResultStatus.BLOCKED, "runtime_guard_issue_status_not_allowed", "不允许的 RuntimeGuardIssue 人工状态。", trace_id, trigger_source)
+
+    now = timezone.now()
+    with transaction.atomic():
+        issue = RuntimeGuardIssue.objects.select_for_update().get(id=issue_id)
+        before = _issue_summary(issue)
+        if issue.status == new_status:
+            status = ResultStatus.NO_ACTION
+            reason_code = "runtime_guard_issue_status_already_set"
+        else:
+            issue.status = new_status
+            if new_status == RuntimeGuardIssueStatus.ACKNOWLEDGED:
+                issue.acknowledged_at_utc = now
+                issue.acknowledged_by = operator_id
+                issue.resolution_note = reason[:500]
+            elif new_status == RuntimeGuardIssueStatus.RESOLVED:
+                issue.resolved_at_utc = now
+                issue.acknowledged_at_utc = issue.acknowledged_at_utc or now
+                issue.acknowledged_by = issue.acknowledged_by or operator_id
+                issue.resolution_note = reason[:500]
+                issue.needs_manual_attention = False
+            elif new_status == RuntimeGuardIssueStatus.IGNORED:
+                issue.resolved_at_utc = now
+                issue.acknowledged_at_utc = issue.acknowledged_at_utc or now
+                issue.acknowledged_by = issue.acknowledged_by or operator_id
+                issue.resolution_note = reason[:500]
+                issue.needs_manual_attention = False
+            issue.save(
+                update_fields=[
+                    "status",
+                    "acknowledged_at_utc",
+                    "acknowledged_by",
+                    "resolved_at_utc",
+                    "resolution_note",
+                    "needs_manual_attention",
+                    "updated_at_utc",
+                ]
+            )
+            status = ResultStatus.SUCCEEDED
+            reason_code = "runtime_guard_issue_status_updated"
+        after = _issue_summary(issue)
+        audit = record_audit(
+            operator_id=operator_id,
+            operation_type="runtime_guard_issue_status_update",
+            target_object_type="RuntimeGuardIssue",
+            target_object_id=str(issue.id),
+            before_state_summary=before,
+            after_state_summary=after,
+            reason=reason[:500],
+            evidence={"new_status": new_status},
+            result=status.value,
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+    return ServiceResult(
+        status,
+        reason_code,
+        "RuntimeGuardIssue 人工状态已处理。",
+        trace_id,
+        trigger_source,
+        {**after, "audit_record_id": audit.id},
+    )
 
 
 def run_runtime_guard(
@@ -149,6 +234,20 @@ def _ensure_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _issue_summary(issue: RuntimeGuardIssue) -> dict[str, Any]:
+    return {
+        "id": issue.id,
+        "issue_type": issue.issue_type,
+        "severity": issue.severity,
+        "status": issue.status,
+        "needs_manual_attention": issue.needs_manual_attention,
+        "acknowledged_by": issue.acknowledged_by,
+        "acknowledged_at_utc": issue.acknowledged_at_utc.isoformat() if issue.acknowledged_at_utc else None,
+        "resolved_at_utc": issue.resolved_at_utc.isoformat() if issue.resolved_at_utc else None,
+        "resolution_note": issue.resolution_note,
+    }
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:

@@ -10,11 +10,13 @@ from django.conf import settings
 from django.db import DatabaseError, IntegrityError, transaction
 from django.utils import timezone
 
+from apps.audit.services import record_audit
 from apps.binance_gateway.order_status import BinanceOrderStatusGateway, get_order_status_gateway
 from apps.binance_gateway.types import ERROR_ORDER_NOT_FOUND, BinanceGatewayCallContext, BinanceGatewayResult
 from apps.execution.models import OrderSubmissionAttempt, OrderSubmissionAttemptStatus
 from apps.foundation.redaction import sanitize_mapping
 from apps.foundation.results import ResultStatus, ServiceResult
+from apps.order_plan.models import ActiveLockStatus
 
 from ..models import OrderStatusQueryOutcome, OrderStatusSubmissionResolution, OrderStatusSyncRecord
 from .alerts import record_order_status_sync_alert, record_order_status_timeout_alert
@@ -24,6 +26,7 @@ from .hashing import order_status_response_hash, order_status_sync_key_hash
 MAX_KEY_LENGTH = 191
 MAX_TRACE_FIELD_LENGTH = 80
 POLL_MODE_IMMEDIATE = "immediate"
+POLL_MODE_RECOVERY = "recovery"
 TERMINAL_STATUSES = {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
 NON_TERMINAL_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 QUERYABLE_SUBMISSION_STATUSES = {
@@ -65,6 +68,76 @@ def start_order_status_polling(
         trace_id=trace_id,
         trigger_source=trigger_source,
         gateway=gateway,
+    )
+
+
+def recover_order_status_once(
+    *,
+    order_submission_attempt_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str = "ops_console_order_status_recovery",
+    gateway: BinanceOrderStatusGateway | None = None,
+) -> ServiceResult:
+    reason = reason.strip()
+    if not reason:
+        return _result_without_record("order_status_recovery_reason_required", "订单状态受控补查需要记录人工原因。", trace_id, trigger_source)
+    if not operator_id:
+        return _result_without_record("operator_required", "订单状态受控补查需要记录操作者。", trace_id, trigger_source)
+    try:
+        with transaction.atomic():
+            attempt = _locked_attempt(order_submission_attempt_id)
+    except OrderSubmissionAttempt.DoesNotExist:
+        return _result_without_record("order_submission_attempt_not_found", "OrderSubmissionAttempt 不存在", trace_id, trigger_source)
+
+    business_request_key = f"ops_order_status_recovery:{order_submission_attempt_id}:{trace_id}"
+    existing = (
+        OrderStatusSyncRecord.objects.filter(
+            order_submission_attempt=attempt,
+            poll_mode=POLL_MODE_RECOVERY,
+            business_request_key=business_request_key,
+        )
+        .order_by("-poll_sequence", "-id")
+        .first()
+    )
+    if existing is not None:
+        result = _result_from_record(existing, replay=True)
+    else:
+        result = poll_order_status(
+            order_submission_attempt_id=order_submission_attempt_id,
+            business_request_key=business_request_key,
+            poll_sequence=_next_recovery_sequence(order_submission_attempt_id),
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            gateway=gateway,
+            poll_mode=POLL_MODE_RECOVERY,
+        )
+
+    audit = record_audit(
+        operator_id=operator_id,
+        operation_type="order_status_controlled_recheck",
+        target_object_type="OrderSubmissionAttempt",
+        target_object_id=str(order_submission_attempt_id),
+        before_state_summary={
+            "attempt_status": attempt.status,
+            "client_order_id": attempt.client_order_id,
+            "exchange_order_id": attempt.exchange_order_id,
+        },
+        after_state_summary=result.data,
+        reason=reason[:500],
+        evidence={"poll_mode": POLL_MODE_RECOVERY, "trace_id": trace_id},
+        result=result.status.value,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        result.status,
+        result.reason_code,
+        result.message,
+        result.trace_id,
+        result.trigger_source,
+        {**result.data, "audit_record_id": audit.id},
     )
 
 
@@ -136,6 +209,8 @@ def _claim_poll_record(
             return PollClaim(result=_already_terminal_result(terminal, trace_id, trigger_source))
 
         pre_error = _pre_query_error(attempt)
+        if poll_mode == POLL_MODE_RECOVERY and not pre_error:
+            pre_error = _recovery_pre_query_error(attempt, now)
         timing = _poll_timing(attempt, poll_sequence)
         outcome = _outcome_for_pre_error(pre_error)
         if pre_error:
@@ -154,13 +229,14 @@ def _claim_poll_record(
             )
             return PollClaim(record=record, should_call_gateway=False)
 
-        timing_result = _timing_result(attempt, timing, poll_mode, poll_sequence, trace_id, trigger_source)
-        if timing_result is not None:
-            return PollClaim(result=timing_result)
+        if poll_mode != POLL_MODE_RECOVERY:
+            timing_result = _timing_result(attempt, timing, poll_mode, poll_sequence, trace_id, trigger_source)
+            if timing_result is not None:
+                return PollClaim(result=timing_result)
 
-        previous_result = _previous_poll_result(attempt.id, poll_mode, poll_sequence, trace_id, trigger_source)
-        if previous_result is not None:
-            return PollClaim(result=previous_result)
+            previous_result = _previous_poll_result(attempt.id, poll_mode, poll_sequence, trace_id, trigger_source)
+            if previous_result is not None:
+                return PollClaim(result=previous_result)
 
         record = _create_record(
             attempt=attempt,
@@ -308,6 +384,15 @@ def _pre_query_error(attempt: OrderSubmissionAttempt) -> str:
         return "market_identity_missing"
     if not attempt.client_order_id and not attempt.exchange_order_id:
         return "query_identifier_missing"
+    return ""
+
+
+def _recovery_pre_query_error(attempt: OrderSubmissionAttempt, now: datetime) -> str:
+    if attempt.active_lock_id is None or attempt.active_lock.status != ActiveLockStatus.ACTIVE:
+        return "active_lock_not_active_for_recovery"
+    recovery_window = max(0, int(getattr(settings, "ORDER_STATUS_RECOVERY_WINDOW_SECONDS", 86400)))
+    if now > _ensure_utc(attempt.finished_at_utc) + timedelta(seconds=recovery_window):
+        return "order_status_recovery_out_of_window"
     return ""
 
 
@@ -530,12 +615,16 @@ def _service_status(record: OrderStatusSyncRecord) -> ResultStatus:
 def _flow_action(record: OrderStatusSyncRecord) -> str:
     if record.query_outcome == OrderStatusQueryOutcome.FOUND and record.is_terminal_status:
         return "CONTINUE"
+    if record.poll_mode == POLL_MODE_RECOVERY:
+        return "STOP"
     if _allows_next_poll(record):
         return "WAIT"
     return "STOP"
 
 
 def _allows_next_poll(record: OrderStatusSyncRecord) -> bool:
+    if record.poll_mode == POLL_MODE_RECOVERY:
+        return False
     return (
         record.query_outcome in {OrderStatusQueryOutcome.FOUND, OrderStatusQueryOutcome.UNKNOWN, OrderStatusQueryOutcome.NOT_FOUND}
         and not record.is_terminal_status
@@ -607,6 +696,19 @@ def _record_key(attempt: OrderSubmissionAttempt, poll_mode: str, poll_sequence: 
     )[:MAX_KEY_LENGTH]
 
 
+def _next_recovery_sequence(order_submission_attempt_id: int) -> int:
+    latest = (
+        OrderStatusSyncRecord.objects.filter(order_submission_attempt_id=order_submission_attempt_id, poll_mode=POLL_MODE_RECOVERY)
+        .order_by("-poll_sequence", "-id")
+        .first()
+    )
+    if latest is None:
+        return 1
+    if latest.query_finished_at_utc is None:
+        return latest.poll_sequence
+    return latest.poll_sequence + 1
+
+
 def _request_error(order_submission_attempt_id: int, business_request_key: str, poll_sequence: int, trace_id: str, trigger_source: str) -> str:
     if not isinstance(order_submission_attempt_id, int) or order_submission_attempt_id <= 0:
         return "order_submission_attempt_id_invalid"
@@ -638,6 +740,8 @@ def _reason_message(reason_code: str) -> str:
         "submission_not_finished": "订单提交尝试尚未完成，不能查询交易所状态。",
         "market_identity_missing": "订单提交记录缺少冻结市场身份。",
         "query_identifier_missing": "订单提交记录缺少 client order id 和 exchange order id。",
+        "active_lock_not_active_for_recovery": "ActiveLock 未处于 active 状态，不进入受控补查。",
+        "order_status_recovery_out_of_window": "订单状态受控补查已超过恢复窗口，不请求 Binance。",
     }
     return labels.get(reason_code, reason_code)
 
