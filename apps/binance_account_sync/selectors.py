@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import InvalidOperation
 from typing import Any
 
 from django.utils import timezone
@@ -20,6 +21,7 @@ from .models import (
     BinanceSyncRun,
     BinanceSyncStatus,
 )
+from .services.hashing import stable_hash
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,116 @@ def load_trade_preparation_context(
             "asset": balance_snapshot.asset,
         },
     )
+
+
+def verify_trade_preparation_snapshot_set(
+    *,
+    sync_run_id: int,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    """依据已落库脱敏源载荷重新计算账户子快照与集合指纹。"""
+
+    try:
+        sync_run = get_sync_run(sync_run_id)
+        account = get_account_snapshot(sync_run_id)
+        balances = get_balance_snapshots(sync_run_id)
+        positions = list(BinancePositionSnapshot.objects.filter(sync_run_id=sync_run_id).order_by("id"))
+        rules = list(BinanceSymbolRuleSnapshot.objects.filter(sync_run_id=sync_run_id).order_by("id"))
+    except (BinanceSyncRun.DoesNotExist, BinanceAccountSnapshot.DoesNotExist):
+        return _blocked("snapshot_set_incomplete", "账户快照集合不完整", trace_id, trigger_source)
+
+    from .services.sync import (
+        SyncRequest,
+        normalize_account,
+        normalize_balance,
+        normalize_position,
+        normalize_symbol_rule,
+        snapshot_hash,
+    )
+
+    request = SyncRequest(
+        business_request_key=sync_run.business_request_key,
+        sync_purpose=sync_run.sync_purpose,
+        market_type=sync_run.market_type,
+        account_domain=sync_run.account_domain,
+        symbols=tuple(str(item).upper() for item in sync_run.requested_symbols),
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    try:
+        account_draft = normalize_account(request, account.raw_payload, sync_run.position_mode, account.as_of_utc)
+        balance_drafts = [normalize_balance(request, item.raw_payload) for item in balances]
+        position_drafts = [normalize_position(request, item.raw_payload, sync_run.position_mode) for item in positions]
+        as_of_utc = sync_run.as_of_utc or account.as_of_utc
+        rule_drafts = [
+            normalize_symbol_rule(request, item.symbol, item.raw_payload, as_of_utc)
+            for item in rules
+        ]
+        account_hash = snapshot_hash("account", account_draft)
+        balance_hashes = [snapshot_hash("balance", item) for item in balance_drafts]
+        position_hashes = [snapshot_hash("position", item) for item in position_drafts]
+        rule_hashes = [snapshot_hash("rule", item) for item in rule_drafts]
+    except (TypeError, ValueError, InvalidOperation):
+        return _blocked("snapshot_hash_rebuild_failed", "账户快照指纹无法重建", trace_id, trigger_source, sync_run=sync_run)
+
+    if not _snapshot_matches_draft(account, account_draft) or account.snapshot_hash != account_hash:
+        return _blocked("account_snapshot_hash_mismatch", "账户快照指纹不一致", trace_id, trigger_source, sync_run=sync_run)
+    if (
+        not _snapshot_collection_matches(balances, balance_drafts)
+        or [item.snapshot_hash for item in balances] != balance_hashes
+    ):
+        return _blocked("balance_snapshot_hash_mismatch", "余额快照指纹不一致", trace_id, trigger_source, sync_run=sync_run)
+    if (
+        not _snapshot_collection_matches(positions, position_drafts)
+        or [item.snapshot_hash for item in positions] != position_hashes
+    ):
+        return _blocked("position_snapshot_hash_mismatch", "持仓快照指纹不一致", trace_id, trigger_source, sync_run=sync_run)
+    if (
+        not _snapshot_collection_matches(rules, rule_drafts)
+        or [item.snapshot_hash for item in rules] != rule_hashes
+    ):
+        return _blocked("symbol_rule_snapshot_hash_mismatch", "交易规则快照指纹不一致", trace_id, trigger_source, sync_run=sync_run)
+
+    expected_set_hash = stable_hash(
+        {
+            "sync_purpose": sync_run.sync_purpose,
+            "business_request_key": sync_run.business_request_key,
+            "market_type": sync_run.market_type,
+            "account_domain": sync_run.account_domain,
+            "position_mode": sync_run.position_mode,
+            "account": account_hash,
+            "balances": sorted(balance_hashes),
+            "positions": sorted(position_hashes),
+            "rules": sorted(rule_hashes),
+        }
+    )
+    if sync_run.snapshot_set_hash != expected_set_hash:
+        return _blocked("snapshot_set_hash_mismatch", "账户快照集合指纹不一致", trace_id, trigger_source, sync_run=sync_run)
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "snapshot_set_hash_verified",
+        "账户快照集合指纹已验证",
+        trace_id,
+        trigger_source,
+        {"binance_sync_run_id": sync_run.id, "snapshot_set_hash": sync_run.snapshot_set_hash},
+    )
+
+
+def _snapshot_collection_matches(models: list[Any], drafts: list[dict[str, Any]]) -> bool:
+    return len(models) == len(drafts) and all(
+        _snapshot_matches_draft(model, draft)
+        for model, draft in zip(models, drafts, strict=True)
+    )
+
+
+def _snapshot_matches_draft(model: Any, draft: dict[str, Any]) -> bool:
+    for field_name, expected in draft.items():
+        if field_name in {"raw_payload", "snapshot_hash"}:
+            continue
+        if getattr(model, field_name) != expected:
+            return False
+    return True
 
 
 def _validate_sync_run(sync_run: BinanceSyncRun) -> tuple[str, str] | None:

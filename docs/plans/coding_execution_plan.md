@@ -636,6 +636,7 @@ fake 外部服务覆盖真实外部调用；
 阶段 1：行情数据与市场事实，已完成基础落地。
 阶段 2：策略分析框架，已推进到 DecisionSnapshot。
 阶段 3：账户与价格事实，已完成 BinanceGateway 受限接口、Binance Account Sync 与 PriceSnapshot。
+阶段 4：已完成 OrderPlan、CandidateOrderIntent、ActiveLock、RiskCheck、ApprovedOrderIntent、ExecutionPreparation 与 PreparedOrderIntent。
 ```
 
 阶段 2 已形成以下链路的代码基础：
@@ -678,7 +679,7 @@ docs/architecture/runtime_task_architecture.md
 docs/plans/trading_execution_implementation_plan.md
 ```
 
-阶段 4 第一批次建议为：
+阶段 4 第一批次已完成：
 
 ```text
 实现 OrderPlan 所需模型、OrderPlanActiveLock 和 CandidateOrderIntent；
@@ -686,4 +687,26 @@ docs/plans/trading_execution_implementation_plan.md
 保证 OrderPlan 只消费明确的 DecisionSnapshot、trade_preparation BinanceSyncRun 和 PriceSnapshot。
 ```
 
-阶段 4 不提交真实订单，不实现 OrderStatusSync 或 FillSync。
+阶段 4 已完成第二批次：
+
+```text
+RiskCheck 插件基础设施；
+RiskCheckResult 与 ApprovedOrderIntent；
+基于明确风控结果调用 OrderPlanActiveLockService 安全收尾。
+```
+
+阶段 4 已完成第三批次：
+
+```text
+ExecutionPreparation；
+PreparedOrderIntent；
+提交前实时价格保护检查。
+```
+
+阶段 4 已完成；本阶段不提交真实订单，不实现 OrderStatusSync 或 FillSync。
+
+下一步编码入口为：
+
+```text
+docs/plans/order_lifecycle_implementation_plan.md
+```
