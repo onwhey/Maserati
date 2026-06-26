@@ -1,10 +1,14 @@
 import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 import type { OpsApiResponse } from "./types";
 
 const CONFIGURED_API_BASE = process.env.OPS_CONSOLE_API_BASE_URL ?? "";
+const LOGIN_REQUIRED_REASON = "ops_console_login_required";
+const SESSION_COOKIE_NAME = "sessionid";
+const CSRF_COOKIE_NAME = "csrftoken";
 
-async function buildApiUrl(path: string): Promise<string> {
+export async function buildApiUrl(path: string): Promise<string> {
   const configuredBase = CONFIGURED_API_BASE.trim().replace(/\/+$/, "");
   if (configuredBase) {
     return `${configuredBase}${path}`;
@@ -19,12 +23,17 @@ async function buildApiUrl(path: string): Promise<string> {
   return `${protocol}://${host}${path}`;
 }
 
+function redirectToLogin(): never {
+  redirect("/login");
+}
+
 export async function opsFetch<T>(path: string): Promise<OpsApiResponse<T>> {
   const cookieStore = await cookies();
   const cookieHeader = cookieStore.toString();
+  const apiUrl = await buildApiUrl(path);
   let response: Response;
   try {
-    response = await fetch(await buildApiUrl(path), {
+    response = await fetch(apiUrl, {
       cache: "no-store",
       headers: cookieHeader ? { cookie: cookieHeader } : undefined
     });
@@ -47,6 +56,9 @@ export async function opsFetch<T>(path: string): Promise<OpsApiResponse<T>> {
       message_zh: `后端没有返回合法 JSON，HTTP 状态：${response.status}`,
       data: null
     };
+  }
+  if (payload.reason_code === LOGIN_REQUIRED_REASON) {
+    redirectToLogin();
   }
   if (!response.ok && payload.ok) {
     return {
@@ -73,9 +85,10 @@ export async function opsPost<T>(path: string, body: Record<string, unknown>): P
     requestHeaders["x-csrftoken"] = csrfToken;
   }
 
+  const apiUrl = await buildApiUrl(path);
   let response: Response;
   try {
-    response = await fetch(await buildApiUrl(path), {
+    response = await fetch(apiUrl, {
       method: "POST",
       cache: "no-store",
       headers: requestHeaders,
@@ -101,6 +114,9 @@ export async function opsPost<T>(path: string, body: Record<string, unknown>): P
       data: null
     };
   }
+  if (payload.reason_code === LOGIN_REQUIRED_REASON) {
+    redirectToLogin();
+  }
   if (!response.ok && payload.ok) {
     return {
       ok: false,
@@ -110,4 +126,45 @@ export async function opsPost<T>(path: string, body: Record<string, unknown>): P
     };
   }
   return payload;
+}
+
+export async function opsLogin(username: string, password: string): Promise<OpsApiResponse<Record<string, unknown>>> {
+  const response = await fetch(await buildApiUrl("/api/ops/auth/login/"), {
+    method: "POST",
+    cache: "no-store",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ username, password })
+  });
+  const payload = (await response.json()) as OpsApiResponse<Record<string, unknown>>;
+  if (payload.ok) {
+    const setCookieHeader = response.headers.get("set-cookie");
+    const sessionValue = extractCookieValue(setCookieHeader, SESSION_COOKIE_NAME);
+    const csrfValue = extractCookieValue(setCookieHeader, CSRF_COOKIE_NAME);
+    if (sessionValue) {
+      const cookieStore = await cookies();
+      cookieStore.set(SESSION_COOKIE_NAME, sessionValue, {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/"
+      });
+      if (csrfValue) {
+        cookieStore.set(CSRF_COOKIE_NAME, csrfValue, {
+          httpOnly: false,
+          sameSite: "lax",
+          path: "/"
+        });
+      }
+    }
+  }
+  return payload;
+}
+
+function extractCookieValue(setCookieHeader: string | null, cookieName: string): string {
+  if (!setCookieHeader) {
+    return "";
+  }
+  const match = setCookieHeader.match(new RegExp(`(?:^|,\\s*)${cookieName}=([^;]+)`));
+  return match?.[1] ?? "";
 }

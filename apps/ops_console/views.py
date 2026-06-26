@@ -6,8 +6,13 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from django.contrib.auth import authenticate, login, logout
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpRequest, JsonResponse
+from django.middleware.csrf import get_token
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.debug import sensitive_post_parameters
+from django.views.decorators.http import require_POST
 
 from apps.ai_review.services import build_review_package, create_review_request, run_ai_review, update_suggestion_status
 from apps.binance_account_sync.services.sync import refresh_for_ops_console
@@ -18,7 +23,7 @@ from apps.performance_metrics.selectors import get_performance_record, list_perf
 from apps.performance_metrics.services import backfill_missing_closed_period_performance, preview_missing_closed_period_performance
 from apps.runtime_guard.services.guard import update_runtime_guard_issue_status
 
-from .permissions import require_ops_permission
+from .permissions import has_ops_permission, require_ops_permission
 from .responses import error_response, ok_response
 from .selectors import (
     OpsConsoleObjectNotFound,
@@ -82,6 +87,68 @@ def _service_response(result: Any) -> JsonResponse:
 
 def _operator_id(request: HttpRequest) -> str:
     return str(getattr(request.user, "username", "") or request.user.id)
+
+
+def _user_summary(user: Any) -> dict[str, Any]:
+    return {
+        "id": user.id,
+        "username": getattr(user, "username", ""),
+        "is_superuser": getattr(user, "is_superuser", False),
+        "groups": list(user.groups.order_by("name").values_list("name", flat=True)),
+    }
+
+
+@csrf_exempt
+@sensitive_post_parameters("password")
+@require_POST
+def auth_login_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    username = str(body.get("username", "")).strip()
+    password = str(body.get("password", ""))
+    if not username or not password:
+        return error_response(
+            reason_code="ops_console_login_credentials_required",
+            message_zh="请输入用户名和密码。",
+            status=400,
+        )
+
+    user = authenticate(request, username=username, password=password)
+    if user is None:
+        return error_response(
+            reason_code="ops_console_login_failed",
+            message_zh="用户名或密码错误。",
+            status=401,
+        )
+    if not has_ops_permission(user, "view_ops_console"):
+        return error_response(
+            reason_code="ops_console_permission_denied",
+            message_zh="当前用户没有访问 OpsConsole 的权限。",
+            status=403,
+        )
+
+    login(request, user)
+    get_token(request)
+    return ok_response(_user_summary(user), reason_code="ops_console_login_succeeded")
+
+
+@require_POST
+def auth_logout_view(request: HttpRequest) -> JsonResponse:
+    if not request.user.is_authenticated:
+        return error_response(
+            reason_code="ops_console_login_required",
+            message_zh="OpsConsole API 需要先登录。",
+            status=401,
+        )
+    logout(request)
+    return ok_response({"logged_out": True}, reason_code="ops_console_logout_succeeded")
+
+
+@require_ops_permission("view_ops_console")
+def auth_me_view(request: HttpRequest) -> JsonResponse:
+    return ok_response(_user_summary(request.user), reason_code="ops_console_authenticated")
 
 
 def _confirm_write_error(body: dict[str, Any], *, message_zh: str) -> JsonResponse | None:

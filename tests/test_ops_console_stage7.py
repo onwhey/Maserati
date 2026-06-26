@@ -76,6 +76,75 @@ def test_ops_console_api_requires_login_and_backend_permission() -> None:
     assert response.json()["reason_code"] == "ops_console_permission_denied"
 
 
+def test_ops_console_auth_login_returns_json_and_session_cookie() -> None:
+    user_model = get_user_model()
+    user = user_model.objects.create_user(username="ops-login", password="pass")
+    group, _ = Group.objects.get_or_create(name="readonly")
+    user.groups.add(group)
+    client = Client()
+
+    response = client.post(
+        reverse("ops_console:auth_login"),
+        data=json.dumps({"username": "ops-login", "password": "pass"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["reason_code"] == "ops_console_login_succeeded"
+    assert response.json()["data"]["username"] == "ops-login"
+    assert "sessionid" in response.cookies
+    assert "csrftoken" in response.cookies
+
+
+def test_ops_console_logout_requires_csrf_after_login() -> None:
+    user_model = get_user_model()
+    user = user_model.objects.create_user(username="ops-logout", password="pass")
+    group, _ = Group.objects.get_or_create(name="readonly")
+    user.groups.add(group)
+    client = Client(enforce_csrf_checks=True)
+
+    login_response = client.post(
+        reverse("ops_console:auth_login"),
+        data=json.dumps({"username": "ops-logout", "password": "pass"}),
+        content_type="application/json",
+    )
+
+    assert login_response.status_code == 200
+    csrf_token = login_response.cookies["csrftoken"].value
+
+    blocked_response = client.post(
+        reverse("ops_console:auth_logout"),
+        data=json.dumps({}),
+        content_type="application/json",
+    )
+    assert blocked_response.status_code == 403
+
+    logout_response = client.post(
+        reverse("ops_console:auth_logout"),
+        data=json.dumps({}),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+    assert logout_response.status_code == 200
+    assert logout_response.json()["reason_code"] == "ops_console_logout_succeeded"
+
+
+def test_ops_console_auth_login_rejects_user_without_ops_permission() -> None:
+    user_model = get_user_model()
+    user_model.objects.create_user(username="no-ops", password="pass")
+    client = Client()
+
+    response = client.post(
+        reverse("ops_console:auth_login"),
+        data=json.dumps({"username": "no-ops", "password": "pass"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["reason_code"] == "ops_console_permission_denied"
+    assert "sessionid" not in response.cookies
+
+
 @override_settings(DEPLOYMENT_REAL_TRADING_ENABLED=True)
 def test_real_trading_query_is_read_only_and_honors_runtime_config() -> None:
     RuntimeTradingConfig.objects.create(

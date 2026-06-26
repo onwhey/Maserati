@@ -10,6 +10,9 @@ from . import views
 app_name = "ops_console"
 
 urlpatterns = [
+    path("auth/login/", views.auth_login_view, name="auth_login"),
+    path("auth/logout/", views.auth_logout_view, name="auth_logout"),
+    path("auth/me/", views.auth_me_view, name="auth_me"),
     path("dashboard/", views.dashboard_view, name="dashboard"),
     path("runs/", views.runs_view, name="runs"),
     path("runs/<int:run_id>/", views.run_detail_view, name="run_detail"),

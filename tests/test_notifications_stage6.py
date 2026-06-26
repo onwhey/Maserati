@@ -74,7 +74,7 @@ def test_alert_event_with_route_creates_pending_attempt() -> None:
 
 
 @pytest.mark.django_db
-@override_settings(NOTIFICATIONS_DELIVERY_ENABLED=True)
+@override_settings(NOTIFICATIONS_DELIVERY_ENABLED=True, NOTIFICATIONS_FAKE_DELIVERY_SUCCESS=True)
 def test_deliver_notification_attempt_marks_sent_idempotently() -> None:
     NotificationTemplate.objects.create(
         template_code="default_runtime",
@@ -115,4 +115,3 @@ def test_deliver_notification_attempt_marks_sent_idempotently() -> None:
     assert second.success is True
     assert attempt.delivery_status == NotificationDeliveryStatus.SENT
     assert NotificationDeliveryAttempt.objects.filter(alert_event=event).count() == 1
-

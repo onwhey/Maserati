@@ -65,6 +65,7 @@ def csv_env(name: str, *, default: Iterable[str]) -> list[str]:
 
 APP_ENV = env_str("APP_ENV", default="development")
 TESTING = APP_ENV == "test" or any("pytest" in arg.lower() for arg in sys.argv)
+PRODUCTION = APP_ENV == "production"
 
 SECRET_KEY = env_str(
     "DJANGO_SECRET_KEY",
@@ -73,6 +74,18 @@ SECRET_KEY = env_str(
 )
 DEBUG = env_bool("DJANGO_DEBUG", default=False)
 ALLOWED_HOSTS = csv_env("DJANGO_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
+
+SECURE_SSL_REDIRECT = env_bool("DJANGO_SECURE_SSL_REDIRECT", default=PRODUCTION)
+SECURE_HSTS_SECONDS = env_int("DJANGO_SECURE_HSTS_SECONDS", default=31536000 if PRODUCTION else 0)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = env_bool("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", default=PRODUCTION)
+SECURE_HSTS_PRELOAD = env_bool("DJANGO_SECURE_HSTS_PRELOAD", default=False)
+SESSION_COOKIE_SECURE = env_bool("DJANGO_SESSION_COOKIE_SECURE", default=PRODUCTION)
+CSRF_COOKIE_SECURE = env_bool("DJANGO_CSRF_COOKIE_SECURE", default=PRODUCTION)
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = False
+SESSION_COOKIE_SAMESITE = "Lax"
+CSRF_COOKIE_SAMESITE = "Lax"
+X_FRAME_OPTIONS = "DENY"
 
 INSTALLED_APPS = [
     "django.contrib.auth",
