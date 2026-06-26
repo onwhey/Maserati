@@ -161,6 +161,16 @@ export async function opsLogin(username: string, password: string): Promise<OpsA
   return payload;
 }
 
+export async function opsLogout(): Promise<OpsApiResponse<Record<string, unknown>>> {
+  const cookieStore = await cookies();
+  try {
+    return await opsPost<Record<string, unknown>>("/api/ops/auth/logout/", {});
+  } finally {
+    cookieStore.delete(SESSION_COOKIE_NAME);
+    cookieStore.delete(CSRF_COOKIE_NAME);
+  }
+}
+
 function extractCookieValue(setCookieHeader: string | null, cookieName: string): string {
   if (!setCookieHeader) {
     return "";

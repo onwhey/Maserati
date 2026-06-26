@@ -13,9 +13,12 @@ import {
   FileText,
   History,
   ListChecks,
+  LogOut,
   ShieldCheck,
   Wrench
 } from "lucide-react";
+
+import { cn } from "@/lib/utils";
 
 const navigation = [
   { href: "/", label: "Dashboard", icon: Activity },
@@ -31,7 +34,13 @@ const navigation = [
   { href: "/audit-log", label: "Audit Log", icon: History }
 ];
 
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({
+  children,
+  logoutAction
+}: {
+  children: ReactNode;
+  logoutAction: () => void | Promise<void>;
+}) {
   const pathname = usePathname();
 
   if (pathname === "/login") {
@@ -39,20 +48,24 @@ export function AppShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen">
-      <aside className="fixed inset-y-0 left-0 hidden w-64 border-r bg-white/80 p-4 backdrop-blur lg:block">
-        <div className="mb-6 rounded-xl border bg-slate-950 p-4 text-white">
+    <div className="min-h-screen bg-background text-foreground">
+      <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r bg-card/80 p-4 backdrop-blur lg:flex">
+        <div className="mb-6 rounded-xl border bg-muted/60 p-4 text-foreground">
           <div className="text-lg font-semibold">OpsConsole</div>
-          <div className="mt-1 text-xs text-slate-300">只读事实后台 · UTC</div>
+          <div className="mt-1 text-xs text-muted-foreground">只读事实后台 · UTC</div>
         </div>
         <nav className="space-y-1">
           {navigation.map((item) => {
             const Icon = item.icon;
+            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                className={cn(
+                  "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                  active && "bg-muted text-foreground"
+                )}
               >
                 <Icon className="h-4 w-4" />
                 {item.label}
@@ -60,16 +73,46 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
+        <form action={logoutAction} className="mt-auto pt-4">
+          <button
+            type="submit"
+            className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <LogOut className="h-4 w-4" />
+            Logout
+          </button>
+        </form>
       </aside>
       <main className="lg:pl-64">
-        <div className="border-b bg-white/70 px-5 py-3 backdrop-blur lg:hidden">
-          <div className="font-semibold">OpsConsole</div>
+        <div className="border-b bg-card/80 px-5 py-3 backdrop-blur lg:hidden">
+          <div className="flex items-center justify-between gap-4">
+            <div className="font-semibold">OpsConsole</div>
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <LogOut className="h-4 w-4" />
+                Logout
+              </button>
+            </form>
+          </div>
           <div className="mt-2 flex gap-2 overflow-x-auto text-sm">
-            {navigation.map((item) => (
-              <Link key={item.href} href={item.href} className="whitespace-nowrap rounded-md bg-slate-100 px-3 py-1">
-                {item.label}
-              </Link>
-            ))}
+            {navigation.map((item) => {
+              const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "whitespace-nowrap rounded-md bg-muted/60 px-3 py-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+                    active && "bg-muted text-foreground"
+                  )}
+                >
+                  {item.label}
+                </Link>
+              );
+            })}
           </div>
         </div>
         <div className="mx-auto max-w-7xl p-5 lg:p-8">{children}</div>

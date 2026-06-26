@@ -3,12 +3,12 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 
 const toneClass: Record<string, string> = {
-  default: "border-transparent bg-slate-900 text-white",
-  muted: "border-transparent bg-slate-100 text-slate-700",
-  green: "border-transparent bg-emerald-100 text-emerald-700",
-  amber: "border-transparent bg-amber-100 text-amber-800",
-  red: "border-transparent bg-red-100 text-red-700",
-  blue: "border-transparent bg-blue-100 text-blue-700"
+  default: "border-transparent bg-primary text-primary-foreground",
+  muted: "border-transparent bg-muted text-muted-foreground",
+  green: "border-emerald-500/30 bg-emerald-500/15 text-emerald-300",
+  amber: "border-amber-500/30 bg-amber-500/15 text-amber-300",
+  red: "border-red-500/30 bg-red-500/15 text-red-300",
+  blue: "border-blue-500/30 bg-blue-500/15 text-blue-300"
 };
 
 export function Badge({

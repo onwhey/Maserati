@@ -5,7 +5,10 @@ import { cn } from "@/lib/utils";
 export function Select({ className, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select
-      className={cn("h-9 rounded-md border bg-white px-3 py-1 text-sm shadow-sm outline-none focus:ring-2 focus:ring-slate-300", className)}
+      className={cn(
+        "h-9 rounded-md border border-input bg-background px-3 py-1 text-sm text-foreground shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        className
+      )}
       {...props}
     />
   );

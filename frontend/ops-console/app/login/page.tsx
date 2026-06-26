@@ -18,7 +18,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   return (
     <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
       <div className="w-full max-w-sm">
-        <LoginForm next={next} message={message} className="grid gap-6" />
+        <LoginForm next={next} message={message} />
       </div>
     </div>
   );
