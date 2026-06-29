@@ -9,7 +9,7 @@ from typing import Any, Iterable, Mapping
 from apps.strategy_calculator.utils import stable_hash
 
 
-FORMAL_DOMAIN_CODES = frozenset({"trend", "momentum", "volatility"})
+FORMAL_DOMAIN_CODES = frozenset({"market_context", "trend", "momentum", "volatility", "structure", "risk_state"})
 STRATEGY_ROUTE_CONDITION_SCHEMA_VERSION = "1.0"
 
 
@@ -142,7 +142,7 @@ def domain_signal_definition_hash(
             "params_hash": params_hash,
             "is_required": is_required,
             "allowed_atomic_signal_codes": list(normalize_atomic_signal_codes(allowed_atomic_signal_codes)),
-            "required_atomic_signal_codes": list(normalize_atomic_signal_codes(required_atomic_signal_codes)),
+            "required_atomic_signal_codes": list(normalize_atomic_signal_codes(required_atomic_signal_codes, allow_empty=True)),
             "minimum_coverage_ratio": _normalize_ratio_text(minimum_coverage_ratio),
             "agreement_threshold": _normalize_ratio_text(agreement_threshold),
         }

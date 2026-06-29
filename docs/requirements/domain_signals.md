@@ -1867,7 +1867,7 @@ Value 数量与冻结定义集合一致；
 used_atomic_signal_value_ids 可追溯到同一 AtomicSignalSet；
 正式领域归属无冲突；
 coverage_ratio 与 agreement_ratio 可复算；
-三个正式领域输入完整的 created 集合 allows_market_regime = true；
+六个正式领域输入完整的 created 集合 allows_market_regime = true；
 重复执行没有产生第二份正式集合；
 没有保存任何编排 ID。
 ```

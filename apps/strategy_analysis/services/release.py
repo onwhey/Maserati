@@ -471,7 +471,7 @@ def validate_release_integrity(
         actual_params_hash = stable_hash(definition.params)
         try:
             allowed_codes = normalize_atomic_signal_codes(definition.allowed_atomic_signal_codes)
-            required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes)
+            required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes, allow_empty=True)
             actual_definition_hash = domain_signal_definition_hash(
                 domain_code=definition.domain_code,
                 output_mode=definition.output_mode,
@@ -552,7 +552,7 @@ def validate_release_integrity(
         for item in items
         if item.component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION
     }
-    for code in ("trend", "momentum", "volatility"):
+    for code in ("market_context", "trend", "momentum", "volatility", "structure", "risk_state"):
         if code not in domain_codes:
             errors.append(f"版本包缺少正式领域：{code}")
 

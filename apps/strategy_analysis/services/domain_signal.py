@@ -51,7 +51,7 @@ from .release import FrozenReleaseSlice, resolve_frozen_slice
 
 logger = logging.getLogger(__name__)
 
-REQUIRED_FORMAL_DOMAIN_CODES = frozenset({"trend", "momentum", "volatility"})
+REQUIRED_FORMAL_DOMAIN_CODES = frozenset({"market_context", "trend", "momentum", "volatility", "structure", "risk_state"})
 
 
 @dataclass(frozen=True)
@@ -143,7 +143,7 @@ def _decimal_ratio(value: Any, *, field_name: str, allow_none: bool = False) -> 
 
 def _domain_definition_payload(definition: DomainSignalDefinition) -> tuple[dict[str, list[str]], str]:
     allowed_codes = normalize_atomic_signal_codes(definition.allowed_atomic_signal_codes)
-    required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes)
+    required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes, allow_empty=True)
     payload = {
         "allowed_atomic_signal_codes": list(allowed_codes),
         "required_atomic_signal_codes": list(required_codes),
@@ -478,7 +478,7 @@ def _persist_domain_signal_set(
         error_message = "至少一个 required 领域信号计算失败"
     elif not formal_domains_valid:
         error_code = "required_formal_domain_missing"
-        error_message = "trend、momentum、volatility 三个正式领域结果未全部有效"
+        error_message = "六个正式领域结果未全部有效"
 
     now = timezone.now()
     try:

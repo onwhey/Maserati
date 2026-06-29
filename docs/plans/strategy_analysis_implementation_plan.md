@@ -1561,7 +1561,7 @@ release_hash 稳定；
 draft 可编辑；
 validating / approved 不可原地修改；
 依赖闭包缺失不得批准；
-trend / momentum / volatility 任一缺失不得批准；
+market_context / trend / momentum / volatility / structure / risk_state 任一缺失不得批准；
 MarketRegime / Routing / Strategy / Quality / Decision 依赖不完整不得批准；
 未关联验证证据不得批准；
 同时最多一个当前版本包；
@@ -1609,7 +1609,7 @@ calculator failed 不伪装 neutral；
 只消费 AtomicSignalSet；
 原子信号领域归属缺失不得批准版本包；
 原子信号归属多个领域不得批准版本包；
-trend / momentum / volatility 完整；
+market_context / trend / momentum / volatility / structure / risk_state 完整；
 只读取本领域原子信号；
 不使用策略权重；
 不输出通用 confidence。

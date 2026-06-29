@@ -927,7 +927,7 @@ command 不得直接更新批准或启用字段。
 3. draft 可编辑，validating 和 approved 不可原地修改组件。
 4. 特征与原子依赖不完整时不得批准。
 5. 原子信号领域归属缺失或重复时不得批准。
-6. trend、momentum 或 volatility 任一缺失时不得批准。
+6. market_context、trend、momentum、volatility、structure、risk_state 任一缺失时不得批准。
 7. MarketRegime、路由、策略、质量或决策依赖不完整时不得批准。
 8. 任一被选组件不可用于正式版本包选择时不得批准。
 9. 未关联 StrategyAnalysisReleaseValidationEvidence 时不得批准。
@@ -968,7 +968,7 @@ python manage.py activate_strategy_analysis_release --release-id <id> --confirm
 Release 与 ReleaseItem 数量一致；
 release_hash 可从规范化组件清单复算；
 依赖闭包完整；
-trend、momentum 和 volatility 完整；
+market_context、trend、momentum、volatility、structure、risk_state 六个领域完整；
 验证证据对象完整且 release_hash 与 Release 一致；
 批准记录的 release_hash 与 Release 一致；
 当前最多只有一个已批准启用版本包；
@@ -1028,7 +1028,7 @@ StrategyAnalysisRelease 验收通过必须满足：
 正式策略链路只运行本轮启动时冻结版本包明确选择的定义与版本；
 已批准版本包不可原地修改；
 新组合不继承旧批准；
-正式版本包同时具备 trend、momentum 和 volatility；
+正式版本包同时具备 market_context、trend、momentum、volatility、structure、risk_state 六个领域；
 各层依赖闭包完整且无隐式回退；
 同一时刻最多一个当前版本包；
 一轮编排从开始到结束使用同一 release_hash；

@@ -230,9 +230,12 @@ def build_fixture(*, missing_domain: str | None = None) -> tuple[AtomicSignalSet
     snapshot = market_snapshot()
     release = StrategyAnalysisRelease.objects.create(release_code="domain-release")
     atomic_by_domain = {
+        "market_context": atomic_definition("atomic_market_context"),
         "trend": atomic_definition("atomic_trend"),
         "momentum": atomic_definition("atomic_momentum"),
         "volatility": atomic_definition("atomic_volatility"),
+        "structure": atomic_definition("atomic_structure"),
+        "risk_state": atomic_definition("atomic_risk_state"),
     }
     for definition in atomic_by_domain.values():
         StrategyAnalysisReleaseItem.objects.create(
@@ -249,7 +252,11 @@ def build_fixture(*, missing_domain: str | None = None) -> tuple[AtomicSignalSet
     for domain_code, definition in atomic_by_domain.items():
         if domain_code == missing_domain:
             continue
-        output_mode = DomainSignalOutputMode.STATE if domain_code == "volatility" else DomainSignalOutputMode.DIRECTIONAL
+        output_mode = (
+            DomainSignalOutputMode.STATE
+            if domain_code in {"volatility", "risk_state"}
+            else DomainSignalOutputMode.DIRECTIONAL
+        )
         domain = domain_definition(domain_code, definition.signal_code, output_mode=output_mode)
         payload = {
             "allowed_atomic_signal_codes": [definition.signal_code],
@@ -323,9 +330,9 @@ def build_fixture(*, missing_domain: str | None = None) -> tuple[AtomicSignalSet
         status=AnalysisObjectStatus.CREATED,
         is_usable=True,
         allows_domain_signal=True,
-        selected_definition_count=3,
-        computed_count=3,
-        valid_count=3,
+        selected_definition_count=6,
+        computed_count=6,
+        valid_count=6,
         invalid_count=0,
         failed_count=0,
         required_failed_count=0,
@@ -454,7 +461,7 @@ def switch_domain_algorithm(
 
 
 @pytest.mark.django_db
-def test_domain_signal_builds_three_formal_domains_from_atomic_set() -> None:
+def test_domain_signal_builds_six_formal_domains_from_atomic_set() -> None:
     atomic_set, release = build_fixture()
 
     result = run_service(atomic_set, release)
@@ -463,9 +470,16 @@ def test_domain_signal_builds_three_formal_domains_from_atomic_set() -> None:
     signal_set = DomainSignalSet.objects.get()
     assert signal_set.atomic_signal_set_id == atomic_set.id
     assert signal_set.allows_market_regime is True
-    assert signal_set.computed_count == 3
-    assert DomainSignalValue.objects.count() == 3
-    assert set(DomainSignalValue.objects.values_list("domain_code", flat=True)) == {"trend", "momentum", "volatility"}
+    assert signal_set.computed_count == 6
+    assert DomainSignalValue.objects.count() == 6
+    assert set(DomainSignalValue.objects.values_list("domain_code", flat=True)) == {
+        "market_context",
+        "trend",
+        "momentum",
+        "volatility",
+        "structure",
+        "risk_state",
+    }
     volatility = DomainSignalValue.objects.get(domain_code="volatility")
     assert volatility.output_mode == DomainSignalOutputMode.STATE
     assert volatility.direction == AtomicSignalDirection.NONE
@@ -620,7 +634,7 @@ def test_domain_signal_dry_run_recalculates_without_reusing_persisted_result() -
     assert dry_run.data["persisted"] is False
     assert "domain_signal_set_id" not in dry_run.data
     assert DomainSignalSet.objects.count() == 1
-    assert DomainSignalValue.objects.count() == 3
+    assert DomainSignalValue.objects.count() == 6
 
 
 @pytest.mark.django_db
@@ -636,12 +650,22 @@ def test_domain_signal_same_input_identity_is_idempotent() -> None:
 
 @pytest.mark.django_db
 def test_seed_domain_signal_definitions_is_idempotent() -> None:
-    atomic_definition("sma_4h_20_above_sma_4h_60")
+    call_command("seed_feature_definitions")
+    call_command("seed_atomic_signal_definitions")
 
     call_command("seed_domain_signal_definitions")
     call_command("seed_domain_signal_definitions")
 
-    definition = DomainSignalDefinition.objects.get(domain_code="trend")
-    assert DomainSignalDefinition.objects.count() == 1
-    assert definition.status == DefinitionLifecycleStatus.ACTIVE
-    assert definition.enabled is True
+    assert DomainSignalDefinition.objects.count() == 6
+    assert set(DomainSignalDefinition.objects.values_list("domain_code", flat=True)) == {
+        "market_context",
+        "trend",
+        "momentum",
+        "volatility",
+        "structure",
+        "risk_state",
+    }
+    assert DomainSignalDefinition.objects.filter(
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+    ).count() == 6

@@ -112,7 +112,8 @@ DecisionSnapshot        = 策略周期的目标仓位决策。
 
 ## 3. 算法未指定时的系统行为
 
-本需求只定义 MarketRegime 的业务框架、Calculator 合同和安全边界，不指定任何正式市场环境分类算法。
+本需求只定义 MarketRegime 的业务框架、Calculator 合同和安全边界，不在通用框架内直接展开具体市场环境分类算法。
+具体正式算法、参数和 `regime_code` 集合必须由独立算法需求文件定义。
 
 本需求不预设：
 
@@ -664,7 +665,7 @@ regime_scores 不得包含该集合之外的类别；
 同一 algorithm_version 不得运行时生成未登记类别。
 ```
 
-本需求不提供默认 regime_code 集合。
+通用框架不提供统一默认 `regime_code` 集合；具体 MarketRegime 算法需求文件必须声明自己的完整 `allowed_regime_codes`。
 
 ### 7.9 status
 
@@ -848,7 +849,7 @@ unknown → is_usable = false → allows_strategy_routing = false。
 不能由 StrategyRouting 临时改写。
 ```
 
-本需求不指定任何正式 regime_code。
+通用框架不指定任何正式 `regime_code`；正式 `regime_code` 必须来自具体 MarketRegime 算法需求文件。
 
 ### 9.2 regime_scores
 
@@ -1097,7 +1098,7 @@ Service 不得：
 覆盖 enabled 或修改任何 StrategyAnalysisRelease。
 ```
 
-本需求没有指定具体算法，因此默认模板不得凭空生成可被正式版本包选择的 Definition。
+默认模板只能来自项目中已经明确存在、且具备算法需求文档与 implementation 记录的 MarketRegime 算法。不得凭空生成可被正式版本包选择的 Definition。
 
 ## 13. seed_market_regime_definitions
 
@@ -1184,7 +1185,7 @@ golden test；
 
 参数组合变化由 params、params_hash 和 definition_hash 表达；算法行为未变化时不得滥增算法版本。
 
-本需求不创建任何具体 MarketRegime 算法需求文件，也不创建任何具体 MarketRegime implementation 实现记录。
+通用框架不替代任何具体 MarketRegime 算法需求文件，也不替代具体 MarketRegime implementation 实现记录。
 
 ## 15. 算法验证与正式发布
 
