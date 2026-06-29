@@ -1153,7 +1153,7 @@ StrategyRouting 可以校验策略注册状态，但不得调用 StrategySignal 
 必须区分：
 
 ```text
-default_strategy_route_policies.py = 受代码管理的 Policy / Rule 模板；
+default_strategy_routing_definitions.py = 受代码管理的 Policy / Rule 模板；
 StrategyRoutePolicy 表             = 可供组合选择的 Policy 库；
 StrategyRouteRule 表               = Policy 的版本化规则；
 StrategyAnalysisRelease 路由与策略切片 = 正式运行时配置。
@@ -1163,7 +1163,7 @@ StrategyAnalysisRelease 路由与策略切片 = 正式运行时配置。
 
 Service 不得把默认模板直接用于路由，也不得自动恢复 retired、disabled 或人工停用配置。
 
-本需求没有指定具体 StrategyDefinition 或路由映射，因此模板不得凭空创建可被正式版本包选择的 Policy。
+当前 P0 已存在默认路由模板，覆盖 `context_structure_regime_v1` 输出的 13 种市场环境。模板只定义 Policy / Rule，不创建 StrategyDefinition。被 Rule 引用的 StrategyDefinition 必须已经由 StrategySignal 层完成算法需求、calculator、StrategyDefinition 和版本包策略切片登记。
 
 ## 16. seed_strategy_routing
 
@@ -1198,7 +1198,7 @@ python manage.py seed_strategy_routing
 引用未注册或不可用 StrategyDefinition 时激活 Policy。
 ```
 
-没有已确认模板时，命令必须返回零变更摘要。
+没有已确认模板时，命令必须返回零变更摘要。当前存在 P0 默认模板时，若被引用 StrategyDefinition 尚未 active + enabled，命令必须 fail-closed，不得创建半成品 Policy / Rule。
 
 ## 17. 规则版本与文档边界
 

@@ -322,6 +322,11 @@ class GroupedAtomicAggregationCalculator:
         state_code = self._structure_state_code(major_state=major_state, minor_state=minor_state)
         strength = self._structure_strength(major_state=major_state, minor_state=minor_state, params=params)
         agreement = Decimal("1") if self._structure_aligned(major_state=major_state, minor_state=minor_state) else Decimal("0")
+        zone_summary = self._structure_zone_summary(
+            values_by_code=payload["values_by_code"],
+            major_state=major_state,
+            minor_state=minor_state,
+        )
         return {
             "direction": direction,
             "state_code": state_code,
@@ -329,7 +334,7 @@ class GroupedAtomicAggregationCalculator:
             "agreement_ratio": agreement,
             "counts": {"major_active": self._count_prefix(active, "structure_major_"), "minor_active": self._count_prefix(active, "structure_minor_")},
             "state_tags": [f"structure_major_{major_state}", f"structure_minor_{minor_state}"],
-            "summary": {"major_structure": major_state, "minor_structure": minor_state},
+            "summary": {"major_structure": major_state, "minor_structure": minor_state, **zone_summary},
             "evidence_text_zh": (
                 f"structure 领域聚合完成：1d 大结构为 {major_state}，4h 小结构为 {minor_state}，"
                 f"组合状态为 {state_code}。该结论只描述价格结构位置，不输出订单动作。"
@@ -584,6 +589,132 @@ class GroupedAtomicAggregationCalculator:
         if self._structure_aligned(major_state=major_state, minor_state=minor_state):
             strength = min(Decimal("1"), strength + Decimal("0.10"))
         return max(Decimal("0"), min(Decimal("1"), strength))
+
+    def _structure_zone_summary(
+        self,
+        *,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+        major_state: str,
+        minor_state: str,
+    ) -> dict[str, Any]:
+        feature_values = self._structure_feature_values(values_by_code)
+        major_support = self._structure_zone(
+            feature_values,
+            lower_code="structure_major_support_lower_1d_365",
+            upper_code="structure_major_support_upper_1d_365",
+        )
+        major_resistance = self._structure_zone(
+            feature_values,
+            lower_code="structure_major_resistance_lower_1d_365",
+            upper_code="structure_major_resistance_upper_1d_365",
+        )
+        minor_support = self._structure_zone(
+            feature_values,
+            lower_code="structure_minor_support_lower_4h_120",
+            upper_code="structure_minor_support_upper_4h_120",
+        )
+        minor_resistance = self._structure_zone(
+            feature_values,
+            lower_code="structure_minor_resistance_lower_4h_120",
+            upper_code="structure_minor_resistance_upper_4h_120",
+        )
+        summary: dict[str, Any] = {
+            "current_zone_position": self._structure_current_zone_position(
+                major_state=major_state,
+                minor_state=minor_state,
+            ),
+        }
+        optional_values = {
+            "major_support_zone": major_support,
+            "major_resistance_zone": major_resistance,
+            "minor_support_zone": minor_support,
+            "minor_resistance_zone": minor_resistance,
+            "support_zone": self._preferred_structure_zone(
+                zone_kind="support",
+                major_state=major_state,
+                minor_state=minor_state,
+                major_zone=major_support,
+                minor_zone=minor_support,
+            ),
+            "resistance_zone": self._preferred_structure_zone(
+                zone_kind="resistance",
+                major_state=major_state,
+                minor_state=minor_state,
+                major_zone=major_resistance,
+                minor_zone=minor_resistance,
+            ),
+        }
+        summary.update({key: value for key, value in optional_values.items() if value is not None})
+        return summary
+
+    @staticmethod
+    def _structure_feature_values(values_by_code: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for item in values_by_code.values():
+            value_json = item.get("value_json")
+            if not isinstance(value_json, Mapping):
+                continue
+            feature_values = value_json.get("feature_values")
+            if not isinstance(feature_values, Mapping):
+                continue
+            for code, feature_payload in feature_values.items():
+                if not isinstance(feature_payload, Mapping):
+                    continue
+                code_text = str(code).strip()
+                if code_text and code_text not in result:
+                    result[code_text] = feature_payload.get("value")
+        return result
+
+    @staticmethod
+    def _structure_zone(
+        feature_values: Mapping[str, Any],
+        *,
+        lower_code: str,
+        upper_code: str,
+    ) -> dict[str, str] | None:
+        lower = feature_values.get(lower_code)
+        upper = feature_values.get(upper_code)
+        if lower is None or upper is None:
+            return None
+        try:
+            lower_decimal = Decimal(str(lower))
+            upper_decimal = Decimal(str(upper))
+        except (InvalidOperation, ValueError):
+            return None
+        if not lower_decimal.is_finite() or not upper_decimal.is_finite() or lower_decimal > upper_decimal:
+            return None
+        return {"lower": str(lower), "upper": str(upper)}
+
+    @staticmethod
+    def _preferred_structure_zone(
+        *,
+        zone_kind: str,
+        major_state: str,
+        minor_state: str,
+        major_zone: dict[str, str] | None,
+        minor_zone: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if zone_kind == "support":
+            if major_state in {"near_support", "breakdown_down"}:
+                return major_zone or minor_zone
+            if minor_state in {"near_support", "breakdown_down"}:
+                return minor_zone or major_zone
+            return major_zone or minor_zone
+        if zone_kind == "resistance":
+            if major_state in {"near_resistance", "breakout_up"}:
+                return major_zone or minor_zone
+            if minor_state in {"near_resistance", "breakout_up"}:
+                return minor_zone or major_zone
+            return major_zone or minor_zone
+        return major_zone or minor_zone
+
+    @staticmethod
+    def _structure_current_zone_position(*, major_state: str, minor_state: str) -> str:
+        if major_state in {"near_support", "near_resistance", "breakout_up", "breakdown_down"}:
+            return major_state
+        if minor_state in {"near_support", "near_resistance", "breakout_up", "breakdown_down"}:
+            return f"minor_{minor_state}"
+        return major_state
 
     @staticmethod
     def _structure_aligned(*, major_state: str, minor_state: str) -> bool:

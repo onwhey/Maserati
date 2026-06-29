@@ -164,3 +164,29 @@ evidence_text_zh。
 不生成订单；
 不执行真实交易。
 ```
+## structure 区间摘要补充说明
+
+`structure` 领域仍然只聚合结构事实，不生成交易动作。
+
+当结构类原子信号的 JSON 输出携带 `feature_values` 时，`grouped_atomic_aggregation` 会从其中整理出：
+
+```text
+major_support_zone
+major_resistance_zone
+minor_support_zone
+minor_resistance_zone
+support_zone
+resistance_zone
+current_zone_position
+```
+
+其中：
+
+```text
+major_* 来自 1d 大结构；
+minor_* 来自 4h 小结构；
+support_zone / resistance_zone 是给下游策略读取的默认结构区间；
+current_zone_position 只表达价格当前处于哪类结构位置。
+```
+
+该摘要写入 DomainSignalValue 的 evidence summary，供 StrategySignal 读取。它不代表“支撑做多”“压力做空”等操作建议。

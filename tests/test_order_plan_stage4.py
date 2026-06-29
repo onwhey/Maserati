@@ -213,16 +213,34 @@ def _enable_runtime_permission(settings, *, market_type: str = "USDS-M") -> None
     )
 
 
-def _run(*, decision: DecisionSnapshot, account: BinanceSyncRun, price: PriceSnapshot, key: str):
+def _run(
+    *,
+    decision: DecisionSnapshot,
+    account: BinanceSyncRun,
+    price: PriceSnapshot,
+    key: str,
+    reference_time_utc=None,
+):
     return run_order_plan_step(
         business_request_key=key,
         decision_snapshot_id=decision.id,
         binance_sync_run_id=account.id,
         price_snapshot_id=price.id,
-        reference_time_utc=timezone.now(),
+        reference_time_utc=reference_time_utc or timezone.now(),
         trace_id=f"trace-{key}",
         trigger_source="test",
     )
+
+
+def _early_cycle_reference_time():
+    now = timezone.now()
+    cycle_start = now.replace(hour=(now.hour // 4) * 4, minute=0, second=0, microsecond=0)
+    return cycle_start + timedelta(minutes=5)
+
+
+def _expected_cycle_limit_valid_until(reference_time):
+    cycle_start = reference_time.replace(hour=(reference_time.hour // 4) * 4, minute=0, second=0, microsecond=0)
+    return cycle_start + timedelta(hours=4, minutes=-10)
 
 
 def test_permission_closed_does_not_create_plan_candidate_or_lock(settings) -> None:
@@ -346,6 +364,82 @@ def test_standard_strategy_price_condition_allows_market_only_when_chasing_allow
     assert result.status == "succeeded"
     assert candidate.order_type == "MARKET"
     assert candidate.price_condition_evidence["condition_type"] == "near_support_only"
+
+
+def test_standard_strategy_price_condition_generates_buy_limit_from_structured_zone(settings) -> None:
+    _enable_runtime_permission(settings)
+    settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+    reference_time = _early_cycle_reference_time()
+    decision = _decision(ratio="0.5", key="decision-structured-zone-buy-limit")
+    decision.frozen_trade_price_condition = {
+        "condition_type": "pullback_support_price_zone",
+        "reference_price_zone": "支撑区附近",
+        "acceptable_price_zone": {"lower": "49000", "upper": "49500"},
+        "support_or_resistance_refs": ["structure.support_zone"],
+        "allow_chasing": False,
+        "reason_code": "support_valid_no_chasing",
+        "reason_summary_zh": "只允许在支撑区附近形成候选限价单。",
+    }
+    decision.save(update_fields=["frozen_trade_price_condition", "updated_at_utc"])
+    account = _account_facts(position="0", order_types=["MARKET", "LIMIT"])
+    price = _price(value="50000")
+
+    result = _run(
+        decision=decision,
+        account=account,
+        price=price,
+        key="plan-structured-zone-buy-limit",
+        reference_time_utc=reference_time,
+    )
+
+    plan = OrderPlan.objects.get()
+    candidate = CandidateOrderIntent.objects.get()
+    assert result.status == "succeeded"
+    assert plan.status == OrderPlanStatus.CREATED
+    assert plan.calculation_evidence["limit_price_source"] == "acceptable_price_zone_upper"
+    assert candidate.side == "BUY"
+    assert candidate.order_type == "LIMIT"
+    assert candidate.limit_price == Decimal("49500")
+    assert candidate.time_in_force == "GTC"
+    assert candidate.limit_valid_until_utc == _expected_cycle_limit_valid_until(reference_time)
+    assert candidate.price_condition_evidence["limit_price_source"] == "acceptable_price_zone_upper"
+    assert candidate.evidence["limit_price_source"] == "acceptable_price_zone_upper"
+
+
+def test_standard_strategy_price_condition_generates_sell_limit_from_structured_zone_when_chasing_outside_zone(settings) -> None:
+    _enable_runtime_permission(settings)
+    settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+    reference_time = _early_cycle_reference_time()
+    decision = _decision(ratio="-0.5", key="decision-structured-zone-sell-limit")
+    decision.frozen_trade_price_condition = {
+        "condition_type": "rebound_pressure_price_zone",
+        "reference_price_zone": "压力区附近",
+        "acceptable_price_zone": {"lower": "50500", "upper": "51000"},
+        "support_or_resistance_refs": ["structure.resistance_zone"],
+        "allow_chasing": True,
+        "reason_code": "pressure_valid_wait_rebound",
+        "reason_summary_zh": "价格未进入可接受区间时，不能直接市价追空。",
+    }
+    decision.save(update_fields=["frozen_trade_price_condition", "updated_at_utc"])
+    account = _account_facts(position="0", order_types=["MARKET", "LIMIT"])
+    price = _price(value="50000")
+
+    result = _run(
+        decision=decision,
+        account=account,
+        price=price,
+        key="plan-structured-zone-sell-limit",
+        reference_time_utc=reference_time,
+    )
+
+    candidate = CandidateOrderIntent.objects.get()
+    assert result.status == "succeeded"
+    assert candidate.side == "SELL"
+    assert candidate.order_type == "LIMIT"
+    assert candidate.limit_price == Decimal("50500")
+    assert candidate.time_in_force == "GTC"
+    assert candidate.limit_valid_until_utc == _expected_cycle_limit_valid_until(reference_time)
+    assert candidate.price_condition_evidence["limit_price_source"] == "acceptable_price_zone_lower"
 
 
 def test_order_plan_is_idempotent_and_does_not_duplicate_lock_or_candidate(settings) -> None:

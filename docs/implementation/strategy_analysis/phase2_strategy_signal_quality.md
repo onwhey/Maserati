@@ -113,3 +113,14 @@ strategy_analysis 测试：95 passed
 Django system check：no issues
 迁移检查：No changes detected
 ```
+
+## 7. 当前 P0 策略承接补充
+
+为了承接当前四个 P0 趋势类 StrategySignal calculator，StrategySignalQuality 增加以下检查点：
+
+- `aggregation_snapshot` 必须包含最终方向、最终强度和最终置信度，并与 StrategySignal 主字段一致；
+- `trade_price_condition` 如果存在，必须仍然是合法结构化价格条件；
+- `trade_price_condition` 只做结构校验，不解释价格区间、不计算限价价格、不生成订单类型；
+- 非法价格条件会生成质量 issue，并阻断进入 DecisionSnapshot。
+
+这层仍然不重新执行策略、不读取 Feature / Atomic / Kline，不访问 Binance，不生成目标仓位或订单。

@@ -180,11 +180,40 @@ class AtomicConditionCalculator:
                     severity = str(params.get("base_severity") or "elevated")
                 elif any(item.get("result") for item in severity_results):
                     severity = str(params.get("high_severity") or "high")
-        return {
+        result = {
             **dict(payload),
             "condition_met": matched,
             "risk_severity": severity,
         }
+        included_features = self._included_feature_values(params=params, feature_values=feature_values)
+        if included_features:
+            result["feature_values"] = included_features
+        return result
+
+    def _included_feature_values(self, *, params: Mapping[str, Any], feature_values: Mapping[str, Any]) -> dict[str, Any]:
+        include_feature_values = params.get("include_feature_values")
+        if not isinstance(include_feature_values, (list, tuple)):
+            return {}
+        result: dict[str, Any] = {}
+        for raw_code in include_feature_values:
+            code = str(raw_code).strip()
+            if not code or code in result:
+                continue
+            item = feature_values.get(code)
+            if not isinstance(item, Mapping):
+                continue
+            result[code] = {
+                "feature_value_id": item.get("feature_value_id"),
+                "value": self._json_scalar(item.get("value")),
+                "value_type": item.get("value_type"),
+            }
+        return result
+
+    @staticmethod
+    def _json_scalar(value: Any) -> Any:
+        if isinstance(value, Decimal):
+            return str(value)
+        return value
 
     def _evidence_item(
         self,

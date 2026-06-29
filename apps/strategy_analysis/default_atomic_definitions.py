@@ -20,6 +20,18 @@ from apps.strategy_analysis.definition_hashes import normalize_feature_codes
 from apps.strategy_analysis.models import AtomicSignalDirection, AtomicSignalOutputType
 
 
+STRUCTURE_ZONE_FEATURE_CODES: tuple[str, ...] = (
+    "structure_major_support_lower_1d_365",
+    "structure_major_support_upper_1d_365",
+    "structure_major_resistance_lower_1d_365",
+    "structure_major_resistance_upper_1d_365",
+    "structure_minor_support_lower_4h_120",
+    "structure_minor_support_upper_4h_120",
+    "structure_minor_resistance_lower_4h_120",
+    "structure_minor_resistance_upper_4h_120",
+)
+
+
 @dataclass(frozen=True)
 class AtomicSignalDefinitionTemplate:
     signal_code: str
@@ -70,14 +82,25 @@ def _atomic(
     algorithm_version: str = "1.0.0",
     is_required: bool = False,
 ) -> AtomicSignalDefinitionTemplate:
+    merged_extra_params = dict(extra_params or {})
+    if category == "structure":
+        json_payload = dict(merged_extra_params.pop("json_payload", {}) or {})
+        json_payload.setdefault("structure_signal_family", "zone_snapshot")
+        merged_extra_params = {
+            "value_mode": "json",
+            "json_payload": json_payload,
+            "include_feature_values": list(STRUCTURE_ZONE_FEATURE_CODES),
+            **merged_extra_params,
+        }
+        output_type = AtomicSignalOutputType.JSON
     params = {
         "conditions": [dict(condition) for condition in conditions],
         "aggregation": aggregation,
         "label_zh": label_zh,
         "evidence_type": f"{category}_atomic_condition",
     }
-    if extra_params:
-        params.update(dict(extra_params))
+    if merged_extra_params:
+        params.update(merged_extra_params)
     return AtomicSignalDefinitionTemplate(
         signal_code=signal_code,
         display_name=label_zh,
@@ -492,6 +515,11 @@ def _feature_codes_from_params(params: Mapping[str, Any]) -> set[str]:
         codes.add(str(params["left_feature_code"]))
     if "right_feature_code" in params:
         codes.add(str(params["right_feature_code"]))
+    include_feature_values = params.get("include_feature_values")
+    if isinstance(include_feature_values, (list, tuple)):
+        for item in include_feature_values:
+            if str(item).strip():
+                codes.add(str(item))
     for field in ("conditions", "severity_conditions"):
         value = params.get(field, [])
         if not isinstance(value, list):

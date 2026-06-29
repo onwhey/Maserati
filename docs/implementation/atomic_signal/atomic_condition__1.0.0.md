@@ -116,3 +116,37 @@ evidence_text_zh
 生成订单意图；
 执行真实交易。
 ```
+## 7. 结构类 JSON 原子补充说明
+
+`atomic_condition` 支持 `include_feature_values` 参数。该参数只把本次 calculator 输入中已经存在的 `FeatureValue` 摘要复制进 JSON 输出，不重新计算特征，也不调用 FeatureLayer。
+
+结构类原子默认携带以下支撑/压力区间特征快照：
+
+```text
+structure_major_support_lower_1d_365
+structure_major_support_upper_1d_365
+structure_major_resistance_lower_1d_365
+structure_major_resistance_upper_1d_365
+structure_minor_support_lower_4h_120
+structure_minor_support_upper_4h_120
+structure_minor_resistance_lower_4h_120
+structure_minor_resistance_upper_4h_120
+```
+
+输出示例：
+
+```json
+{
+  "condition_met": true,
+  "structure_signal_family": "zone_snapshot",
+  "feature_values": {
+    "structure_major_support_lower_1d_365": {
+      "feature_value_id": 1,
+      "value": "49000",
+      "value_type": "decimal"
+    }
+  }
+}
+```
+
+该快照只作为后续 DomainSignal / StrategySignal 的证据输入，不代表交易建议。

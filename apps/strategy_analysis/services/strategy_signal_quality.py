@@ -441,6 +441,7 @@ def _collect_quality_issues(signal: StrategySignal, rule_set: StrategySignalQual
     issues.extend(_check_lineage_contract(signal))
     issues.extend(_check_domain_values(signal))
     issues.extend(_check_snapshot_contract(signal))
+    issues.extend(_check_trade_price_condition_contract(signal))
     issues.extend(_check_evidence_contract(signal))
     issues.extend(_check_staleness(signal, rule_set, reference_time))
     return tuple(issues)
@@ -590,6 +591,85 @@ def _check_evidence_contract(signal: StrategySignal) -> list[QualityIssueDraft]:
     used_refs = set(used_ids)
     if not used_refs.issubset(evidence_refs):
         issues.append(_issue("strategy_signal_evidence_refs_missing", "error", "evidence", "refs", "evidence_items", "证据未覆盖全部实际使用领域输入"))
+    return issues
+
+
+def _check_trade_price_condition_contract(signal: StrategySignal) -> list[QualityIssueDraft]:
+    value = thaw_value(signal.trade_price_condition)
+    if value in (None, "", {}):
+        return []
+    if not isinstance(value, dict):
+        return [
+            _issue(
+                "strategy_signal_trade_price_condition_invalid",
+                "error",
+                "structure",
+                "trade_price_condition",
+                "trade_price_condition",
+                "策略价格条件必须是结构化映射或为空",
+            )
+        ]
+    issues: list[QualityIssueDraft] = []
+    required = {
+        "condition_type",
+        "reference_price_zone",
+        "acceptable_price_zone",
+        "support_or_resistance_refs",
+        "allow_chasing",
+        "reason_code",
+        "reason_summary_zh",
+    }
+    missing = sorted(required - set(value))
+    if missing:
+        issues.append(
+            _issue(
+                "strategy_signal_trade_price_condition_missing",
+                "error",
+                "structure",
+                "trade_price_condition",
+                "trade_price_condition",
+                "策略价格条件缺少必要字段",
+                {"missing_fields": missing},
+            )
+        )
+    for field_name in ("condition_type", "reason_code", "reason_summary_zh"):
+        if field_name in value and not str(value.get(field_name, "")).strip():
+            issues.append(
+                _issue(
+                    "strategy_signal_trade_price_condition_empty_field",
+                    "error",
+                    "structure",
+                    "trade_price_condition",
+                    "trade_price_condition",
+                    "策略价格条件存在空字段",
+                    {"field_name": field_name},
+                )
+            )
+    refs = value.get("support_or_resistance_refs")
+    if "support_or_resistance_refs" in value and (
+        not isinstance(refs, list) or not refs or any(not isinstance(item, str) or not item.strip() for item in refs)
+    ):
+        issues.append(
+            _issue(
+                "strategy_signal_trade_price_condition_refs_invalid",
+                "error",
+                "structure",
+                "trade_price_condition",
+                "trade_price_condition",
+                "策略价格条件的支撑压力引用必须是非空字符串列表",
+            )
+        )
+    if "allow_chasing" in value and not isinstance(value.get("allow_chasing"), bool):
+        issues.append(
+            _issue(
+                "strategy_signal_trade_price_condition_allow_chasing_invalid",
+                "error",
+                "structure",
+                "trade_price_condition",
+                "trade_price_condition",
+                "策略价格条件的是否允许追价字段必须是布尔值",
+            )
+        )
     return issues
 
 

@@ -18,6 +18,12 @@ class StrategyAnalysisConfig(AppConfig):
         from apps.strategy_calculator.feature_layer import KlinePriceFeatureCalculator
         from apps.strategy_calculator.market_regime import ContextStructureRegimeCalculator
         from apps.strategy_calculator.registry import default_registry
+        from apps.strategy_calculator.strategy_signal import (
+            LongPullbackSupportCalculator,
+            LongTrendFollowingCalculator,
+            ShortReboundPressureCalculator,
+            ShortTrendFollowingCalculator,
+        )
 
         for calculator in (
             KlinePriceFeatureCalculator(),
@@ -26,6 +32,10 @@ class StrategyAnalysisConfig(AppConfig):
             GroupedAtomicAggregationCalculator(),
             SingleAtomicPassthroughCalculator(),
             ContextStructureRegimeCalculator(),
+            LongTrendFollowingCalculator(),
+            LongPullbackSupportCalculator(),
+            ShortTrendFollowingCalculator(),
+            ShortReboundPressureCalculator(),
             PositionPolicyCalculator(),
         ):
             try:

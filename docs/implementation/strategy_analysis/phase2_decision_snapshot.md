@@ -118,3 +118,29 @@ strategy_analysis 测试：108 passed
 Django system check：no issues
 迁移检查：No changes detected
 ```
+
+## 7. 当前 position_policy/v1 承接补充
+
+当前默认目标仓位映射定义通过以下命令登记：
+
+```text
+python manage.py seed_decision_policy_definitions
+```
+
+登记内容：
+
+- `policy_code = position_policy`
+- `policy_version = v1`
+- `algorithm_name = position_policy`
+- `algorithm_version = v1`
+- `expires_after_seconds = 14400`
+
+`expires_after_seconds = 14400` 表示 DecisionSnapshot 默认只在一个 4 小时主周期内有效，避免上一轮目标仓位快照被下一轮误消费。
+
+当前实现已验证：
+
+- StrategySignalQuality 放行后的标准 StrategySignal 可以被 `position_policy/v1` 消费；
+- `position_policy/v1` 只消费方向、强度、置信度和质量摘要；
+- `trade_price_condition` 不进入 calculator；
+- `trade_price_condition` 由 DecisionSnapshotService 原样冻结到 DecisionSnapshot；
+- 小额订单过滤仍由 OrderPlan 负责，不在 position_policy 中处理。

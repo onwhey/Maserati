@@ -1214,7 +1214,7 @@ StrategyAnalysisRelease 策略切片 = 正式运行时策略集合。
 
 Service 不得直接读取模板参与计算、把模板与数据库求合集、自动恢复停用策略或覆盖人工配置。
 
-本需求没有指定具体策略，因此默认模板不得凭空创建可被正式版本包选择的 StrategyDefinition。
+本通用需求不直接承载具体策略算法。具体 P0 策略算法由 `docs/requirements/strategy_signals/` 下的独立策略文件定义。默认模板不得凭空创建未被具体策略文件、calculator 和 implementation 记录确认的 StrategyDefinition。
 
 ## 13. seed_strategy_definitions
 

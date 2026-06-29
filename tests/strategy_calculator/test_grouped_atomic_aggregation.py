@@ -98,6 +98,45 @@ def test_grouped_atomic_volatility_outputs_state_without_direction() -> None:
     assert output.values["agreement_ratio"] == Decimal("0")
 
 
+def test_grouped_atomic_structure_carries_support_and_resistance_zones_in_summary() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_near_support",
+            "structure_minor_range_middle",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+    zone_snapshot = {
+        "condition_met": True,
+        "feature_values": {
+            "structure_major_support_lower_1d_365": {"feature_value_id": 1, "value": "49000", "value_type": "decimal"},
+            "structure_major_support_upper_1d_365": {"feature_value_id": 2, "value": "50000", "value_type": "decimal"},
+            "structure_major_resistance_lower_1d_365": {"feature_value_id": 3, "value": "59000", "value_type": "decimal"},
+            "structure_major_resistance_upper_1d_365": {"feature_value_id": 4, "value": "60000", "value_type": "decimal"},
+        },
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_near_support", value_json=zone_snapshot),
+                _atomic("structure_minor_range_middle"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    assert output.values["state_code"] == "structure_major_near_support_minor_range_middle"
+    assert summary["support_zone"] == {"lower": "49000", "upper": "50000"}
+    assert summary["resistance_zone"] == {"lower": "59000", "upper": "60000"}
+    assert summary["current_zone_position"] == "near_support"
+
+
 def test_grouped_atomic_risk_distinguishes_classifiable_risk_from_unreliable_signal() -> None:
     calculator = GroupedAtomicAggregationCalculator()
     params = {

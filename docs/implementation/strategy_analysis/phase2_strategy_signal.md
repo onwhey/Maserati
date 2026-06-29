@@ -13,7 +13,14 @@ StrategyRouteDecision（selected）
 → 标准化并持久化 StrategySignal
 ```
 
-当前需求没有指定任何正式策略算法，因此没有新增正式 calculator、正式 StrategyDefinition 或默认策略模板。测试仅使用不进入生产 Registry 的 fake calculator。
+当前通用框架已支持正式 StrategySignal calculator 和 StrategyDefinition 注册。具体 P0 策略算法需求已经拆分到 `docs/requirements/strategy_signals/` 下的独立策略文件。本阶段已登记四个 P0 策略 calculator 与默认 StrategyDefinition 模板：
+
+```text
+long_trend_following / v1；
+long_pullback_support / v1；
+short_trend_following / v1；
+short_rebound_pressure / v1。
+```
 
 ## 已实现对象与入口
 
@@ -22,9 +29,15 @@ StrategySignal；
 StrategySignalDirection；
 generate_strategy_signal 正式 service；
 generate_strategy_signal management command；
-seed_strategy_definitions 安全零变更命令；
+seed_strategy_definitions 默认 StrategyDefinition 初始化命令；
 StrategySignal calculator 权重能力 metadata；
 版本包批准阶段的 schema 与权重合同校验。
+```
+
+四个 P0 策略 calculator 的具体实现记录见：
+
+```text
+docs/implementation/strategy_signal/p0_trend_strategies__v1.md
 ```
 
 ## 输入边界

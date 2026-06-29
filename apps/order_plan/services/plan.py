@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -79,6 +79,7 @@ class OrderExecutionInstruction:
     limit_valid_until_utc: datetime | None = None
     price_condition_hash: str = ""
     price_condition_evidence: dict[str, Any] | None = None
+    limit_price_source: str = ""
 
 
 def create_order_plan(
@@ -268,6 +269,8 @@ def _resolve_execution_instruction(
             context=context,
             draft=draft,
             condition=condition,
+            config=config,
+            reference_time_utc=reference_time_utc,
         )
     if not order_type:
         raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "冻结价格条件缺少可解析订单规划语义")
@@ -342,13 +345,16 @@ def _standard_price_condition_instruction(
     context: OrderPlanContext,
     draft: PlanDraft,
     condition: dict[str, Any],
+    config: dict[str, Any],
+    reference_time_utc: datetime,
 ) -> tuple[PlanDraft, OrderExecutionInstruction]:
     allow_chasing = condition.get("allow_chasing")
     if not isinstance(allow_chasing, bool):
         raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件 allow_chasing 必须是 bool")
     acceptable_zone = condition.get("acceptable_price_zone")
     current_price = context.price_snapshot.mark_price
-    in_zone = _price_in_acceptable_zone(current_price, acceptable_zone)
+    zone_bounds = _acceptable_zone_bounds(acceptable_zone)
+    in_zone = _price_in_acceptable_zone(current_price, zone_bounds)
     if allow_chasing and in_zone is True:
         return (
             draft,
@@ -358,6 +364,37 @@ def _standard_price_condition_instruction(
                 price_condition_evidence=condition,
             ),
         )
+    if zone_bounds is not None and draft.primary is not None:
+        supported_order_types = set(config.get("supported_order_types") or ["MARKET"])
+        if "LIMIT" not in supported_order_types:
+            raise OrderPlanCalculationError("unsupported_order_type", "OrderPlan 当前配置不支持 LIMIT 候选订单")
+        if context.symbol_rule_snapshot.supported_order_types and "LIMIT" not in context.symbol_rule_snapshot.supported_order_types:
+            raise OrderPlanCalculationError("unsupported_order_type", "交易规则不支持 LIMIT 订单")
+        valid_until = _default_limit_valid_until(reference_time_utc)
+        if valid_until > _ensure_utc(reference_time_utc):
+            limit_price, limit_price_source = _limit_price_from_zone(
+                side=draft.primary.side,
+                zone_bounds=zone_bounds,
+            )
+            evidence = {
+                **condition,
+                "limit_price_source": limit_price_source,
+                "limit_price_source_reason_zh": "BUY 使用可接受价格区间上沿，SELL 使用可接受价格区间下沿。",
+                "computed_limit_valid_until_utc": valid_until.isoformat(),
+                "time_in_force_policy": "GTC",
+            }
+            return (
+                draft,
+                OrderExecutionInstruction(
+                    order_type="LIMIT",
+                    time_in_force="GTC",
+                    limit_price=limit_price,
+                    limit_valid_until_utc=valid_until,
+                    price_condition_hash=_price_condition_hash(condition),
+                    price_condition_evidence=evidence,
+                    limit_price_source=limit_price_source,
+                ),
+            )
     return (
         replace(
             draft,
@@ -374,21 +411,51 @@ def _standard_price_condition_instruction(
     )
 
 
-def _price_in_acceptable_zone(price: Decimal, zone: Any) -> bool | None:
+def _acceptable_zone_bounds(zone: Any) -> tuple[Decimal, Decimal] | None:
     if not isinstance(zone, dict):
         return None
     lower = zone.get("lower") or zone.get("min") or zone.get("min_price")
     upper = zone.get("upper") or zone.get("max") or zone.get("max_price")
     if lower in (None, "") or upper in (None, ""):
-        return None
+        raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件缺少可执行价格区间边界")
     try:
         lower_decimal = Decimal(str(lower))
         upper_decimal = Decimal(str(upper))
     except (InvalidOperation, ValueError, TypeError):
+        raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件区间边界不是合法 Decimal")
+    if (
+        not lower_decimal.is_finite()
+        or not upper_decimal.is_finite()
+        or lower_decimal <= Decimal("0")
+        or upper_decimal <= Decimal("0")
+        or lower_decimal > upper_decimal
+    ):
+        raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件区间边界非法")
+    return lower_decimal, upper_decimal
+
+
+def _price_in_acceptable_zone(price: Decimal, zone_bounds: tuple[Decimal, Decimal] | None) -> bool | None:
+    if zone_bounds is None:
         return None
-    if not lower_decimal.is_finite() or not upper_decimal.is_finite() or lower_decimal > upper_decimal:
-        return None
+    lower_decimal, upper_decimal = zone_bounds
     return lower_decimal <= price <= upper_decimal
+
+
+def _limit_price_from_zone(*, side: str, zone_bounds: tuple[Decimal, Decimal]) -> tuple[Decimal, str]:
+    lower_decimal, upper_decimal = zone_bounds
+    normalized_side = str(side).strip().upper()
+    if normalized_side == "BUY":
+        return upper_decimal, "acceptable_price_zone_upper"
+    if normalized_side == "SELL":
+        return lower_decimal, "acceptable_price_zone_lower"
+    raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件无法匹配候选订单方向")
+
+
+def _default_limit_valid_until(reference_time_utc: datetime) -> datetime:
+    reference_time = _ensure_utc(reference_time_utc)
+    cycle_start_hour = (reference_time.hour // 4) * 4
+    cycle_start = reference_time.replace(hour=cycle_start_hour, minute=0, second=0, microsecond=0)
+    return cycle_start + timedelta(hours=4, minutes=-10)
 
 
 def _price_condition_hash(condition: dict[str, Any]) -> str:
@@ -856,6 +923,7 @@ def _create_candidate(
             "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
             "time_in_force": instruction.time_in_force,
             "price_condition_hash": instruction.price_condition_hash,
+            "limit_price_source": instruction.limit_price_source,
         },
         intent_hash=candidate_intent_hash(payload),
         trace_id=trace_id,
@@ -1100,6 +1168,7 @@ def _build_plan_hash(
             "limit_price": str(instruction.limit_price) if instruction.limit_price is not None else "",
             "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
             "price_condition_hash": instruction.price_condition_hash,
+            "limit_price_source": instruction.limit_price_source,
             "config_hash": config["config_hash"],
         }
     )
@@ -1132,6 +1201,7 @@ def _calculation_evidence(*, context: OrderPlanContext, draft: PlanDraft, instru
         "limit_price": str(instruction.limit_price) if instruction.limit_price is not None else "",
         "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
         "price_condition_hash": instruction.price_condition_hash,
+        "limit_price_source": instruction.limit_price_source,
     }
 
 

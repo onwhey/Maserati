@@ -183,3 +183,38 @@ def test_atomic_condition_json_risk_value_marks_high_severity() -> None:
     assert output.values["value"]["condition_met"] is True
     assert output.values["value"]["risk_severity"] == "high"
     assert output.values["direction"] == "neutral"
+
+
+def test_atomic_condition_json_value_can_include_feature_value_snapshot() -> None:
+    output = AtomicConditionCalculator().calculate(
+        calculation_input(
+            params={
+                "conditions": [{"feature_code": "structure_major_support_upper_1d_365", "operator": "is_not_null"}],
+                "value_mode": "json",
+                "json_payload": {"structure_signal_family": "zone_snapshot"},
+                "include_feature_values": [
+                    "structure_major_support_lower_1d_365",
+                    "structure_major_support_upper_1d_365",
+                ],
+                "label_zh": "1d 大支撑区具备基本事实",
+            },
+            feature_values={
+                "structure_major_support_lower_1d_365": {
+                    "feature_value_id": 1,
+                    "value": "49000",
+                    "value_type": "decimal",
+                },
+                "structure_major_support_upper_1d_365": {
+                    "feature_value_id": 2,
+                    "value": "50000",
+                    "value_type": "decimal",
+                },
+            },
+            default_direction="neutral",
+        )
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["value"]["condition_met"] is True
+    assert output.values["value"]["feature_values"]["structure_major_support_lower_1d_365"]["value"] == "49000"
+    assert output.values["value"]["feature_values"]["structure_major_support_upper_1d_365"]["feature_value_id"] == 2

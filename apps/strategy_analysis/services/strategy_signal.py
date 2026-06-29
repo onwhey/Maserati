@@ -497,7 +497,23 @@ def _domain_value_payload(value: DomainSignalValue) -> dict[str, Any]:
         "coverage_ratio": value.coverage_ratio,
         "agreement_ratio": value.agreement_ratio,
         "definition_hash": value.definition_hash,
+        "payload_summary": _domain_value_payload_summary(value),
     }
+
+
+def _domain_value_payload_summary(value: DomainSignalValue) -> dict[str, Any]:
+    evidence_items = value.evidence_items
+    if not isinstance(evidence_items, list):
+        return {}
+    for item in evidence_items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("evidence_type") != "domain_grouped_atomic_aggregation":
+            continue
+        summary = item.get("summary")
+        if isinstance(summary, dict):
+            return _json_ready(summary)
+    return {}
 
 
 def _build_calculator_input(context: StrategySignalContext) -> CalculatorInput:

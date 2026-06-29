@@ -343,3 +343,26 @@ def test_strategy_signal_quality_records_issue_for_invalid_weight_shape_instead_
     assert result.status == "failed"
     assert result.data["quality_status"] == StrategySignalQualityStatus.FAILED
     assert StrategySignalQualityIssue.objects.filter(issue_code="strategy_signal_weight_shape_invalid").exists()
+
+
+@pytest.mark.django_db
+def test_strategy_signal_quality_records_issue_for_invalid_trade_price_condition() -> None:
+    fixture, rule_set, signal = build_quality_fixture()
+    StrategySignal.objects.filter(id=signal.id).update(
+        trade_price_condition={
+            "condition_type": "near_support_only",
+            "support_or_resistance_refs": [],
+            "allow_chasing": "false",
+        }
+    )
+    signal.refresh_from_db()
+
+    result = run_quality(signal=signal, release=fixture["release"], rule_set=rule_set)
+
+    assert result.status == "failed"
+    assert result.data["quality_status"] == StrategySignalQualityStatus.FAILED
+    assert StrategySignalQualityIssue.objects.filter(issue_code="strategy_signal_trade_price_condition_missing").exists()
+    assert StrategySignalQualityIssue.objects.filter(issue_code="strategy_signal_trade_price_condition_refs_invalid").exists()
+    assert StrategySignalQualityIssue.objects.filter(
+        issue_code="strategy_signal_trade_price_condition_allow_chasing_invalid"
+    ).exists()

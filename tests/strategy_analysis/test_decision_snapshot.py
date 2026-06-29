@@ -4,8 +4,10 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from django.utils import timezone
 
 from apps.alerts.models import AlertEvent
+from apps.strategy_analysis.default_decision_policy_definitions import DEFAULT_DECISION_POLICY_DEFINITIONS
 from apps.strategy_analysis.definition_hashes import decision_policy_definition_hash
 from apps.strategy_analysis.models import (
     AnalysisObjectStatus,
@@ -29,6 +31,7 @@ from apps.strategy_analysis.models import (
 from apps.strategy_analysis.services.decision_snapshot import build_decision_snapshot
 from apps.strategy_analysis.services.release import calculate_release_hash
 from apps.strategy_calculator.contracts import CalculatorInput, CalculatorMetadata, CalculatorOutput, CalculatorType
+from apps.strategy_calculator.decision_policy import PositionPolicyCalculator
 from apps.strategy_calculator.registry import CalculatorRegistry
 from apps.strategy_calculator.utils import stable_hash, thaw_value
 from tests.strategy_analysis.test_strategy_routing import build_routing_fixture, run_route
@@ -168,6 +171,37 @@ def create_decision_policy(
     )
 
 
+def create_position_policy_definition() -> DecisionPolicyDefinition:
+    template = DEFAULT_DECISION_POLICY_DEFINITIONS[0]
+    params_hash = stable_hash(template.params)
+    definition_hash = decision_policy_definition_hash(
+        policy_code=template.policy_code,
+        policy_version=template.policy_version,
+        algorithm_name=template.algorithm_name,
+        algorithm_version=template.algorithm_version,
+        input_schema_version=template.input_schema_version,
+        output_schema_version=template.output_schema_version,
+        target_schema_version=template.target_schema_version,
+        params_hash=params_hash,
+    )
+    return DecisionPolicyDefinition.objects.create(
+        policy_code=template.policy_code,
+        policy_version=template.policy_version,
+        display_name=template.display_name,
+        description=template.description,
+        algorithm_name=template.algorithm_name,
+        algorithm_version=template.algorithm_version,
+        input_schema_version=template.input_schema_version,
+        output_schema_version=template.output_schema_version,
+        target_schema_version=template.target_schema_version,
+        params=template.params,
+        params_hash=params_hash,
+        definition_hash=definition_hash,
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+    )
+
+
 def attach_decision_policy(fixture: dict[str, Any], policy: DecisionPolicyDefinition) -> None:
     release: StrategyAnalysisRelease = fixture["release"]
     StrategyAnalysisReleaseItem.objects.create(
@@ -222,6 +256,34 @@ def build_decision_fixture(
     return fixture, rule_set, signal, quality, policy
 
 
+def build_position_policy_decision_fixture(
+    *,
+    strategy_direction: str = StrategySignalDirection.BULLISH,
+    trade_price_condition: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], StrategySignal, StrategySignalQualityResult, DecisionPolicyDefinition]:
+    fixture = build_routing_fixture()
+    rule_set = create_quality_rule_set()
+    attach_quality_rule_set(fixture, rule_set)
+    policy = create_position_policy_definition()
+    attach_decision_policy(fixture, policy)
+    route_result = run_route(fixture)
+    assert route_result.status == "succeeded"
+    fixture["decision"] = StrategyRouteDecision.objects.get(id=route_result.data["strategy_route_decision_id"])
+    strategy_registry, _strategy_calculator = signal_registry(
+        FakeStrategySignalCalculator(
+            direction=strategy_direction,
+            trade_price_condition=trade_price_condition,
+        )
+    )
+    signal_result = run_signal(fixture, registry=strategy_registry)
+    assert signal_result.status == "succeeded"
+    signal = StrategySignal.objects.get(id=signal_result.data["strategy_signal_id"])
+    quality_result = run_quality(signal=signal, release=fixture["release"], rule_set=rule_set)
+    assert quality_result.status == "succeeded"
+    quality = StrategySignalQualityResult.objects.get(id=quality_result.data["quality_result_id"])
+    return fixture, signal, quality, policy
+
+
 def run_decision(
     *,
     quality: StrategySignalQualityResult,
@@ -259,6 +321,31 @@ def test_decision_snapshot_creates_target_position_after_quality_passed() -> Non
     assert snapshot.allows_order_plan is True
     assert calculator.calls == 1
     assert AlertEvent.objects.filter(source_module="DecisionSnapshot").count() == 0
+
+
+@pytest.mark.django_db
+def test_decision_snapshot_consumes_quality_passed_signal_with_position_policy_v1() -> None:
+    fixture, signal, quality, policy = build_position_policy_decision_fixture()
+    StrategySignalQualityResult.objects.filter(id=quality.id).update(market_as_of_utc=timezone.now())
+    quality.refresh_from_db()
+    registry = CalculatorRegistry()
+    registry.register(PositionPolicyCalculator())
+
+    result = run_decision(quality=quality, release=fixture["release"], registry=registry)
+
+    snapshot = DecisionSnapshot.objects.get()
+    assert result.status == "succeeded"
+    assert snapshot.strategy_signal_id == signal.id
+    assert snapshot.strategy_signal_quality_result_id == quality.id
+    assert snapshot.decision_policy_definition_id == policy.id
+    assert snapshot.policy_code == "position_policy"
+    assert snapshot.policy_version == "v1"
+    assert snapshot.target_intent == DecisionTargetIntent.TARGET_POSITION
+    assert str(snapshot.target_position_ratio) == "0.100000000000000000"
+    assert snapshot.is_usable is True
+    assert snapshot.allows_order_plan is True
+    assert snapshot.input_snapshot["policy_code"] == "position_policy"
+    assert "strategy_code" not in snapshot.input_snapshot
 
 
 @pytest.mark.django_db
