@@ -137,9 +137,12 @@ def _add_release_item(
     )
 
 
-def _create_default_release() -> StrategyAnalysisRelease:
+def _create_default_release(case_key: str) -> StrategyAnalysisRelease:
     quality_rule_set = _create_quality_rule_set()
-    release = StrategyAnalysisRelease.objects.create(release_code="p0-default-chain-release", created_by="test")
+    release = StrategyAnalysisRelease.objects.create(
+        release_code=f"p0-default-chain-release-{case_key}",
+        created_by="test",
+    )
 
     sort_order = 0
     for definition in FeatureDefinition.objects.order_by("feature_code", "definition_version"):
@@ -319,36 +322,59 @@ def _create_default_release() -> StrategyAnalysisRelease:
     return release
 
 
-def _feature_overrides() -> dict[str, Decimal]:
+def _base_feature_overrides() -> dict[str, Decimal]:
     return {
-        "close_vs_sma_pct_1d_200": Decimal("0.03"),
-        "close_vs_sma_pct_1d_365": Decimal("0.03"),
-        "slope_sma_1d_200": Decimal("0.004"),
-        "slope_sma_1d_365": Decimal("0.004"),
-        "return_pct_1d_365": Decimal("0.20"),
+        "close_vs_sma_pct_1d_200": Decimal("0"),
+        "close_vs_sma_pct_1d_365": Decimal("0"),
+        "slope_sma_1d_200": Decimal("0"),
+        "slope_sma_1d_365": Decimal("0"),
+        "return_pct_1d_365": Decimal("0"),
         "range_position_pct_1d_365": Decimal("0.50"),
-        "sma_spread_pct_1d_20_60": Decimal("0.006"),
-        "sma_spread_pct_1d_60_120": Decimal("0.006"),
-        "slope_sma_1d_120_lag10": Decimal("0.004"),
-        "close_vs_sma_pct_1d_60": Decimal("0.01"),
-        "higher_high_count_1d_60_block20": Decimal("2"),
-        "higher_low_count_1d_60_block20": Decimal("2"),
-        "sma_spread_pct_4h_20_60": Decimal("-0.006"),
-        "sma_spread_pct_4h_60_120": Decimal("-0.006"),
-        "slope_sma_4h_60_lag12": Decimal("-0.004"),
-        "close_vs_sma_pct_4h_60": Decimal("-0.01"),
-        "lower_high_count_4h_60_block20": Decimal("2"),
-        "lower_low_count_4h_60_block20": Decimal("2"),
-        "return_pct_1d_7": Decimal("-0.04"),
-        "return_delta_pct_1d_7": Decimal("0.02"),
-        "close_location_avg_pct_1d_3": Decimal("0.30"),
-        "return_pct_4h_24": Decimal("-0.02"),
-        "return_delta_pct_4h_24": Decimal("0.01"),
-        "close_location_avg_pct_4h_12": Decimal("0.35"),
+        "drawdown_from_high_pct_1d_365": Decimal("0"),
+        "recovery_ratio_from_drawdown_1d_365": Decimal("0.50"),
+        "rebound_from_drawdown_low_pct_1d_365": Decimal("0"),
+        "sma_spread_pct_1d_20_60": Decimal("0"),
+        "sma_spread_pct_1d_60_120": Decimal("0"),
+        "slope_sma_1d_120_lag10": Decimal("0"),
+        "close_vs_sma_pct_1d_60": Decimal("0"),
+        "higher_high_count_1d_60_block20": Decimal("0"),
+        "higher_low_count_1d_60_block20": Decimal("0"),
+        "lower_high_count_1d_60_block20": Decimal("0"),
+        "lower_low_count_1d_60_block20": Decimal("0"),
+        "sma_spread_pct_4h_20_60": Decimal("0"),
+        "sma_spread_pct_4h_60_120": Decimal("0"),
+        "slope_sma_4h_60_lag12": Decimal("0"),
+        "close_vs_sma_pct_4h_60": Decimal("0"),
+        "higher_high_count_4h_60_block20": Decimal("0"),
+        "higher_low_count_4h_60_block20": Decimal("0"),
+        "lower_high_count_4h_60_block20": Decimal("0"),
+        "lower_low_count_4h_60_block20": Decimal("0"),
+        "return_pct_1d_7": Decimal("0"),
+        "return_delta_pct_1d_7": Decimal("0"),
+        "up_bar_ratio_1d_7": Decimal("0.50"),
+        "down_bar_ratio_1d_7": Decimal("0.50"),
+        "consecutive_up_count_1d_7": Decimal("0"),
+        "consecutive_down_count_1d_7": Decimal("0"),
+        "movement_efficiency_1d_7": Decimal("0.50"),
+        "close_location_avg_pct_1d_3": Decimal("0.50"),
+        "return_pct_4h_24": Decimal("0"),
+        "return_delta_pct_4h_24": Decimal("0"),
+        "up_bar_ratio_4h_24": Decimal("0.50"),
+        "down_bar_ratio_4h_24": Decimal("0.50"),
+        "consecutive_up_count_4h_24": Decimal("0"),
+        "consecutive_down_count_4h_24": Decimal("0"),
+        "movement_efficiency_4h_24": Decimal("0.50"),
+        "close_location_avg_pct_4h_12": Decimal("0.50"),
         "atr_percentile_1d_120": Decimal("0.50"),
         "atr_percentile_4h_120": Decimal("0.50"),
         "realized_vol_percentile_4h_120": Decimal("0.50"),
         "volatility_ratio_4h_20_to_60": Decimal("1.00"),
+        "atr_pct_1d_14": Decimal("0.03"),
+        "atr_pct_4h_14": Decimal("0.02"),
+        "candle_range_pct_1d_latest": Decimal("0.03"),
+        "candle_range_pct_4h_latest": Decimal("0.02"),
+        "range_width_pct_1d_60": Decimal("0.15"),
+        "range_width_pct_4h_120": Decimal("0.08"),
         "structure_major_support_lower_1d_365": Decimal("49000"),
         "structure_major_support_upper_1d_365": Decimal("50000"),
         "structure_major_resistance_lower_1d_365": Decimal("59000"),
@@ -390,7 +416,147 @@ def _feature_overrides() -> dict[str, Decimal]:
     }
 
 
-def _create_feature_set_with_values(release: StrategyAnalysisRelease) -> FeatureSet:
+def _feature_overrides(case_key: str) -> dict[str, Decimal]:
+    values = _base_feature_overrides()
+    bullish_context = {
+        "close_vs_sma_pct_1d_200": Decimal("0.03"),
+        "close_vs_sma_pct_1d_365": Decimal("0.03"),
+        "slope_sma_1d_200": Decimal("0.004"),
+        "slope_sma_1d_365": Decimal("0.004"),
+        "return_pct_1d_365": Decimal("0.20"),
+    }
+    bearish_context = {
+        "close_vs_sma_pct_1d_200": Decimal("-0.03"),
+        "close_vs_sma_pct_1d_365": Decimal("-0.03"),
+        "slope_sma_1d_200": Decimal("-0.004"),
+        "slope_sma_1d_365": Decimal("-0.004"),
+        "return_pct_1d_365": Decimal("-0.20"),
+        "drawdown_from_high_pct_1d_365": Decimal("0.35"),
+    }
+    trend_1d_bullish = {
+        "sma_spread_pct_1d_20_60": Decimal("0.006"),
+        "sma_spread_pct_1d_60_120": Decimal("0.006"),
+        "slope_sma_1d_120_lag10": Decimal("0.004"),
+        "close_vs_sma_pct_1d_60": Decimal("0.01"),
+        "higher_high_count_1d_60_block20": Decimal("2"),
+        "higher_low_count_1d_60_block20": Decimal("2"),
+    }
+    trend_1d_bearish = {
+        "sma_spread_pct_1d_20_60": Decimal("-0.006"),
+        "sma_spread_pct_1d_60_120": Decimal("-0.006"),
+        "slope_sma_1d_120_lag10": Decimal("-0.004"),
+        "close_vs_sma_pct_1d_60": Decimal("-0.01"),
+        "lower_high_count_1d_60_block20": Decimal("2"),
+        "lower_low_count_1d_60_block20": Decimal("2"),
+    }
+    trend_4h_bullish = {
+        "sma_spread_pct_4h_20_60": Decimal("0.006"),
+        "sma_spread_pct_4h_60_120": Decimal("0.006"),
+        "slope_sma_4h_60_lag12": Decimal("0.004"),
+        "close_vs_sma_pct_4h_60": Decimal("0.01"),
+        "higher_high_count_4h_60_block20": Decimal("2"),
+        "higher_low_count_4h_60_block20": Decimal("2"),
+    }
+    trend_4h_bearish = {
+        "sma_spread_pct_4h_20_60": Decimal("-0.006"),
+        "sma_spread_pct_4h_60_120": Decimal("-0.006"),
+        "slope_sma_4h_60_lag12": Decimal("-0.004"),
+        "close_vs_sma_pct_4h_60": Decimal("-0.01"),
+        "lower_high_count_4h_60_block20": Decimal("2"),
+        "lower_low_count_4h_60_block20": Decimal("2"),
+    }
+    momentum_bullish_strengthening = {
+        "return_pct_1d_7": Decimal("0.04"),
+        "return_delta_pct_1d_7": Decimal("0.02"),
+        "up_bar_ratio_1d_7": Decimal("0.70"),
+        "consecutive_up_count_1d_7": Decimal("3"),
+        "close_location_avg_pct_1d_3": Decimal("0.75"),
+        "return_pct_4h_24": Decimal("0.02"),
+        "return_delta_pct_4h_24": Decimal("0.01"),
+        "up_bar_ratio_4h_24": Decimal("0.70"),
+        "consecutive_up_count_4h_24": Decimal("3"),
+        "close_location_avg_pct_4h_12": Decimal("0.75"),
+    }
+    momentum_bearish_strengthening = {
+        "return_pct_1d_7": Decimal("-0.04"),
+        "return_delta_pct_1d_7": Decimal("-0.02"),
+        "down_bar_ratio_1d_7": Decimal("0.70"),
+        "consecutive_down_count_1d_7": Decimal("3"),
+        "close_location_avg_pct_1d_3": Decimal("0.25"),
+        "return_pct_4h_24": Decimal("-0.02"),
+        "return_delta_pct_4h_24": Decimal("-0.01"),
+        "down_bar_ratio_4h_24": Decimal("0.70"),
+        "consecutive_down_count_4h_24": Decimal("3"),
+        "close_location_avg_pct_4h_12": Decimal("0.25"),
+    }
+    momentum_bullish_exhausting = {
+        "return_pct_1d_7": Decimal("0.04"),
+        "return_delta_pct_1d_7": Decimal("-0.02"),
+        "up_bar_ratio_1d_7": Decimal("0.70"),
+        "consecutive_up_count_1d_7": Decimal("3"),
+        "close_location_avg_pct_1d_3": Decimal("0.70"),
+        "return_pct_4h_24": Decimal("0.02"),
+        "return_delta_pct_4h_24": Decimal("-0.01"),
+        "up_bar_ratio_4h_24": Decimal("0.70"),
+        "consecutive_up_count_4h_24": Decimal("3"),
+        "close_location_avg_pct_4h_12": Decimal("0.70"),
+    }
+    momentum_bearish_exhausting = {
+        "return_pct_1d_7": Decimal("-0.04"),
+        "return_delta_pct_1d_7": Decimal("0.02"),
+        "down_bar_ratio_1d_7": Decimal("0.70"),
+        "consecutive_down_count_1d_7": Decimal("3"),
+        "close_location_avg_pct_1d_3": Decimal("0.30"),
+        "return_pct_4h_24": Decimal("-0.02"),
+        "return_delta_pct_4h_24": Decimal("0.01"),
+        "down_bar_ratio_4h_24": Decimal("0.70"),
+        "consecutive_down_count_4h_24": Decimal("3"),
+        "close_location_avg_pct_4h_12": Decimal("0.30"),
+    }
+    near_support_structure = {
+        "structure_major_range_position_pct_1d_365": Decimal("0.20"),
+        "structure_major_distance_to_support_upper_pct_1d_365": Decimal("0.005"),
+        "structure_major_distance_to_resistance_lower_pct_1d_365": Decimal("0.18"),
+        "structure_minor_range_position_pct_4h_120": Decimal("0.20"),
+        "structure_minor_distance_to_support_upper_pct_4h_120": Decimal("0.003"),
+        "structure_minor_distance_to_resistance_lower_pct_4h_120": Decimal("0.10"),
+    }
+    near_resistance_structure = {
+        "structure_major_range_position_pct_1d_365": Decimal("0.80"),
+        "structure_major_distance_to_support_upper_pct_1d_365": Decimal("0.18"),
+        "structure_major_distance_to_resistance_lower_pct_1d_365": Decimal("0.005"),
+        "structure_minor_range_position_pct_4h_120": Decimal("0.80"),
+        "structure_minor_distance_to_support_upper_pct_4h_120": Decimal("0.10"),
+        "structure_minor_distance_to_resistance_lower_pct_4h_120": Decimal("0.003"),
+    }
+
+    if case_key == "long_pullback_support":
+        values.update(bullish_context | trend_1d_bullish | trend_4h_bearish | momentum_bearish_exhausting | near_support_structure)
+    elif case_key == "long_trend_following":
+        values.update(bullish_context | trend_1d_bullish | trend_4h_bullish | momentum_bullish_strengthening | near_resistance_structure)
+        values.update(
+            {
+                "range_position_pct_1d_365": Decimal("0.80"),
+                "structure_major_breakout_above_resistance_pct_1d_365": Decimal("0.010"),
+                "structure_minor_breakout_above_resistance_pct_4h_120": Decimal("0.005"),
+            }
+        )
+    elif case_key == "short_trend_following":
+        values.update(bearish_context | trend_1d_bearish | trend_4h_bearish | momentum_bearish_strengthening | near_support_structure)
+        values.update(
+            {
+                "structure_major_breakdown_below_support_pct_1d_365": Decimal("0.010"),
+                "structure_minor_breakdown_below_support_pct_4h_120": Decimal("0.005"),
+            }
+        )
+    elif case_key == "short_rebound_pressure":
+        values.update(bearish_context | trend_1d_bearish | trend_4h_bullish | momentum_bullish_exhausting | near_resistance_structure)
+    else:
+        raise AssertionError(f"unknown P0 strategy chain case: {case_key}")
+    return values
+
+
+def _create_feature_set_with_values(release: StrategyAnalysisRelease, *, case_key: str) -> FeatureSet:
     snapshot = create_market_snapshot()
     now = timezone.now()
     snapshot.analysis_close_time_utc = now
@@ -415,8 +581,8 @@ def _create_feature_set_with_values(release: StrategyAnalysisRelease) -> Feature
         )
     )
     feature_set = FeatureSet.objects.create(
-        feature_set_key=stable_hash({"feature_set": "p0-default-chain", "release_hash": release.release_hash}),
-        business_request_key="p0-default-chain-feature-set",
+        feature_set_key=stable_hash({"feature_set": f"p0-default-chain-{case_key}", "release_hash": release.release_hash}),
+        business_request_key=f"p0-default-chain-feature-set-{case_key}",
         market_snapshot=snapshot,
         strategy_analysis_release=release,
         release_hash=release.release_hash,
@@ -429,7 +595,7 @@ def _create_feature_set_with_values(release: StrategyAnalysisRelease) -> Feature
         trace_id="trace-p0-chain",
         trigger_source="test",
     )
-    overrides = _feature_overrides()
+    overrides = _feature_overrides(case_key)
     definitions = FeatureDefinition.objects.order_by("feature_code", "definition_version")
     FeatureValue.objects.bulk_create(
         [
@@ -463,18 +629,36 @@ def _assert_zone(zone: dict[str, object], *, lower: str, upper: str) -> None:
     assert Decimal(str(zone["upper"])) == Decimal(upper)
 
 
-def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings) -> None:
+def _early_cycle_reference_time():
+    now = timezone.now()
+    cycle_start = now.replace(hour=(now.hour // 4) * 4, minute=0, second=0, microsecond=0)
+    return cycle_start + timedelta(minutes=5)
+
+
+def _run_p0_default_chain_case(
+    settings,
+    *,
+    case_key: str,
+    expected_regime_code: str,
+    expected_strategy_code: str,
+    expected_direction: str,
+    expected_zone_lower: str,
+    expected_zone_upper: str,
+    mark_price: str,
+    expected_side: str,
+    expected_limit_price: str,
+) -> None:
     _seed_default_definitions()
-    release = _create_default_release()
-    feature_set = _create_feature_set_with_values(release)
+    release = _create_default_release(case_key)
+    feature_set = _create_feature_set_with_values(release, case_key=case_key)
 
     atomic_result = build_atomic_signals(
         feature_set_id=feature_set.id,
         strategy_analysis_release_id=release.id,
         release_hash=release.release_hash,
         expected_definition_set_hash=_definition_set_hash(release, ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION),
-        business_request_key="p0-default-chain-atomic",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-atomic-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert atomic_result.status == "succeeded", atomic_result
@@ -485,8 +669,8 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         strategy_analysis_release_id=release.id,
         release_hash=release.release_hash,
         expected_definition_set_hash=_definition_set_hash(release, ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION),
-        business_request_key="p0-default-chain-domain",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-domain-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert domain_result.status == "succeeded", domain_result
@@ -498,13 +682,13 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         strategy_analysis_release_id=release.id,
         strategy_analysis_release_hash=release.release_hash,
         expected_market_regime_definition_hash=regime_definition.definition_hash,
-        business_request_key="p0-default-chain-regime",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-regime-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert regime_result.status == "succeeded", regime_result
     regime = MarketRegimeSnapshot.objects.get(id=regime_result.data["market_regime_snapshot_id"])
-    assert regime.regime_code == "bullish_pullback"
+    assert regime.regime_code == expected_regime_code
 
     strategy_definition_hash = _definition_set_hash(release, ReleaseItemComponentType.STRATEGY_DEFINITION)
     route_policy = StrategyRoutePolicy.objects.get(policy_code="context_structure_strategy_routing", policy_version="v1")
@@ -514,27 +698,31 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         strategy_analysis_release_hash=release.release_hash,
         expected_strategy_route_policy_hash=route_policy.definition_hash,
         expected_strategy_definition_set_hash=strategy_definition_hash,
-        business_request_key="p0-default-chain-route",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-route-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert route_result.status == "succeeded", route_result
     route = StrategyRouteDecision.objects.get(id=route_result.data["strategy_route_decision_id"])
-    assert route.selected_strategy_definition.strategy_code == "long_pullback_support"
+    assert route.selected_strategy_definition.strategy_code == expected_strategy_code
 
     signal_result = generate_strategy_signal(
         strategy_route_decision_id=route.id,
         strategy_analysis_release_id=release.id,
         strategy_analysis_release_hash=release.release_hash,
         expected_strategy_definition_hash=route.selected_strategy_definition.definition_hash,
-        business_request_key="p0-default-chain-signal",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-signal-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert signal_result.status == "succeeded", signal_result
     signal = StrategySignal.objects.get(id=signal_result.data["strategy_signal_id"])
-    assert signal.direction == "bullish"
-    _assert_zone(signal.trade_price_condition["acceptable_price_zone"], lower="49000", upper="50000")
+    assert signal.direction == expected_direction
+    _assert_zone(
+        signal.trade_price_condition["acceptable_price_zone"],
+        lower=expected_zone_lower,
+        upper=expected_zone_upper,
+    )
 
     quality_rule_set = StrategySignalQualityRuleSet.objects.get(rule_set_code="default_strategy_signal_quality")
     quality_result = validate_strategy_signal(
@@ -542,9 +730,9 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         strategy_analysis_release_id=release.id,
         strategy_analysis_release_hash=release.release_hash,
         expected_quality_rule_set_hash=quality_rule_set.rule_set_hash,
-        business_request_key="p0-default-chain-quality",
+        business_request_key=f"p0-default-chain-quality-{case_key}",
         validation_mode=StrategySignalQualityValidationMode.LIVE,
-        trace_id="trace-p0-chain",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert quality_result.status == "succeeded", quality_result
@@ -556,8 +744,8 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         strategy_signal_quality_result_id=quality.id,
         strategy_analysis_release_id=release.id,
         strategy_analysis_release_hash=release.release_hash,
-        business_request_key="p0-default-chain-decision",
-        trace_id="trace-p0-chain",
+        business_request_key=f"p0-default-chain-decision-{case_key}",
+        trace_id=f"trace-p0-chain-{case_key}",
         trigger_source="test",
     )
     assert decision_result.status == "succeeded", decision_result
@@ -573,23 +761,88 @@ def test_p0_default_chain_reaches_limit_order_plan_from_feature_values(settings)
         "created_at_utc": decision.created_at_utc.isoformat() if decision.created_at_utc else None,
         "calculation_snapshot": decision.decision_calculation_snapshot,
     }
-    _assert_zone(decision.frozen_trade_price_condition["acceptable_price_zone"], lower="49000", upper="50000")
+    _assert_zone(
+        decision.frozen_trade_price_condition["acceptable_price_zone"],
+        lower=expected_zone_lower,
+        upper=expected_zone_upper,
+    )
 
     settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
     _enable_runtime_permission(settings)
     account = _account_facts(position="0", order_types=["MARKET", "LIMIT"])
-    price = _price(value="51000")
+    price = _price(value=mark_price)
     order_plan_result = _run(
         decision=decision,
         account=account,
         price=price,
-        key="p0-default-chain-order-plan",
+        key=f"p0-default-chain-order-plan-{case_key}",
+        reference_time_utc=_early_cycle_reference_time(),
     )
     assert order_plan_result.status == "succeeded", order_plan_result
     plan = OrderPlan.objects.get(id=order_plan_result.data["order_plan_id"])
     assert plan.status == OrderPlanStatus.CREATED
     candidate = CandidateOrderIntent.objects.get(order_plan=plan, intent_role=CandidateIntentRole.PRIMARY)
+    assert candidate.side == expected_side
     assert candidate.order_type == "LIMIT"
-    assert candidate.limit_price == Decimal("50000")
+    assert candidate.limit_price == Decimal(expected_limit_price)
 
     RuntimeTradingConfig.objects.all().delete()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        {
+            "case_key": "long_pullback_support",
+            "expected_regime_code": "bullish_pullback",
+            "expected_strategy_code": "long_pullback_support",
+            "expected_direction": "bullish",
+            "expected_zone_lower": "49000",
+            "expected_zone_upper": "50000",
+            "mark_price": "51000",
+            "expected_side": "BUY",
+            "expected_limit_price": "50000",
+        },
+        {
+            "case_key": "long_trend_following",
+            "expected_regime_code": "bullish_breakout",
+            "expected_strategy_code": "long_trend_following",
+            "expected_direction": "bullish",
+            "expected_zone_lower": "59000",
+            "expected_zone_upper": "60000",
+            "mark_price": "61000",
+            "expected_side": "BUY",
+            "expected_limit_price": "60000",
+        },
+        {
+            "case_key": "short_trend_following",
+            "expected_regime_code": "bearish_breakdown",
+            "expected_strategy_code": "short_trend_following",
+            "expected_direction": "bearish",
+            "expected_zone_lower": "49000",
+            "expected_zone_upper": "50000",
+            "mark_price": "48000",
+            "expected_side": "SELL",
+            "expected_limit_price": "49000",
+        },
+        {
+            "case_key": "short_rebound_pressure",
+            "expected_regime_code": "bearish_rebound",
+            "expected_strategy_code": "short_rebound_pressure",
+            "expected_direction": "bearish",
+            "expected_zone_lower": "59000",
+            "expected_zone_upper": "60000",
+            "mark_price": "58000",
+            "expected_side": "SELL",
+            "expected_limit_price": "59000",
+        },
+    ],
+    ids=[
+        "long-pullback-support",
+        "long-trend-following",
+        "short-trend-following",
+        "short-rebound-pressure",
+    ],
+)
+def test_p0_default_strategy_chain_reaches_expected_order_plan_from_feature_values(settings, scenario) -> None:
+    _run_p0_default_chain_case(settings, **scenario)
