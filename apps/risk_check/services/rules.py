@@ -5,6 +5,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+from django.utils import timezone
+
 from apps.binance_account_sync.models import BinancePositionMode, BinanceSyncPurpose, BinanceSyncStatus
 from apps.binance_gateway.types import MARKET_TYPE_COIN_M, MARKET_TYPE_USDS_M
 from apps.order_plan.models import (
@@ -114,8 +116,17 @@ class CandidateIntentValidRule(BaseRiskRulePlugin):
             return self.blocked(definition, reason_code="candidate_not_pending_risk_check", message="候选订单意图不是待风控状态")
         if candidate.intent_role not in {CandidateIntentRole.PRIMARY, CandidateIntentRole.FALLBACK_REDUCE_ONLY}:
             return self.blocked(definition, reason_code="candidate_role_invalid", message="候选订单角色不合法")
-        if candidate.side not in {"BUY", "SELL"} or candidate.position_side != "BOTH" or candidate.order_type != "MARKET":
-            return self.blocked(definition, reason_code="candidate_order_parameters_invalid", message="候选订单基础参数不合法")
+        if candidate.side not in {"BUY", "SELL"} or candidate.position_side != "BOTH" or candidate.order_type not in {"MARKET", "LIMIT"}:
+            return self.blocked(definition, reason_code="candidate_order_parameters_invalid", message="candidate order parameters invalid")
+        if candidate.order_type == "MARKET" and (candidate.limit_price is not None or candidate.time_in_force):
+            return self.blocked(definition, reason_code="candidate_market_order_has_limit_fields", message="MARKET candidate must not carry LIMIT fields")
+        if candidate.order_type == "LIMIT":
+            if candidate.limit_price is None or candidate.limit_price <= 0 or not candidate.time_in_force or candidate.limit_valid_until_utc is None:
+                return self.blocked(definition, reason_code="candidate_limit_parameters_missing", message="LIMIT candidate requires frozen price, timeInForce and valid-until")
+            if candidate.time_in_force not in {"GTC", "GTX"}:
+                return self.blocked(definition, reason_code="candidate_limit_time_in_force_invalid", message="LIMIT candidate timeInForce invalid")
+            if candidate.limit_valid_until_utc <= timezone.now():
+                return self.blocked(definition, reason_code="candidate_limit_expired", message="LIMIT candidate valid-until expired")
         if candidate.requested_size <= 0 or candidate.requested_notional <= 0:
             return self.blocked(definition, reason_code="candidate_requested_size_invalid", message="候选订单数量或名义价值不合法")
         expected_hash = candidate_intent_hash(_candidate_hash_payload(context, candidate))
@@ -498,6 +509,11 @@ def _candidate_hash_payload(context: RiskCheckContext, candidate) -> dict[str, A
         "plan_type": candidate.plan_type,
         "side": candidate.side,
         "exchange_reduce_only": candidate.exchange_reduce_only,
+        "order_type": candidate.order_type,
+        "time_in_force": candidate.time_in_force,
+        "limit_price": decimal_hash_value(candidate.limit_price) if candidate.limit_price is not None else "",
+        "limit_valid_until_utc": candidate.limit_valid_until_utc.isoformat() if candidate.limit_valid_until_utc else "",
+        "price_condition_hash": candidate.price_condition_hash,
         "requested_size": decimal_hash_value(candidate.requested_size),
         "requested_notional": decimal_hash_value(candidate.requested_notional),
         "requested_size_unit": candidate.requested_size_unit,

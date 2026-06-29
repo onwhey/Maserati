@@ -593,6 +593,11 @@ def _create_approved_order_intent(
             "side": candidate.side,
             "requested_size": str(candidate.requested_size),
             "exchange_reduce_only": candidate.exchange_reduce_only,
+            "order_type": candidate.order_type,
+            "time_in_force": candidate.time_in_force,
+            "limit_price": str(candidate.limit_price) if candidate.limit_price is not None else "",
+            "limit_valid_until_utc": candidate.limit_valid_until_utc.isoformat() if candidate.limit_valid_until_utc else "",
+            "price_condition_hash": candidate.price_condition_hash,
             "expires_at_utc": expires_at.isoformat(),
         }
     )
@@ -611,6 +616,11 @@ def _create_approved_order_intent(
         side=candidate.side,
         position_side=candidate.position_side,
         order_type=candidate.order_type,
+        time_in_force=candidate.time_in_force,
+        limit_price=candidate.limit_price,
+        limit_valid_until_utc=candidate.limit_valid_until_utc,
+        price_condition_hash=candidate.price_condition_hash,
+        price_condition_evidence=candidate.price_condition_evidence,
         exchange_reduce_only=candidate.exchange_reduce_only,
         requested_size=candidate.requested_size,
         requested_notional=candidate.requested_notional,

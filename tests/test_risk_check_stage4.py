@@ -53,6 +53,7 @@ def _account_facts(
     step_size: str = "0.001",
     max_qty: str = "10000",
     max_notional: str | None = None,
+    order_types: list[str] | None = None,
 ) -> BinanceSyncRun:
     now = timezone.now()
     asset = "USDT" if market_type == "usds_m_futures" else "BTC"
@@ -96,7 +97,7 @@ def _account_facts(
         "settleAsset": asset,
         "quantityPrecision": 3 if market_type == "usds_m_futures" else 0,
         "contractSize": contract_size,
-        "orderTypes": ["MARKET"],
+        "orderTypes": order_types or ["MARKET"],
         "filters": filters,
     }
     position_payload = {"symbol": symbol, "positionSide": "BOTH", "positionAmt": position}
@@ -119,9 +120,12 @@ def _account_facts(
     return run
 
 
-def _order_plan(*, settings, ratio: str, account: BinanceSyncRun, price, key: str):
+def _order_plan(*, settings, ratio: str, account: BinanceSyncRun, price, key: str, decision_calculation_snapshot: dict | None = None):
     _enable_stage4(settings, market_type="COIN-M" if account.market_type == "coin_m_futures" else "USDS-M")
     decision = _decision(ratio=ratio, key=f"decision-{key}")
+    if decision_calculation_snapshot is not None:
+        decision.decision_calculation_snapshot = decision_calculation_snapshot
+        decision.save(update_fields=["decision_calculation_snapshot", "updated_at_utc"])
     return run_order_plan_step(
         business_request_key=f"plan-{key}",
         decision_snapshot_id=decision.id,
@@ -172,6 +176,47 @@ def test_risk_check_allow_creates_approved_order_intent_and_keeps_lock_active(se
     assert candidate.status == CandidateIntentStatus.APPROVED
     assert lock.status == ActiveLockStatus.ACTIVE
     assert AlertEvent.objects.filter(source_module="RiskCheck", event_type="approved_order_intent_generated").count() == 1
+
+
+def test_risk_check_allows_limit_candidate_and_preserves_frozen_price_condition(settings) -> None:
+    _enable_stage4(settings)
+    settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+    valid_until = timezone.now() + timedelta(hours=3, minutes=50)
+    decision = _decision(ratio="0.5", key="decision-risk-limit")
+    decision.decision_calculation_snapshot = {
+        "frozen_trade_price_condition": {
+            "order_type": "LIMIT",
+            "limit_price": "49000",
+            "limit_valid_until_utc": valid_until.isoformat(),
+            "time_in_force": "GTC",
+            "price_condition_hash": "limit-condition-hash",
+        }
+    }
+    decision.save(update_fields=["decision_calculation_snapshot", "updated_at_utc"])
+    account = _account_facts(position="0", equity="1000", available="1000", leverage="20", order_types=["MARKET", "LIMIT"])
+    price = _price(value="50000")
+    plan_result = run_order_plan_step(
+        business_request_key="plan-risk-limit",
+        decision_snapshot_id=decision.id,
+        binance_sync_run_id=account.id,
+        price_snapshot_id=price.id,
+        reference_time_utc=timezone.now(),
+        trace_id="trace-plan-risk-limit",
+        trigger_source="test",
+    )
+
+    result = _risk_check(key="limit")
+
+    approved = ApprovedOrderIntent.objects.get()
+    candidate = CandidateOrderIntent.objects.get(intent_role=CandidateIntentRole.PRIMARY)
+    assert plan_result.status == "succeeded"
+    assert result.status == "succeeded"
+    assert approved.order_type == "LIMIT"
+    assert approved.time_in_force == "GTC"
+    assert approved.limit_price == Decimal("49000")
+    assert approved.limit_valid_until_utc == valid_until
+    assert approved.price_condition_hash == "limit-condition-hash"
+    assert approved.price_condition_evidence == candidate.price_condition_evidence
 
 
 def test_risk_check_is_idempotent_without_duplicate_approved_or_alerts(settings) -> None:

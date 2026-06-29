@@ -21,11 +21,9 @@ from .business import (
     DomainSignalStepAdapter,
     ExecutionPreparationStepAdapter,
     FeatureLayerStepAdapter,
-    FillSyncStepAdapter,
     MarketRegimeStepAdapter,
     MarketSnapshotStepAdapter,
     OrderPlanStepAdapter,
-    OrderStatusSyncStepAdapter,
     OrderSubmissionStepAdapter,
     PriceSnapshotStepAdapter,
     RiskCheckStepAdapter,
@@ -55,8 +53,6 @@ def default_adapter_registry() -> dict[str, BusinessStepAdapter]:
         RiskCheckStepAdapter(),
         ExecutionPreparationStepAdapter(),
         OrderSubmissionStepAdapter(),
-        OrderStatusSyncStepAdapter(),
-        FillSyncStepAdapter(),
     )
     return {adapter.adapter_code: adapter for adapter in adapters}
 
@@ -67,4 +63,3 @@ def get_adapter(adapter_code: str, registry: Mapping[str, BusinessStepAdapter] |
         return source[adapter_code]
     except KeyError as exc:
         raise LookupError(f"adapter_not_registered:{adapter_code}") from exc
-

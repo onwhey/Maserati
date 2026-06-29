@@ -91,6 +91,7 @@ def _account_facts(
     equity: str = "1000",
     contract_size: str | None = None,
     step_size: str = "0.001",
+    order_types: list[str] | None = None,
 ) -> BinanceSyncRun:
     now = timezone.now()
     asset = "USDT" if market_type == "usds_m_futures" else "BTC"
@@ -122,7 +123,7 @@ def _account_facts(
         "settleAsset": asset,
         "quantityPrecision": 3 if market_type == "usds_m_futures" else 0,
         "contractSize": contract_size,
-        "orderTypes": ["MARKET"],
+        "orderTypes": order_types or ["MARKET"],
         "filters": [
             {
                 "filterType": "LOT_SIZE",
@@ -266,6 +267,85 @@ def test_usds_m_creates_plan_primary_candidate_and_active_lock(settings) -> None
     assert lock.current_order_plan_id == plan.id
     assert plan.active_lock_id == lock.id
     assert AlertEvent.objects.filter(source_module="OrderPlan", event_type="candidate_order_intent_generated").count() == 1
+
+
+def test_order_plan_generates_limit_candidate_from_frozen_trade_price_condition(settings) -> None:
+    _enable_runtime_permission(settings)
+    settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+    valid_until = timezone.now() + timedelta(hours=3, minutes=50)
+    decision = _decision(ratio="0.5", key="decision-limit")
+    decision.decision_calculation_snapshot = {
+        "frozen_trade_price_condition": {
+            "order_type": "LIMIT",
+            "limit_price": "49000",
+            "limit_valid_until_utc": valid_until.isoformat(),
+            "time_in_force": "GTC",
+            "price_condition_hash": "limit-condition-hash",
+        }
+    }
+    decision.save(update_fields=["decision_calculation_snapshot", "updated_at_utc"])
+    account = _account_facts(position="0", order_types=["MARKET", "LIMIT"])
+    price = _price(value="50000")
+
+    result = _run(decision=decision, account=account, price=price, key="plan-limit")
+
+    candidate = CandidateOrderIntent.objects.get()
+    assert result.status == "succeeded"
+    assert candidate.order_type == "LIMIT"
+    assert candidate.limit_price == Decimal("49000")
+    assert candidate.limit_valid_until_utc == valid_until
+    assert candidate.time_in_force == "GTC"
+    assert candidate.price_condition_hash == "limit-condition-hash"
+
+
+def test_standard_strategy_price_condition_without_executable_price_does_not_chase_market(settings) -> None:
+    _enable_runtime_permission(settings)
+    decision = _decision(ratio="0.5", key="decision-text-price-condition")
+    decision.frozen_trade_price_condition = {
+        "condition_type": "near_support_only",
+        "reference_price_zone": "支撑区附近",
+        "acceptable_price_zone": "支撑区附近",
+        "support_or_resistance_refs": ["structure.support.primary"],
+        "allow_chasing": False,
+        "reason_code": "long_pullback_support_entry",
+        "reason_summary_zh": "只在支撑区附近考虑执行。",
+    }
+    decision.save(update_fields=["frozen_trade_price_condition", "updated_at_utc"])
+    account = _account_facts(position="0")
+    price = _price(value="50000")
+
+    result = _run(decision=decision, account=account, price=price, key="plan-text-price-condition")
+
+    plan = OrderPlan.objects.get()
+    assert result.status == "no_action"
+    assert result.reason_code == "price_condition_not_actionable"
+    assert plan.status == OrderPlanStatus.NO_ORDER_REQUIRED
+    assert CandidateOrderIntent.objects.count() == 0
+    assert OrderPlanActiveLock.objects.count() == 0
+
+
+def test_standard_strategy_price_condition_allows_market_only_when_chasing_allowed_and_price_in_zone(settings) -> None:
+    _enable_runtime_permission(settings)
+    decision = _decision(ratio="0.5", key="decision-actionable-price-condition")
+    decision.frozen_trade_price_condition = {
+        "condition_type": "near_support_only",
+        "reference_price_zone": "支撑区附近",
+        "acceptable_price_zone": {"lower": "49000", "upper": "51000"},
+        "support_or_resistance_refs": ["structure.support.primary"],
+        "allow_chasing": True,
+        "reason_code": "long_pullback_support_entry",
+        "reason_summary_zh": "允许价格仍在可接受区间时执行。",
+    }
+    decision.save(update_fields=["frozen_trade_price_condition", "updated_at_utc"])
+    account = _account_facts(position="0")
+    price = _price(value="50000")
+
+    result = _run(decision=decision, account=account, price=price, key="plan-actionable-price-condition")
+
+    candidate = CandidateOrderIntent.objects.get()
+    assert result.status == "succeeded"
+    assert candidate.order_type == "MARKET"
+    assert candidate.price_condition_evidence["condition_type"] == "near_support_only"
 
 
 def test_order_plan_is_idempotent_and_does_not_duplicate_lock_or_candidate(settings) -> None:

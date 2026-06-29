@@ -22,8 +22,7 @@ ACTION_GROUPS: dict[str, frozenset[str]] = {
     "controlled_fill_sync": frozenset({"ops_operator", "admin"}),
     "manual_active_lock_closeout": frozenset({"ops_operator", "admin"}),
     "manage_runtime_guard_issue": frozenset({"ops_operator", "admin"}),
-    "backfill_performance_metrics": frozenset({"ops_operator", "admin"}),
-    "manage_ai_review": frozenset({"ops_operator", "review_exporter", "admin"}),
+    "manage_review_dataset": frozenset({"ops_operator", "review_exporter", "admin"}),
 }
 
 

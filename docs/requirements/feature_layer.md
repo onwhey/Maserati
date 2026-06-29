@@ -1656,7 +1656,7 @@ confirm-write 只控制是否落库；
 45. FeatureLayer 不生成 DecisionSnapshot。
 46. FeatureLayer 不请求 Binance。
 47. FeatureLayer 不调用 BinanceGateway。
-48. FeatureLayer 不调用 DeepSeekGateway。
+48. FeatureLayer 不调用大模型。
 49. FeatureLayer 不调用 DataQuality 或 DataBackfill。
 50. FeatureLayer 不修改 Kline 或 MarketSnapshot。
 51. FeatureLayer 不保存或查询编排 ID。
@@ -1724,7 +1724,7 @@ created FeatureSet 的 allows_atomic_signal = true；
 涉及 OrderPlan / CandidateOrderIntent：否；
 涉及 RiskCheck / ApprovedOrderIntent：否；
 涉及 ExecutionPreparation / Execution：否；
-涉及 OrderStatusSync / FillSync / PerformanceMetrics / AIReview：否；
+涉及 OrderStatusSync / FillSync / ReviewDataset：否；
 写 AlertEvent：仅异常、阻断或未知状态；
 dry-run：可计算但不写正式业务对象；
 confirm-write：如提供，只控制落库，不改变业务放行标准。

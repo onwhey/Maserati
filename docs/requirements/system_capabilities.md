@@ -72,14 +72,14 @@ REST API 路径；
 风控审批；
 执行准备；
 订单提交；
+限价单周期收尾；
 订单状态同步；
 成交同步；
 编排；
 运行巡检；
 通知与审计；
-绩效复盘；
+复盘数据集；
 后台运维；
-离线 AI 复盘；
 配置、权限与存储治理。
 ```
 
@@ -105,10 +105,26 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 → RiskCheck / ApprovedOrderIntent
 → ExecutionPreparation / PreparedOrderIntent
 → Execution / OrderSubmissionAttempt
+→ 订单提交事实完成，主交易编排结束
+或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+```
+
+订单提交后的状态与成交同步属于独立订单生命周期分支，不内嵌在主交易编排尾部：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → FillSync
-→ 订单状态与成交事实同步完成
-或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+→ ActiveLock 安全收尾判断
+```
+
+LIMIT 订单到期仍未终态时，存在独立周期收尾分支：
+
+```text
+OrderCycleCloseout / OrderCancelAttempt
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
 ```
 
 横切能力包括：
@@ -117,9 +133,8 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 PipelineOrchestrator；
 RuntimeGuard；
 Notifications / AlertEvent / NotificationDeliveryAttempt / NotificationSuppression；
-PerformanceMetrics；
+ReviewDataset；
 OpsConsole；
-AIReview；
 AuditRecord。
 ```
 
@@ -164,7 +179,7 @@ ApprovedOrderIntent 不等于 PreparedOrderIntent；
 PreparedOrderIntent 不等于 OrderSubmissionAttempt；
 OrderSubmissionAttempt 不等于交易所完整订单状态；
 TradeFill 不等于 BinancePositionSnapshot；
-AIReviewReport 不等于交易决策。
+ReviewDatasetRecord 不等于交易决策、策略评估结论或生产策略变更指令。
 ```
 
 ## 5. 外部访问网关能力
@@ -174,8 +189,7 @@ AIReviewReport 不等于交易决策。
 当前必须具备的网关：
 
 ```text
-BinanceGateway；
-DeepSeekGateway。
+BinanceGateway。
 ```
 
 ### 5.1 BinanceGateway
@@ -194,6 +208,7 @@ BinanceGateway 是系统访问 Binance REST API 的唯一基础设施边界。
 受限账户只读接口；
 受限公共市场接口；
 受限订单提交接口；
+受限订单撤销接口；
 受限订单查询接口；
 受限成交查询接口。
 ```
@@ -210,33 +225,9 @@ Gateway 不拥有业务对象状态；
 Gateway 不直接写业务 AlertEvent。
 ```
 
-### 5.2 DeepSeekGateway
+当前正式系统内不调用 DeepSeek。
 
-DeepSeekGateway 是系统访问 DeepSeek API 的唯一基础设施边界。
-
-必须具备：
-
-```text
-统一 API key 管理；
-统一 base_url 与 model profile；
-统一超时；
-统一限频；
-统一错误分类；
-统一脱敏技术日志；
-结构化输出支持；
-fake gateway 测试入口。
-```
-
-边界：
-
-```text
-只有 AIReview 允许作为业务调用方；
-OpsConsole 不得直接调用 DeepSeekGateway；
-DeepSeekGateway 不选择复盘范围；
-DeepSeekGateway 不生成交易结论；
-DeepSeekGateway 不修改策略、风控、真实交易运行配置或订单事实；
-DeepSeekGateway 不参与实时交易。
-```
+如后续重新引入系统内大模型复盘或其他大模型能力，必须先新增独立需求和安全边界；不得让大模型参与实时交易决策。
 
 ## 6. 行情数据能力
 
@@ -668,7 +659,7 @@ BinanceOrderSubmissionGateway 独立遵守自己的部署级接口硬配置。
 后台不管理 API key；
 后台不写 .env；
 后台不热切 active market domain；
-MySQL 运行开关不控制账户展示刷新、ActiveLock、PerformanceMetrics 或 AIReview；
+MySQL 运行开关不控制账户展示刷新、ActiveLock 或 ReviewDataset；
 Execution、OrderStatusSync 和 FillSync 不重新读取真实交易运行开关。
 ```
 
@@ -684,7 +675,7 @@ OrderPlan 是唯一允许把目标仓位转换为 CandidateOrderIntent 的模块
 消费 PriceSnapshot；
 计算当前仓位与目标仓位差异；
 生成 OrderPlan；
-生成 CandidateOrderIntent；
+生成 MARKET 或 LIMIT CandidateOrderIntent；
 必要时生成 fallback_reduce_only 候选；
 创建并维护 OrderPlanActiveLock；
 写入 OrderPlan 相关 AlertEvent。
@@ -766,14 +757,14 @@ ExecutionPreparation 不绕过 BinanceGateway。
 
 ## 25. 订单提交能力
 
-Execution 是唯一允许提交真实或模拟订单的模块。
+Execution 是唯一允许提交真实订单的模块。
 
 必须具备：
 
 ```text
 消费 PreparedOrderIntent；
 提交前检查 ActiveLock；
-通过 BinanceGateway 提交订单；
+通过 BinanceGateway 提交 MARKET 或 LIMIT 订单；
 记录 OrderSubmissionAttempt；
 区分 accepted、rejected、unknown、failed_before_submit、blocked_before_submit；
 写入 Execution 相关 AlertEvent。
@@ -788,7 +779,7 @@ Gateway 不重试；
 Celery 不重试；
 编排层不重试；
 unknown 不得推断成功或失败；
-unknown 必须进入 OrderStatusSync 查询。
+unknown 必须通过独立订单生命周期同步管线进入 OrderStatusSync 查询。
 ```
 
 边界：
@@ -801,7 +792,36 @@ Execution 不根据本地推测生成 TradeFill；
 Execution 不自动释放 unknown 订单的 ActiveLock。
 ```
 
-## 26. 订单状态同步能力
+Execution 产生 `OrderSubmissionAttempt` 后，主交易编排结束；订单状态与成交事实由独立订单生命周期同步管线继续处理。
+
+## 26. 限价单周期收尾能力
+
+OrderCycleCloseout 负责在本周期结束前处理仍未终态的 LIMIT 订单。
+
+必须具备：
+
+```text
+只处理已提交的 LIMIT 订单；
+按冻结的 limit_valid_until_utc 判断是否进入收尾；
+通过 BinanceOrderCancelGateway 撤销仍未终态的限价单；
+记录 OrderCancelAttempt；
+撤单后交给 OrderStatusSync 查询订单终态；
+明确终态后交给 FillSync 查询成交事实；
+写入限价单周期收尾相关 AlertEvent。
+```
+
+边界：
+
+```text
+OrderCycleCloseout 不提交新订单；
+OrderCycleCloseout 不追单；
+OrderCycleCloseout 不改单；
+OrderCycleCloseout 不生成 TradeFill；
+OrderCycleCloseout 不释放 ActiveLock；
+OrderCycleCloseout 不根据未成交结果评价策略。
+```
+
+## 27. 订单状态同步能力
 
 OrderStatusSync 负责在订单提交后查询交易所订单状态。
 
@@ -836,7 +856,7 @@ OrderStatusSync 不根据账户余额倒推成交；
 OrderStatusSync 不在 unknown、not_found、NEW 或 PARTIALLY_FILLED 时自动释放锁。
 ```
 
-## 27. 成交同步能力
+## 28. 成交同步能力
 
 FillSync 负责查询、保存和汇总订单成交事实。
 
@@ -862,7 +882,7 @@ FillSync 不根据成交汇总直接生成 BinancePositionSnapshot；
 FillSync 不在成交不确定时释放锁。
 ```
 
-## 28. 编排能力
+## 29. 编排能力
 
 PipelineOrchestrator 负责按照步骤定义推进一轮业务流程。
 
@@ -905,7 +925,7 @@ PipelineOrchestrator 不直接提交订单；
 `OrchestrationBusinessObjectLink` 只提供一轮运行的快捷审计索引，不替代业务外键。
 复盘、后台、巡检和审计类对象可以保存 OrchestrationRun 引用，用于展示、复盘或人工排查，但不得作为交易模块的正式输入。
 
-## 29. 运行巡检能力
+## 30. 运行巡检能力
 
 RuntimeGuard 负责发现自动编排主链路中的漏跑、卡住、长期不确定状态和静默异常。
 
@@ -940,8 +960,7 @@ RuntimeGuard 不补跑业务；
 RuntimeGuard 不恢复编排；
 RuntimeGuard 不修改业务对象；
 RuntimeGuard 不释放锁；
-RuntimeGuard 不巡检 AIReview；
-RuntimeGuard 不巡检 PerformanceMetrics；
+RuntimeGuard 不巡检 ReviewDataset；
 RuntimeGuard 不巡检后台人工补算；
 RuntimeGuard 不巡检后台人工复盘；
 RuntimeGuard 不调用 Binance；
@@ -950,7 +969,7 @@ RuntimeGuard 不直接发送 Hermes；
 RuntimeGuard 不自动恢复交易。
 ```
 
-## 30. 通知与审计能力
+## 31. 通知与审计能力
 
 Notifications 负责 AlertEvent、通知投递尝试和通知抑制记录。
 
@@ -985,39 +1004,43 @@ Hermes 只负责通知，不触发交易；
 ```text
 真实交易运行开关变更；
 人工锁收尾；
-PerformanceMetrics 后台一键补算；
-AIReview 请求创建；
+ReviewDataset 导出；
 高风险状态变更。
 ```
 
-## 31. 绩效复盘能力
+## 32. 复盘数据集能力
 
-PerformanceMetrics 负责账户表现与周期浮动收益复盘。
+ReviewDataset 负责把已经落库的系统事实整理成可下载、可校验、可离线分析的复盘数据集。
 
 必须具备：
 
 ```text
 读取已落库业务事实；
-使用自动边界 trade_preparation 账户快照；
-计算 UTC 4 小时周期浮动收益；
-关联 OrchestrationRun；
-记录 OrchestrationRunPerformance；
-保留计算输入摘要；
-支持人工 confirm-write 权限控制。
+按 UTC 4 小时周期组织数据；
+关联 subject_orchestration_run；
+关联开始边界和结束边界 OrchestrationRun；
+整理行情、特征、原子、领域、市场环境、策略、目标仓位、账户、价格、订单、成交、告警、巡检和审计事实；
+记录 ReviewDatasetRecord；
+创建 ReviewDatasetExport；
+生成 manifest、内容 hash、schema 版本和导出审计；
+支持 JSON / JSONL / CSV 等白名单格式导出。
 ```
 
 边界：
 
 ```text
-PerformanceMetrics 不请求 Binance；
-PerformanceMetrics 不读取 ops_display；
-PerformanceMetrics 不影响交易主流程；
-PerformanceMetrics 不生成交易信号；
-PerformanceMetrics 不调整策略；
-PerformanceMetrics 不自动暂停或恢复交易。
+ReviewDataset 不请求 Binance；
+ReviewDataset 不调用 DeepSeek；
+ReviewDataset 不生成复盘结论；
+ReviewDataset 不判断策略是否正确；
+ReviewDataset 不影响交易主流程；
+ReviewDataset 不生成交易信号；
+ReviewDataset 不调整策略；
+ReviewDataset 不自动暂停或恢复交易；
+ReviewDataset 的导出结果只能用于人工、本地脚本或 Codex skill 离线复盘。
 ```
 
-## 32. 后台运维能力
+## 33. 后台运维能力
 
 OpsConsole 是运维控制台和复盘工作台。
 
@@ -1028,12 +1051,11 @@ Dashboard；
 OrchestrationRun 查看；
 订单链路查看；
 账户展示刷新；
-PerformanceMetrics 查看；
+ReviewDataset 导出；
 RuntimeGuardIssue 查看；
 AlertEvent 查看；
 真实交易运行开关操作；
 受控人工入口；
-AIReview 请求与报告查看；
 审计日志查看。
 ```
 
@@ -1042,7 +1064,6 @@ AIReview 请求与报告查看；
 ```text
 OpsConsole 不直接访问数据库；
 OpsConsole 不直接调用 BinanceGateway；
-OpsConsole 不直接调用 DeepSeekGateway；
 OpsConsole 不直接提交订单；
 OpsConsole 不直接释放 ActiveLock；
 OpsConsole 不直接写业务表；
@@ -1053,50 +1074,32 @@ OpsConsole 不热切 active market domain。
 
 后台后续可以承载更多运维功能，但当前只实现已形成需求合同的功能。
 
-## 33. 离线 AI 复盘能力
+## 34. Codex skill 离线复盘边界
 
-AIReview 负责把已落库业务事实打包给大模型进行离线复盘。
+当前系统不在 Django 内部实现大模型复盘。
 
-必须具备：
-
-```text
-创建 AIReviewRequest；
-选择 review_mode；
-选择 OrchestrationRun 范围；
-生成 AIReviewPackage；
-执行脱敏；
-生成 prompt；
-通过 DeepSeekGateway 调用 DeepSeek；
-保存 AIReviewAttempt；
-保存 AIReviewReport；
-保存 AIReviewFinding；
-保存 AIReviewSuggestion；
-支持 OpsConsole 查看和人工处理。
-```
-
-当前复盘模式包括：
+正式路径是：
 
 ```text
-cycle_review；
-anomaly_review；
-order_lifecycle_review；
-performance_attribution_review；
-manual_question_review。
+ReviewDataset API / 导出文件
+→ 本地 Codex skill 读取数据
+→ 本地生成 Markdown / JSON 复盘报告
 ```
 
 边界：
 
 ```text
-AIReview 不参与实时交易；
-AIReview 不生成交易指令；
-AIReview 不自动修改策略；
-AIReview 不自动修改真实交易运行配置；
-AIReview 不自动提交订单；
-AIReview 不自动释放锁；
-AIReview 不绕过 DeepSeekGateway。
+Codex skill 不写生产 MySQL；
+Codex skill 不参与实时交易；
+Codex skill 不生成交易指令；
+Codex skill 不自动修改策略；
+Codex skill 不自动修改真实交易运行配置；
+Codex skill 不自动提交订单；
+Codex skill 不自动释放锁；
+Codex skill 的复盘结果默认只保存为本地文件。
 ```
 
-## 34. 配置与权限能力
+## 35. 配置与权限能力
 
 系统必须具备清晰的配置、密钥、权限和审计边界。
 
@@ -1124,7 +1127,7 @@ Celery task 不能绕过后端安全校验；
 management command 不能绕过后端安全校验。
 ```
 
-## 35. 数据与存储能力
+## 36. 数据与存储能力
 
 系统必须以 MySQL 作为核心业务主存储，以 Redis 作为短期能力支撑。
 
@@ -1154,8 +1157,8 @@ MySQL 必须保存：
 成交事实；
 编排运行；
 运行巡检问题；
-绩效记录；
-复盘请求、复盘数据包、复盘调用尝试、复盘报告、复盘发现和人工建议；
+复盘数据集记录；
+复盘数据导出记录；
 AlertEvent；
 NotificationDeliveryAttempt；
 NotificationSuppression；
@@ -1186,7 +1189,7 @@ Celery result backend。
 交易、风控、订单、成交、仓位、复盘数据不可追溯。
 ```
 
-## 36. 调度与幂等能力
+## 37. 调度与幂等能力
 
 系统必须支持自动运行和人工入口的幂等保护。
 
@@ -1213,7 +1216,7 @@ management command 只作为入口；
 调度器不得直接提交订单。
 ```
 
-## 37. 当前不包含的能力
+## 38. 当前不包含的能力
 
 当前不包含：
 
@@ -1245,7 +1248,7 @@ DecisionSnapshot 直接生成订单动作。
 
 这些能力不得因为代码实现便利而提前进入主链路。
 
-## 38. 明确禁止能力
+## 39. 明确禁止能力
 
 任何阶段都禁止：
 
@@ -1271,7 +1274,7 @@ unknown 状态被自动解释为成功或失败；
 仅凭本地推导释放 ActiveLock。
 ```
 
-## 39. 能力验收方向
+## 40. 能力验收方向
 
 系统能力验收不以收益率为唯一标准。
 
@@ -1321,18 +1324,18 @@ OrderStatusSyncRecord 可追溯到 OrderSubmissionAttempt；
 TradeFill 可追溯到订单状态和成交同步；
 OrchestrationRun 可聚合本轮业务对象索引；
 RuntimeGuardIssue 可追溯到被巡检对象；
-PerformanceMetrics 可追溯到相邻自动边界账户快照；
-AIReviewReport 可追溯到复盘数据包、prompt 和 DeepSeekGateway 调用；
+ReviewDatasetRecord 可追溯到 subject_orchestration_run、相邻自动边界账户快照和相关业务对象；
+ReviewDatasetExport 可追溯到导出范围、数据集记录、manifest 和内容 hash；
 AlertEvent 可追溯到相关业务对象；
 NotificationDeliveryAttempt 和 NotificationSuppression 可追溯到 AlertEvent。
 ```
 
-## 40. 最终结论
+## 41. 最终结论
 
 当前系统能力目标是：
 
 ```text
-建立一个从可信行情事实到目标仓位决策、账户与价格事实、订单规划、风控审批、执行准备、受控提交、订单追踪、成交同步、巡检、通知、绩效复盘和离线 AI 复盘的自动交易闭环。
+建立一个从可信行情事实到目标仓位决策、账户与价格事实、订单规划、风控审批、执行准备、受控提交、订单追踪、成交同步、巡检、通知和复盘数据集导出的自动交易闭环。
 ```
 
 一句话：

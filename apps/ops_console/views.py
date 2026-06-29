@@ -14,30 +14,33 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.debug import sensitive_post_parameters
 from django.views.decorators.http import require_POST
 
-from apps.ai_review.services import build_review_package, create_review_request, run_ai_review, update_suggestion_status
 from apps.binance_account_sync.services.sync import refresh_for_ops_console
 from apps.fill_sync.services.sync import recover_order_fills
 from apps.order_plan.services.active_lock import manual_closeout_active_lock
 from apps.order_status_sync.services.status_sync import recover_order_status_once
-from apps.performance_metrics.selectors import get_performance_record, list_performance_records
-from apps.performance_metrics.services import backfill_missing_closed_period_performance, preview_missing_closed_period_performance
+from apps.review_dataset.services import (
+    create_review_dataset_export,
+    mark_review_dataset_export_downloaded,
+    preview_review_dataset,
+)
 from apps.runtime_guard.services.guard import update_runtime_guard_issue_status
 
 from .permissions import has_ops_permission, require_ops_permission
 from .responses import error_response, ok_response
 from .selectors import (
-    OpsConsoleObjectNotFound,
     account_overview,
     dashboard_summary,
     get_alert_detail,
-    get_ai_review_detail,
     get_order_detail,
+    get_review_dataset_export_detail,
+    get_review_dataset_record_detail,
     get_run_detail,
     get_runtime_guard_issue_detail,
-    list_ai_review_requests,
     list_alerts,
     list_audit_log,
     list_orders,
+    list_review_dataset_exports,
+    list_review_dataset_records,
     list_runtime_guard_issues,
     list_runs,
     real_trading_status,
@@ -65,7 +68,7 @@ def _json_object_body(request: HttpRequest) -> tuple[dict[str, Any] | None, Json
 def _handle_selector(selector: Callable[..., Any], *args: Any, **kwargs: Any) -> JsonResponse:
     try:
         return ok_response(selector(*args, **kwargs))
-    except OpsConsoleObjectNotFound:
+    except LookupError:
         return error_response(
             reason_code="ops_console_object_not_found",
             message_zh="请求查看的对象不存在。",
@@ -369,158 +372,80 @@ def audit_log_view(request: HttpRequest) -> JsonResponse:
 
 
 @require_ops_permission("view_ops_console")
-def performance_records_view(request: HttpRequest) -> JsonResponse:
-    return _handle_selector(list_performance_records, request.GET)
+def review_dataset_records_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_review_dataset_records, request.GET)
 
 
 @require_ops_permission("view_ops_console")
-def performance_record_detail_view(_request: HttpRequest, performance_id: int) -> JsonResponse:
-    record = get_performance_record(performance_id)
-    if record is None:
-        return error_response(
-            reason_code="ops_console_object_not_found",
-            message_zh="请求查看的绩效复盘结果不存在。",
-            status=404,
-        )
-    return ok_response(record)
+def review_dataset_record_detail_view(_request: HttpRequest, record_id: int) -> JsonResponse:
+    return _handle_selector(get_review_dataset_record_detail, record_id)
 
 
 @require_ops_permission("view_ops_console")
-def performance_preview_view(_request: HttpRequest) -> JsonResponse:
-    return ok_response(preview_missing_closed_period_performance())
-
-
-@require_ops_permission("backfill_performance_metrics", methods=("POST",))
-def performance_backfill_view(request: HttpRequest) -> JsonResponse:
-    try:
-        body = json.loads(request.body.decode("utf-8") or "{}")
-    except json.JSONDecodeError:
-        return error_response(
-            reason_code="ops_console_invalid_json",
-            message_zh="请求体不是合法 JSON。",
-            status=400,
-        )
-    if body.get("confirm_write") is not True:
-        return error_response(
-            reason_code="performance_backfill_confirm_write_required",
-            message_zh="绩效补算会写入复盘结果，必须显式 confirm_write=true。",
-            status=400,
-        )
-    reason = str(body.get("reason", "")).strip()
-    if not reason:
-        return error_response(
-            reason_code="performance_backfill_reason_required",
-            message_zh="绩效补算需要填写操作原因。",
-            status=400,
-        )
-    trace_id = str(body.get("trace_id", "")).strip() or f"ops-performance-{request.user.id}"
-    result = backfill_missing_closed_period_performance(
-        operator_id=str(getattr(request.user, "username", "") or request.user.id),
-        reason=reason,
-        trace_id=trace_id,
-    )
-    return ok_response(
-        {
-            "status": str(result.status),
-            "reason_code": result.reason_code,
-            "message": result.message,
-            **result.data,
-        },
-        reason_code=result.reason_code,
-    )
+def review_dataset_exports_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_review_dataset_exports, request.GET)
 
 
 @require_ops_permission("view_ops_console")
-def ai_review_requests_view(request: HttpRequest) -> JsonResponse:
-    return _handle_selector(list_ai_review_requests, request.GET)
+def review_dataset_export_detail_view(_request: HttpRequest, export_id: int) -> JsonResponse:
+    return _handle_selector(get_review_dataset_export_detail, export_id)
 
 
-@require_ops_permission("view_ops_console")
-def ai_review_request_detail_view(_request: HttpRequest, request_id: int) -> JsonResponse:
-    return _handle_selector(get_ai_review_detail, request_id)
-
-
-@require_ops_permission("manage_ai_review", methods=("POST",))
-def ai_review_create_request_view(request: HttpRequest) -> JsonResponse:
+@require_ops_permission("view_ops_console", methods=("POST",))
+def review_dataset_preview_view(request: HttpRequest) -> JsonResponse:
     body, error = _json_object_body(request)
     if error is not None:
         return error
     assert body is not None
-    result = create_review_request(
-        review_mode=str(body.get("review_mode", "")),
+    result = preview_review_dataset(
         range_selector=body.get("range_selector", {}),
         filters=body.get("filters", {}),
-        manual_question=str(body.get("manual_question", "")),
-        model_profile_code=str(body.get("model_profile_code", "")),
-        requested_by=_operator_id(request),
-        request_key=str(body.get("request_key", "")),
-        trace_id=str(body.get("trace_id", "")).strip() or f"ops-ai-review-{request.user.id}",
-        trigger_source="ops_console_ai_review",
+        trace_id=str(body.get("trace_id", "")).strip() or f"ops-review-dataset-preview-{request.user.id}",
+        trigger_source="ops_console_review_dataset",
     )
     return _service_response(result)
 
 
-@require_ops_permission("manage_ai_review", methods=("POST",))
-def ai_review_build_package_view(request: HttpRequest, request_id: int) -> JsonResponse:
+@require_ops_permission("manage_review_dataset", methods=("POST",))
+def review_dataset_export_create_view(request: HttpRequest) -> JsonResponse:
     body, error = _json_object_body(request)
     if error is not None:
         return error
     assert body is not None
-    try:
-        result = build_review_package(
-            ai_review_request_id=request_id,
-            trace_id=str(body.get("trace_id", "")).strip(),
-            trigger_source="ops_console_ai_review",
-        )
-    except ObjectDoesNotExist:
-        return error_response(
-            reason_code="ops_console_object_not_found",
-            message_zh="请求操作的 AIReviewRequest 不存在。",
-            status=404,
-        )
+    if confirm_error := _confirm_write_error(body, message_zh="ReviewDataset 导出会写入导出记录、审计和导出文件，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="ReviewDataset 导出需要填写操作原因。")
+    if reason_error is not None:
+        return reason_error
+    result = create_review_dataset_export(
+        range_selector=body.get("range_selector", {}),
+        filters=body.get("filters", {}),
+        export_format=str(body.get("export_format", "json")),
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=str(body.get("trace_id", "")).strip() or f"ops-review-dataset-export-{request.user.id}",
+        trigger_source="ops_console_review_dataset",
+    )
     return _service_response(result)
 
 
-@require_ops_permission("manage_ai_review", methods=("POST",))
-def ai_review_run_view(request: HttpRequest, request_id: int) -> JsonResponse:
+@require_ops_permission("manage_review_dataset", methods=("POST",))
+def review_dataset_export_download_mark_view(request: HttpRequest, export_id: int) -> JsonResponse:
     body, error = _json_object_body(request)
     if error is not None:
         return error
     assert body is not None
     try:
-        result = run_ai_review(
-            ai_review_request_id=request_id,
-            trace_id=str(body.get("trace_id", "")).strip(),
-            trigger_source="ops_console_ai_review",
-        )
-    except ObjectDoesNotExist:
-        return error_response(
-            reason_code="ops_console_object_not_found",
-            message_zh="请求操作的 AIReviewRequest 不存在。",
-            status=404,
-        )
-    return _service_response(result)
-
-
-@require_ops_permission("manage_ai_review", methods=("POST",))
-def ai_review_update_suggestion_view(request: HttpRequest, suggestion_id: int) -> JsonResponse:
-    body, error = _json_object_body(request)
-    if error is not None:
-        return error
-    assert body is not None
-    try:
-        result = update_suggestion_status(
-            suggestion_id=suggestion_id,
-            new_status=str(body.get("new_status", "")),
+        result = mark_review_dataset_export_downloaded(
+            export_id=export_id,
             operator_id=_operator_id(request),
-            decision_note=str(body.get("decision_note", "")),
-            trace_id=str(body.get("trace_id", "")).strip() or f"ops-ai-review-suggestion-{request.user.id}",
-            trigger_source="ops_console_ai_review",
+            trace_id=str(body.get("trace_id", "")).strip() or f"ops-review-dataset-download-{request.user.id}",
+            trigger_source="ops_console_review_dataset",
         )
     except ObjectDoesNotExist:
         return error_response(
             reason_code="ops_console_object_not_found",
-            message_zh="请求操作的 AIReviewSuggestion 不存在。",
+            message_zh="请求操作的 ReviewDatasetExport 不存在。",
             status=404,
         )
     return _service_response(result)

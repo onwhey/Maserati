@@ -10,6 +10,13 @@
 PreparedOrderIntent
 → Execution / OrderSubmission
 → OrderSubmissionAttempt
+→ 订单提交事实完成
+```
+
+订单提交后的状态与成交事实由独立订单生命周期同步管线推进：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → OrderStatusSyncRecord
 → FillSync
@@ -24,11 +31,12 @@ PreparedOrderIntent
 把一份已通过风控和执行前检查的订单请求提交给 Binance；
 严格保证同一 PreparedOrderIntent 最多提交一次；
 区分订单提交 accepted / rejected / unknown / 提交前阻断 / 提交前失败；
-对 accepted / unknown 订单执行 2 秒一次、最多 30 秒的状态查询；
+对 accepted / unknown 订单登记或触发独立订单生命周期同步管线；
+由订单生命周期同步管线执行 2 秒一次、最多 30 秒的状态查询；
 只在明确终态后同步成交；
 保存逐笔成交和订单成交汇总；
 只在订单状态与成交事实完整时安全释放 ActiveLock；
-为编排、后台、RuntimeGuard、PerformanceMetrics 和 AIReview 提供可信订单事实。
+为编排、后台、RuntimeGuard 和 ReviewDataset 提供可信订单事实。
 ```
 
 本文档不实现四小时主编排，不实现 RuntimeGuard，不实现 Notifications 投递，不实现后台 UI。
@@ -67,10 +75,12 @@ ActiveLock 什么时候可以安全释放；
 编排步骤如何登记和恢复；
 RuntimeGuard 如何巡检；
 通知如何投递到 Hermes；
-绩效如何计算；
+ReviewDataset 如何使用订单和成交事实；
 AI 如何复盘；
 后台页面如何展示。
 ```
+
+限价单周期收尾撤单由 `docs/requirements/order_cycle_closeout.md` 定义。本阶段如接入该能力，只允许围绕既有 LIMIT 订单执行周期收尾撤单，不得扩展为通用撤单、改单或追单。
 
 ---
 
@@ -112,6 +122,7 @@ docs/requirements/execution_preparation.md
 docs/requirements/order_submission.md
 docs/requirements/order_status_sync.md
 docs/requirements/fill_sync.md
+docs/requirements/order_cycle_closeout.md
 docs/requirements/notifications.md
 docs/requirements/pipeline_orchestrator.md
 docs/requirements/runtime_guard.md
@@ -833,12 +844,14 @@ trigger_source。
 ```text
 调用 Execution / OrderSubmission service；
 理解 accepted / rejected / unknown / blocked_before_submit / failed_before_submit；
-accepted 或 unknown 时继续 OrderStatusSync；
+accepted 或 unknown 时登记或触发独立订单生命周期同步管线；
 rejected 或提交前阻断时受控停止；
 返回 order_submission_attempt_id。
 ```
 
 ### 11.2 OrderStatusSyncStepAdapter
+
+该 adapter 属于独立订单生命周期同步管线，不属于 OrderSubmission 后主交易 run 的内嵌尾部步骤。
 
 输入：
 
@@ -860,6 +873,8 @@ trigger_source。
 ```
 
 ### 11.3 FillSyncStepAdapter
+
+该 adapter 属于独立订单生命周期同步管线，不属于 OrderSubmission 后主交易 run 的内嵌尾部步骤。
 
 输入：
 

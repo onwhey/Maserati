@@ -13,7 +13,7 @@ OrderPlan
 RiskCheck
 ExecutionPreparation
 OpsConsole
-PerformanceMetrics
+ReviewDataset
 Review
 ```
 
@@ -157,7 +157,7 @@ ops_display
 
 ### 7.1 trade_preparation
 
-由 BinanceAccountSyncStepAdapter 在自动四小时编排起始账户边界步骤调用。该步骤先于行情、特征、信号、决策和订单链路执行，既为 PerformanceMetrics 保存周期账户边界事实，也为后续可能出现的 TARGET_POSITION 订单链路提供同一份账户事实。业务模块只接收不透明 `business_request_key`，不读取编排对象。
+由 BinanceAccountSyncStepAdapter 在自动四小时编排起始账户边界步骤调用。该步骤先于行情、特征、信号、决策和订单链路执行，既为 ReviewDataset 保存周期账户边界事实，也为后续可能出现的 TARGET_POSITION 订单链路提供同一份账户事实。业务模块只接收不透明 `business_request_key`，不读取编排对象。
 
 规则：
 
@@ -173,7 +173,7 @@ ops_display
 
 ```text
 完整保存账户、余额、持仓和交易规则快照；
-该批次可以作为 PerformanceMetrics 自动周期边界；
+该批次可以作为 ReviewDataset 自动周期边界；
 该批次可以作为 OrderPlan / RiskCheck / ExecutionPreparation 的上游账户事实；
 后续 NO_TARGET_CHANGE / NO_TRADE / no_strategy / 真实交易权限关闭不会触发第二次 trade_preparation 同步；
 后续流程不得用 ops_display 或数据库最新批次替换该批次。

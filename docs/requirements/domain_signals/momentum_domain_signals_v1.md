@@ -606,12 +606,10 @@ momentum_unclear。
 突破质量不足；
 牛市回调；
 熊市反弹；
-支撑区适合做多；
-压力区适合做空；
-应该追多；
-应该追空；
-应该减仓；
-应该清仓。
+支撑区或压力区的交易处理；
+追单判断；
+仓位调整判断；
+订单动作判断。
 ```
 
 这些必须由 MarketRegime 或更下游模块在自身边界内完成。
@@ -688,7 +686,7 @@ strength 只按 1d 方向差计算
 payload_summary.primary_momentum_phase = exhausting
 ```
 
-不得输出“应该减仓”或“应该做空”。
+不得输出仓位处理或交易方向处理。
 
 ### 12.3 1d 空头动能增强
 
@@ -727,7 +725,7 @@ state_code = momentum_1d_bearish_exhausting
 payload_summary.primary_momentum_phase = exhausting
 ```
 
-不得输出“应该反手做多”。
+不得输出交易方向处理。
 
 ### 12.5 1d 不明确但 4h 偏多
 
@@ -770,7 +768,7 @@ payload_summary.short_cycle_momentum_direction = bearish；
 payload_summary.short_cycle_momentum_phase = strengthening。
 ```
 
-不得输出“趋势反转”或“应该做空”。
+不得输出“趋势反转”或交易方向处理。
 
 ### 12.7 覆盖率不足
 

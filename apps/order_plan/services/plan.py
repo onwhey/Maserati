@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from django.conf import settings
@@ -69,6 +69,16 @@ class ContextLoadBlocked:
     reason_code: str
     message: str
     context: OrderPlanContext | None = None
+
+
+@dataclass(frozen=True)
+class OrderExecutionInstruction:
+    order_type: str
+    time_in_force: str = ""
+    limit_price: Decimal | None = None
+    limit_valid_until_utc: datetime | None = None
+    price_condition_hash: str = ""
+    price_condition_evidence: dict[str, Any] | None = None
 
 
 def create_order_plan(
@@ -203,6 +213,12 @@ def create_order_plan(
             min_rebalance_notional=config["min_rebalance_notional"],
             rule=rule,
         )
+        draft, instruction = _resolve_execution_instruction(
+            context=context,
+            draft=draft,
+            config=config,
+            reference_time_utc=reference_time,
+        )
     except OrderPlanCalculationError as exc:
         return _persist_calculation_block(
             context=context,
@@ -217,6 +233,7 @@ def create_order_plan(
     return _persist_order_plan(
         context=context,
         draft=draft,
+        instruction=instruction,
         config=config,
         business_request_key=business_request_key,
         decision_snapshot_id=decision_snapshot_id,
@@ -227,10 +244,185 @@ def create_order_plan(
     )
 
 
+def _resolve_execution_instruction(
+    *,
+    context: OrderPlanContext,
+    draft: PlanDraft,
+    config: dict[str, Any],
+    reference_time_utc: datetime,
+) -> tuple[PlanDraft, OrderExecutionInstruction]:
+    if draft.primary is None:
+        return draft, OrderExecutionInstruction(order_type="MARKET")
+    condition = _trade_price_condition(context.decision_snapshot)
+    if not condition:
+        return draft, OrderExecutionInstruction(order_type="MARKET")
+
+    order_type = str(
+        condition.get("order_type")
+        or condition.get("preferred_order_type")
+        or condition.get("execution_order_type")
+        or ""
+    ).strip().upper()
+    if not order_type and _is_standard_trade_price_condition(condition):
+        return _standard_price_condition_instruction(
+            context=context,
+            draft=draft,
+            condition=condition,
+        )
+    if not order_type:
+        raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "冻结价格条件缺少可解析订单规划语义")
+    supported_order_types = set(config.get("supported_order_types") or ["MARKET"])
+    if order_type not in supported_order_types:
+        raise OrderPlanCalculationError("unsupported_order_type", "OrderPlan 当前配置不支持该订单类型")
+    if order_type == "MARKET":
+        return (
+            draft,
+            OrderExecutionInstruction(
+                order_type="MARKET",
+                price_condition_hash=_price_condition_hash(condition),
+                price_condition_evidence=condition,
+            ),
+        )
+    if order_type != "LIMIT":
+        raise OrderPlanCalculationError("unsupported_order_type", "OrderPlan 只支持 MARKET 或 LIMIT 候选订单")
+    if context.symbol_rule_snapshot.supported_order_types and "LIMIT" not in context.symbol_rule_snapshot.supported_order_types:
+        raise OrderPlanCalculationError("unsupported_order_type", "交易规则不支持 LIMIT 订单")
+
+    limit_price = _positive_condition_decimal(condition.get("limit_price") or condition.get("price"))
+    valid_until = _condition_datetime(condition.get("limit_valid_until_utc") or condition.get("valid_until_utc"))
+    if valid_until <= reference_time_utc:
+        raise OrderPlanCalculationError("limit_price_condition_expired", "LIMIT 价格条件已经过期")
+    time_in_force = str(condition.get("time_in_force") or condition.get("timeInForce") or "").strip().upper()
+    if time_in_force not in {"GTC", "GTX"}:
+        raise OrderPlanCalculationError("limit_time_in_force_invalid", "LIMIT 订单必须冻结 GTC 或 GTX")
+    return (
+        draft,
+        OrderExecutionInstruction(
+            order_type="LIMIT",
+            time_in_force=time_in_force,
+            limit_price=limit_price,
+            limit_valid_until_utc=valid_until,
+            price_condition_hash=_price_condition_hash(condition),
+            price_condition_evidence=condition,
+        ),
+    )
+
+
+def _trade_price_condition(decision: DecisionSnapshot) -> dict[str, Any]:
+    if isinstance(decision.frozen_trade_price_condition, dict) and decision.frozen_trade_price_condition:
+        return decision.frozen_trade_price_condition
+    for container in (
+        decision.decision_calculation_snapshot,
+        decision.evidence_summary,
+        decision.input_snapshot,
+    ):
+        if not isinstance(container, dict):
+            continue
+        raw = container.get("frozen_trade_price_condition") or container.get("trade_price_condition")
+        if isinstance(raw, dict):
+            return raw
+    return {}
+
+
+def _is_standard_trade_price_condition(condition: dict[str, Any]) -> bool:
+    required = {
+        "condition_type",
+        "reference_price_zone",
+        "acceptable_price_zone",
+        "support_or_resistance_refs",
+        "allow_chasing",
+        "reason_code",
+        "reason_summary_zh",
+    }
+    return required.issubset(set(condition))
+
+
+def _standard_price_condition_instruction(
+    *,
+    context: OrderPlanContext,
+    draft: PlanDraft,
+    condition: dict[str, Any],
+) -> tuple[PlanDraft, OrderExecutionInstruction]:
+    allow_chasing = condition.get("allow_chasing")
+    if not isinstance(allow_chasing, bool):
+        raise OrderPlanCalculationError("invalid_frozen_trade_price_condition", "价格条件 allow_chasing 必须是 bool")
+    acceptable_zone = condition.get("acceptable_price_zone")
+    current_price = context.price_snapshot.mark_price
+    in_zone = _price_in_acceptable_zone(current_price, acceptable_zone)
+    if allow_chasing and in_zone is True:
+        return (
+            draft,
+            OrderExecutionInstruction(
+                order_type="MARKET",
+                price_condition_hash=_price_condition_hash(condition),
+                price_condition_evidence=condition,
+            ),
+        )
+    return (
+        replace(
+            draft,
+            status=OrderPlanStatus.NO_ORDER_REQUIRED,
+            reason_code="price_condition_not_actionable",
+            primary=None,
+            fallback=None,
+        ),
+        OrderExecutionInstruction(
+            order_type="MARKET",
+            price_condition_hash=_price_condition_hash(condition),
+            price_condition_evidence=condition,
+        ),
+    )
+
+
+def _price_in_acceptable_zone(price: Decimal, zone: Any) -> bool | None:
+    if not isinstance(zone, dict):
+        return None
+    lower = zone.get("lower") or zone.get("min") or zone.get("min_price")
+    upper = zone.get("upper") or zone.get("max") or zone.get("max_price")
+    if lower in (None, "") or upper in (None, ""):
+        return None
+    try:
+        lower_decimal = Decimal(str(lower))
+        upper_decimal = Decimal(str(upper))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if not lower_decimal.is_finite() or not upper_decimal.is_finite() or lower_decimal > upper_decimal:
+        return None
+    return lower_decimal <= price <= upper_decimal
+
+
+def _price_condition_hash(condition: dict[str, Any]) -> str:
+    return str(condition.get("price_condition_hash") or condition.get("condition_hash") or stable_hash({"trade_price_condition": condition}))
+
+
+def _positive_condition_decimal(value: Any) -> Decimal:
+    try:
+        decimal = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise OrderPlanCalculationError("limit_price_invalid", "LIMIT price invalid") from exc
+    if not decimal.is_finite() or decimal <= Decimal("0"):
+        raise OrderPlanCalculationError("limit_price_invalid", "LIMIT price invalid")
+    return decimal
+
+
+def _condition_datetime(value: Any) -> datetime:
+    try:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value.strip():
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            raise OrderPlanCalculationError("limit_valid_until_missing", "LIMIT valid-until missing")
+    except ValueError as exc:
+        raise OrderPlanCalculationError("limit_valid_until_invalid", "LIMIT valid-until invalid") from exc
+    return _ensure_utc(parsed)
+
+
 def _persist_order_plan(
     *,
     context: OrderPlanContext,
     draft: PlanDraft,
+    instruction: OrderExecutionInstruction,
     config: dict[str, Any],
     business_request_key: str,
     decision_snapshot_id: int,
@@ -255,6 +447,7 @@ def _persist_order_plan(
             plan = _create_plan_model(
                 context=context,
                 draft=draft,
+                instruction=instruction,
                 config=config,
                 business_request_key=business_request_key,
                 trace_id=trace_id,
@@ -267,6 +460,7 @@ def _persist_order_plan(
                 plan=plan,
                 context=context,
                 draft=draft,
+                instruction=instruction,
                 trace_id=trace_id,
                 trigger_source=trigger_source,
             )
@@ -317,6 +511,7 @@ def _acquire_lock_and_create_candidates(
     plan: OrderPlan,
     context: OrderPlanContext,
     draft: PlanDraft,
+    instruction: OrderExecutionInstruction,
     trace_id: str,
     trigger_source: str,
 ) -> ServiceResult:
@@ -331,10 +526,10 @@ def _acquire_lock_and_create_candidates(
     plan.active_lock = lock_result.active_lock
     plan.save(update_fields=["active_lock"])
     assert draft.primary is not None
-    primary = _create_candidate(plan=plan, context=context, draft=draft.primary, trace_id=trace_id)
+    primary = _create_candidate(plan=plan, context=context, draft=draft.primary, instruction=instruction, trace_id=trace_id)
     fallback = None
     if draft.fallback is not None:
-        fallback = _create_candidate(plan=plan, context=context, draft=draft.fallback, trace_id=trace_id)
+        fallback = _create_candidate(plan=plan, context=context, draft=draft.fallback, instruction=instruction, trace_id=trace_id)
     _write_candidate_alert(plan=plan, candidate=primary)
     if fallback is not None:
         _write_candidate_alert(plan=plan, candidate=fallback)
@@ -548,12 +743,13 @@ def _create_plan_model(
     *,
     context: OrderPlanContext,
     draft: PlanDraft,
+    instruction: OrderExecutionInstruction,
     config: dict[str, Any],
     business_request_key: str,
     trace_id: str,
     trigger_source: str,
 ) -> OrderPlan:
-    plan_hash = _build_plan_hash(context=context, draft=draft, config=config, business_request_key=business_request_key)
+    plan_hash = _build_plan_hash(context=context, draft=draft, instruction=instruction, config=config, business_request_key=business_request_key)
     return OrderPlan.objects.create(
         business_request_key=business_request_key,
         decision_snapshot=context.decision_snapshot,
@@ -583,7 +779,7 @@ def _create_plan_model(
         reason_code=draft.reason_code,
         allows_downstream=draft.status == OrderPlanStatus.CREATED,
         config_snapshot=config,
-        calculation_evidence=_calculation_evidence(context=context, draft=draft),
+        calculation_evidence=_calculation_evidence(context=context, draft=draft, instruction=instruction),
         order_plan_hash=plan_hash,
         trace_id=trace_id,
         trigger_source=trigger_source,
@@ -595,6 +791,7 @@ def _create_candidate(
     plan: OrderPlan,
     context: OrderPlanContext,
     draft: IntentDraft,
+    instruction: OrderExecutionInstruction,
     trace_id: str,
 ) -> CandidateOrderIntent:
     payload = {
@@ -606,6 +803,11 @@ def _create_candidate(
         "requested_size": decimal_hash_value(draft.requested_size),
         "requested_notional": decimal_hash_value(draft.requested_notional),
         "requested_size_unit": draft.requested_size_unit,
+        "order_type": instruction.order_type,
+        "time_in_force": instruction.time_in_force,
+        "limit_price": decimal_hash_value(instruction.limit_price) if instruction.limit_price is not None else "",
+        "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
+        "price_condition_hash": instruction.price_condition_hash,
         "order_components": draft.order_components,
         "price_snapshot_hash": context.price_snapshot.price_snapshot_hash,
         "snapshot_set_hash": context.sync_run.snapshot_set_hash,
@@ -617,7 +819,12 @@ def _create_candidate(
         market_type=plan.market_type,
         account_domain=plan.account_domain,
         position_mode=plan.position_mode,
-        order_type="MARKET",
+        order_type=instruction.order_type,
+        time_in_force=instruction.time_in_force,
+        limit_price=instruction.limit_price,
+        limit_valid_until_utc=instruction.limit_valid_until_utc,
+        price_condition_hash=instruction.price_condition_hash,
+        price_condition_evidence=instruction.price_condition_evidence or {},
         plan_type=draft.plan_type,
         side=draft.side,
         position_side="BOTH",
@@ -644,6 +851,11 @@ def _create_candidate(
             "binance_sync_run_id": context.sync_run.id,
             "price_snapshot_id": context.price_snapshot.id,
             "order_plan_hash": plan.order_plan_hash,
+            "order_type": instruction.order_type,
+            "limit_price": str(instruction.limit_price) if instruction.limit_price is not None else "",
+            "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
+            "time_in_force": instruction.time_in_force,
+            "price_condition_hash": instruction.price_condition_hash,
         },
         intent_hash=candidate_intent_hash(payload),
         trace_id=trace_id,
@@ -696,6 +908,7 @@ def _persist_calculation_block(
             plan = _create_plan_model(
                 context=context,
                 draft=blocked_draft,
+                instruction=OrderExecutionInstruction(order_type="MARKET"),
                 config=config,
                 business_request_key=business_request_key,
                 trace_id=trace_id,
@@ -767,11 +980,13 @@ def _load_config() -> tuple[dict[str, Any], str]:
     }
     maximum_ratio = getattr(settings, "ORDER_PLAN_MAX_TARGET_NOTIONAL_TO_EQUITY_RATIO", None)
     minimum_notional = getattr(settings, "ORDER_PLAN_MIN_REBALANCE_NOTIONAL", None)
+    supported_order_types = _configured_order_plan_order_types()
     if (
         supported != {MARKET_TYPE_USDS_M, MARKET_TYPE_COIN_M}
         or getattr(settings, "ORDER_PLAN_TARGET_NOTIONAL_BASIS", "") != "current_equity"
         or getattr(settings, "ORDER_PLAN_SUPPORTED_POSITION_MODE", "") != "one_way"
-        or getattr(settings, "ORDER_PLAN_SUPPORTED_ORDER_TYPE", "") != "MARKET"
+        or "MARKET" not in supported_order_types
+        or not supported_order_types.issubset({"MARKET", "LIMIT"})
         or not isinstance(maximum_ratio, Decimal)
         or not isinstance(minimum_notional, Decimal)
         or not maximum_ratio.is_finite()
@@ -787,12 +1002,21 @@ def _load_config() -> tuple[dict[str, Any], str]:
         "max_target_notional_to_equity_ratio": maximum_ratio,
         "min_rebalance_notional": minimum_notional,
         "supported_position_mode": "one_way",
-        "supported_order_type": "MARKET",
+        "supported_order_types": sorted(supported_order_types),
     }
     config["config_hash"] = stable_hash({key: str(value) if isinstance(value, Decimal) else value for key, value in config.items()})
     config["max_target_notional_to_equity_ratio"] = str(maximum_ratio)
     config["min_rebalance_notional"] = str(minimum_notional)
     return config, ""
+
+
+def _configured_order_plan_order_types() -> set[str]:
+    configured = getattr(settings, "ORDER_PLAN_SUPPORTED_ORDER_TYPES", None)
+    if configured is None:
+        configured = [getattr(settings, "ORDER_PLAN_SUPPORTED_ORDER_TYPE", "MARKET")]
+    if isinstance(configured, str):
+        configured = [configured]
+    return {str(item).strip().upper() for item in configured if str(item).strip()}
 
 
 def _existing_matches(
@@ -848,6 +1072,7 @@ def _build_plan_hash(
     *,
     context: OrderPlanContext,
     draft: PlanDraft,
+    instruction: OrderExecutionInstruction,
     config: dict[str, Any],
     business_request_key: str,
 ) -> str:
@@ -870,12 +1095,17 @@ def _build_plan_hash(
             "target_signed_size": str(draft.target_signed_size),
             "delta_signed_size": str(draft.delta_signed_size),
             "mark_price": str(context.price_snapshot.mark_price),
+            "order_type": instruction.order_type,
+            "time_in_force": instruction.time_in_force,
+            "limit_price": str(instruction.limit_price) if instruction.limit_price is not None else "",
+            "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
+            "price_condition_hash": instruction.price_condition_hash,
             "config_hash": config["config_hash"],
         }
     )
 
 
-def _calculation_evidence(*, context: OrderPlanContext, draft: PlanDraft) -> dict[str, Any]:
+def _calculation_evidence(*, context: OrderPlanContext, draft: PlanDraft, instruction: OrderExecutionInstruction) -> dict[str, Any]:
     return {
         "decision_snapshot_id": context.decision_snapshot.id,
         "target_intent": context.decision_snapshot.target_intent,
@@ -897,6 +1127,11 @@ def _calculation_evidence(*, context: OrderPlanContext, draft: PlanDraft) -> dic
         "delta_signed_size": str(draft.delta_signed_size),
         "target_notional": str(draft.target_notional),
         "normalized_order_notional": str(draft.normalized_order_notional),
+        "order_type": instruction.order_type,
+        "time_in_force": instruction.time_in_force,
+        "limit_price": str(instruction.limit_price) if instruction.limit_price is not None else "",
+        "limit_valid_until_utc": instruction.limit_valid_until_utc.isoformat() if instruction.limit_valid_until_utc else "",
+        "price_condition_hash": instruction.price_condition_hash,
     }
 
 

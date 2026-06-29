@@ -697,7 +697,7 @@ MarketSnapshot 禁止包含：
 大模型解释。
 ```
 
-这些内容分别属于 FeatureLayer、AtomicSignal、DomainSignal、MarketRegime、StrategyRouting、StrategySignal、StrategySignalQuality、DecisionSnapshot、RiskCheck 或 AIReview，不属于 MarketSnapshot。
+这些内容分别属于 FeatureLayer、AtomicSignal、DomainSignal、MarketRegime、StrategyRouting、StrategySignal、StrategySignalQuality、DecisionSnapshot、RiskCheck 或 ReviewDataset，不属于 MarketSnapshot。
 
 ## 16. 幂等与并发
 

@@ -23,7 +23,7 @@ symbol = BTCUSDT
 timeframe = 4h / 1d
 ```
 
-本阶段不实现 FeatureLayer、AtomicSignal、DecisionSnapshot、账户同步、PriceSnapshot、订单链路、RuntimeGuard、OpsConsole、AIReview 或真实交易。
+本阶段不实现 FeatureLayer、AtomicSignal、DecisionSnapshot、账户同步、PriceSnapshot、订单链路、RuntimeGuard、OpsConsole、ReviewDataset 或真实交易。
 
 ## 2. 新增模块
 
@@ -216,4 +216,3 @@ Notifications 投递
 ```
 
 真实外部 Binance 访问仍由配置显式开启，默认关闭。
-

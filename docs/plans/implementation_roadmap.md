@@ -58,7 +58,7 @@ docs/architecture/testing_and_safety_architecture.md。
 阶段 4：订单计划、风控与执行准备
 阶段 5：订单提交、状态与成交闭环
 阶段 6：编排、任务、通知与巡检
-阶段 7：后台、绩效与离线 AI 复盘
+阶段 7：后台与复盘数据集
 ```
 
 阶段之间允许为了测试建立最小 fake / stub，但不得提前实现下一阶段的真实业务能力。
@@ -167,7 +167,7 @@ OrderPlan；
 RiskCheck；
 订单提交；
 后台 UI；
-AIReview；
+ReviewDataset；
 复杂数据模型细节。
 ```
 
@@ -184,7 +184,7 @@ Django migration 能在测试数据库执行；
 Redis 配置可被读取；
 Celery app 能加载但不要求完整业务任务；
 .env.example 完整列出必要配置并带中文注释；
-不会访问真实 Binance、DeepSeek 或 Hermes；
+不会访问真实 Binance 或 Hermes，不在项目内调用外部大模型；
 真实交易默认关闭。
 ```
 
@@ -441,7 +441,7 @@ BinanceSymbolRuleSnapshot。
 不因 NO_TRADE / NO_TARGET_CHANGE 补做；
 不使用 ops_display 兜底；
 不读取数据库 latest 兜底；
-供 OrderPlan、RiskCheck、ExecutionPreparation 和 PerformanceMetrics 使用。
+供 OrderPlan、RiskCheck、ExecutionPreparation 和 ReviewDataset 使用。
 ```
 
 PriceSnapshot：
@@ -502,7 +502,7 @@ ExecutionPreparation；
 订单提交；
 订单状态；
 成交同步；
-绩效计算。
+ReviewDataset 导出。
 ```
 
 ### 7.7 验收门槛
@@ -605,8 +605,7 @@ docs/architecture/testing_and_safety_architecture.md
 真实订单提交；
 订单状态查询；
 成交同步；
-PerformanceMetrics；
-AIReview；
+ReviewDataset；
 复杂后台 UI。
 ```
 
@@ -653,7 +652,8 @@ unknown 状态处理。
 
 ```text
 Execution 是唯一真实订单提交入口；
-当前只提交 MARKET 订单；
+当前订单提交支持 MARKET 与 LIMIT；
+LIMIT 订单到期仍未终态时，由 OrderCycleCloseout 负责独立周期收尾撤单；
 订单提交绝不重试；
 Gateway、业务层、Celery、编排层都不得重试订单提交；
 unknown 不推断成功或失败；
@@ -710,12 +710,14 @@ docs/architecture/testing_and_safety_architecture.md
 
 ```text
 自动重新下单；
-撤单；
+通用撤单、改单或追单；
 修改订单；
 自动杠杆调整；
 模拟交易运行模式；
 根据本地成交推导持仓快照。
 ```
+
+本阶段只允许实现 `order_cycle_closeout.md` 定义的限价单周期收尾撤单，不得扩展为通用人工撤单、改单或追单能力。
 
 ### 9.7 验收门槛
 
@@ -817,8 +819,7 @@ docs/architecture/system_architecture.md
 风控规则；
 真实 Binance 请求细节；
 后台 UI；
-绩效计算；
-AIReview。
+ReviewDataset 导出。
 ```
 
 ### 10.7 验收门槛
@@ -836,7 +837,7 @@ RuntimeGuard 不修改业务对象；
 重复任务不重复生成业务对象或重复提交订单。
 ```
 
-## 11. 阶段 7：后台、绩效与离线 AI 复盘
+## 11. 阶段 7：后台与复盘数据集
 
 ### 11.1 目标
 
@@ -854,15 +855,9 @@ OpsConsole 后端能力；
 订单链路查看；
 RuntimeGuardIssue 查看；
 Notification 查看；
-PerformanceMetrics 后台一键补算；
-OrchestrationRunPerformance；
-DeepSeekGateway；
-AIReview；
-AIReviewPackage；
-AIReviewAttempt；
-AIReviewReport；
-AIReviewFinding；
-AIReviewSuggestion。
+ReviewDataset 创建、状态查询和下载；
+ReviewDatasetRecord；
+ReviewDatasetExport。
 ```
 
 ### 11.3 关键要求
@@ -872,17 +867,17 @@ OpsConsole 不直接调用 Gateway；
 OpsConsole 不能绕过后端 service；
 后台账户展示只使用 ops_display；
 真实交易运行开关只存 MySQL，不写 .env；
-PerformanceMetrics 是后台一键补算，不是自动主链路步骤；
-PerformanceMetrics 不请求 Binance；
-PerformanceMetrics 只使用相邻自动边界账户快照；
-DeepSeekGateway 是底层大模型访问能力；
-AIReview 只做离线复盘；
-AIReview 不参与实时交易决策，不修改策略、风控或订单。
+ReviewDataset 是后台复盘数据集导出，不是自动主链路步骤；
+ReviewDataset 不请求 Binance；
+ReviewDataset 不调用外部大模型；
+ReviewDataset 只读取已落库事实；
+离线复盘由项目外部 Codex skill 或人工工具消费导出文件；
+离线复盘结果不写入生产数据库，不参与实时交易决策，不修改策略、风控或订单。
 ```
 
 ### 11.4 依赖
 
-依赖阶段 0 到阶段 6 的业务事实、编排事实、通知事实和绩效输入。
+依赖阶段 0 到阶段 6 的业务事实、编排事实、通知事实和复盘数据输入。
 
 ### 11.5 文档依据
 
@@ -890,9 +885,7 @@ AIReview 不参与实时交易决策，不修改策略、风控或订单。
 
 ```text
 docs/requirements/ops_console.md
-docs/requirements/performance_metrics.md
-docs/requirements/deepseek_gateway.md
-docs/requirements/ai_review.md
+docs/requirements/review_dataset.md
 docs/requirements/binance_account_sync.md
 docs/requirements/notifications.md
 ```
@@ -915,7 +908,7 @@ docs/architecture/module_boundary_architecture.md
 docs/architecture/testing_and_safety_architecture.md
 ```
 
-本阶段的后台能力不得绕过后端 service；AIReview 和 DeepSeekGateway 只服务离线复盘，不进入实时交易判断。
+本阶段的后台能力不得绕过后端 service；ReviewDataset 只服务离线复盘数据导出，不进入实时交易判断。
 
 ### 11.6 不负责
 
@@ -934,13 +927,12 @@ docs/architecture/testing_and_safety_architecture.md
 
 ```text
 后台可以查看一轮完整 OrchestrationRun；
-后台可以查看账户、订单、成交、告警、巡检和绩效；
+后台可以查看账户、订单、成交、告警、巡检和复盘数据集；
 后台真实交易开关有权限、二次确认和 AuditRecord；
-PerformanceMetrics 一键补算可补齐所有缺失可计算周期；
-重复补算跳过已有有效记录；
-AIReviewPackage 脱敏且可追溯；
-AIReviewAttempt 记录 DeepSeekGateway 调用摘要；
-AIReviewReport / Finding / Suggestion 只供人工查看；
+ReviewDataset 可以按明确范围生成可下载数据集；
+重复创建使用输入指纹返回已有有效数据集；
+ReviewDataset 缺少事实时记录原因，不伪造数据；
+ReviewDataset 不调用 Binance 或外部大模型；
 后台操作不能直接触发交易。
 ```
 

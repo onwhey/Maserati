@@ -6,8 +6,6 @@ import type { ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
-  Bot,
   ClipboardList,
   Database,
   FileText,
@@ -25,11 +23,10 @@ const navigation = [
   { href: "/runs", label: "Runs", icon: ListChecks },
   { href: "/orders", label: "Orders", icon: ClipboardList },
   { href: "/account", label: "Account", icon: Database },
-  { href: "/performance", label: "Performance", icon: BarChart3 },
+  { href: "/review-datasets", label: "Review Dataset", icon: Database },
   { href: "/runtime-guard", label: "Runtime Guard", icon: AlertTriangle },
   { href: "/alerts", label: "Alerts", icon: FileText },
   { href: "/real-trading", label: "Real Trading", icon: ShieldCheck },
-  { href: "/ai-review", label: "AI Review", icon: Bot },
   { href: "/ops-actions", label: "Ops Actions", icon: Wrench },
   { href: "/audit-log", label: "Audit Log", icon: History }
 ];

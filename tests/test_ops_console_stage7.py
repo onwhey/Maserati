@@ -10,8 +10,6 @@ from django.test import Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.ai_review.models import AIReviewRequest, AIReviewRequestStatus, AIReviewSuggestion, AIReviewSuggestionStatus
-from apps.ai_review.services import create_review_request, run_ai_review
 from apps.alerts.models import AlertEvent
 from apps.alerts.services import record_alert_event
 from apps.binance_gateway.fill_query import FakeBinanceFillQueryGateway
@@ -39,12 +37,12 @@ from apps.orchestration.models import (
 )
 from apps.order_plan.models import ActiveLockStatus, OrderPlanActiveLock
 from apps.order_status_sync.models import OrderStatusSyncRecord
+from apps.review_dataset.models import ReviewDatasetExport, ReviewDatasetRecord
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueSeverity, RuntimeGuardIssueStatus
 from tests.test_execution_order_submission_stage5 import _prepared, _submit
 from apps.binance_gateway.order_submission import FakeBinanceOrderSubmissionGateway
 from apps.binance_gateway.types import MARKET_TYPE_USDS_M
-from apps.deepseek_gateway.review import FakeDeepSeekReviewGateway
 from tests.test_fill_sync_stage5 import _fill, _sync, _terminal_attempt
 
 
@@ -505,139 +503,95 @@ def test_alert_issue_and_audit_queries_are_sanitized() -> None:
     assert item["evidence"]["password"] == "[REDACTED]"
 
 
-def test_ai_review_readonly_can_list_and_view_but_cannot_create() -> None:
+def test_review_dataset_readonly_can_preview_and_list_but_cannot_create_export() -> None:
     run = _run_with_step_and_link()
-    create_result = create_review_request(
-        review_mode="cycle_review",
-        range_selector={"type": "run_ids", "ids": [run.id]},
-        filters={},
-        manual_question="",
-        model_profile_code="default_review",
-        requested_by="tester",
-        request_key="ops-ai-review-readonly",
-        trace_id="trace-ops-ai-review-readonly",
-        trigger_source="test",
-    )
-    request_id = create_result.data["ai_review_request_id"]
     client = _client_with_group("readonly")
 
-    list_response = client.get(reverse("ops_console:ai_review_requests"))
-    detail_response = client.get(reverse("ops_console:ai_review_request_detail", kwargs={"request_id": request_id}))
+    preview_response = client.post(
+        reverse("ops_console:review_dataset_preview"),
+        data=json.dumps({"range_selector": {"type": "run_ids", "ids": [run.id]}, "filters": {}}),
+        content_type="application/json",
+    )
     create_response = client.post(
-        reverse("ops_console:ai_review_create_request"),
+        reverse("ops_console:review_dataset_export_create"),
         data=json.dumps(
             {
-                "request_key": "readonly-should-not-create",
-                "review_mode": "cycle_review",
+                "confirm_write": True,
+                "reason": "readonly should not create",
                 "range_selector": {"type": "run_ids", "ids": [run.id]},
-                "model_profile_code": "default_review",
+                "export_format": "json",
             }
         ),
         content_type="application/json",
     )
 
-    assert list_response.status_code == 200
-    assert list_response.json()["data"]["items"][0]["id"] == request_id
-    assert detail_response.status_code == 200
-    assert detail_response.json()["data"]["request"]["id"] == request_id
+    assert preview_response.status_code == 200
+    assert preview_response.json()["data"]["record_count"] == 1
     assert create_response.status_code == 403
 
 
-@override_settings(DEEPSEEK_GATEWAY_ENABLED=False)
-def test_ai_review_ops_api_creates_package_and_blocks_disabled_model_call_without_network() -> None:
+def test_review_dataset_ops_api_creates_export_without_model_or_binance_call(settings, tmp_path) -> None:
+    settings.REVIEW_DATASET_EXPORT_DIR = str(tmp_path)
     run = _run_with_step_and_link()
-    client = _client_with_group("ops_operator")
-
-    create_response = client.post(
-        reverse("ops_console:ai_review_create_request"),
-        data=json.dumps(
-            {
-                "request_key": "ops-ai-review-flow",
-                "review_mode": "cycle_review",
-                "range_selector": {"type": "run_ids", "ids": [run.id]},
-                "filters": {},
-                "manual_question": "",
-                "model_profile_code": "default_review",
-                "trace_id": "trace-ops-ai-review-flow",
-            }
-        ),
-        content_type="application/json",
-    )
-    request_id = create_response.json()["data"]["ai_review_request_id"]
-
-    package_response = client.post(
-        reverse("ops_console:ai_review_build_package", kwargs={"request_id": request_id}),
-        data=json.dumps({"trace_id": "trace-ops-ai-review-package"}),
-        content_type="application/json",
-    )
-    run_response = client.post(
-        reverse("ops_console:ai_review_run", kwargs={"request_id": request_id}),
-        data=json.dumps({"trace_id": "trace-ops-ai-review-run"}),
-        content_type="application/json",
-    )
-
-    assert create_response.status_code == 200
-    assert create_response.json()["data"]["request_status"] == AIReviewRequestStatus.CREATED
-    assert package_response.status_code == 200
-    assert package_response.json()["data"]["ai_review_package_id"]
-    assert run_response.status_code == 200
-    request = AIReviewRequest.objects.get(id=request_id)
-    assert request.status == AIReviewRequestStatus.FAILED
-    assert request.attempts.count() == 1
-    assert request.completed_report is None
-
-
-def test_ai_review_suggestion_status_update_uses_ai_review_service_only() -> None:
-    run = _run_with_step_and_link()
-    request_result = create_review_request(
-        review_mode="cycle_review",
-        range_selector={"type": "run_ids", "ids": [run.id]},
-        filters={},
-        manual_question="",
-        model_profile_code="default_review",
-        requested_by="tester",
-        request_key="ops-ai-review-suggestion",
-        trace_id="trace-ops-ai-review-suggestion",
-        trigger_source="test",
-    )
-    output = json.dumps(
-        {
-            "report_title": "review",
-            "executive_summary": "summary",
-            "suggestions": [
-                {
-                    "suggestion_type": "manual_task",
-                    "title": "manual follow-up",
-                    "description": "human review only",
-                }
-            ],
-        }
-    )
-    run_ai_review(
-        ai_review_request_id=request_result.data["ai_review_request_id"],
-        gateway=FakeDeepSeekReviewGateway(output_text=output),
-        trace_id="trace-ops-ai-review-suggestion-run",
-        trigger_source="test",
-    )
-    suggestion = AIReviewSuggestion.objects.get()
     client = _client_with_group("review_exporter")
 
     response = client.post(
-        reverse("ops_console:ai_review_update_suggestion", kwargs={"suggestion_id": suggestion.id}),
+        reverse("ops_console:review_dataset_export_create"),
         data=json.dumps(
             {
-                "new_status": AIReviewSuggestionStatus.ACCEPTED,
-                "decision_note": "accepted for manual follow-up only",
-                "trace_id": "trace-ops-ai-review-suggestion-status",
+                "confirm_write": True,
+                "reason": "export facts for local review",
+                "range_selector": {"type": "run_ids", "ids": [run.id]},
+                "filters": {},
+                "export_format": "json",
+                "trace_id": "trace-review-dataset-export",
             }
         ),
         content_type="application/json",
     )
 
-    suggestion.refresh_from_db()
     assert response.status_code == 200
-    assert suggestion.status == AIReviewSuggestionStatus.ACCEPTED
-    assert AuditRecord.objects.filter(target_object_type="AIReviewSuggestion", target_object_id=str(suggestion.id)).exists()
+    data = response.json()["data"]
+    assert data["reason_code"] == "review_dataset_export_built"
+    assert ReviewDatasetRecord.objects.filter(subject_orchestration_run=run).exists()
+    export = ReviewDatasetExport.objects.get(id=data["export_id"])
+    assert export.record_count == 1
+    assert export.storage_ref
+    assert AuditRecord.objects.filter(operation_type="review_dataset_export_create", target_object_id=str(export.id)).exists()
+    assert AlertEvent.objects.filter(source_module="review_dataset", related_object_id=str(export.id)).exists()
+
+
+def test_review_dataset_export_detail_and_download_mark_are_audited(settings, tmp_path) -> None:
+    settings.REVIEW_DATASET_EXPORT_DIR = str(tmp_path)
+    run = _run_with_step_and_link()
+    client = _client_with_group("review_exporter")
+    create_response = client.post(
+        reverse("ops_console:review_dataset_export_create"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "reason": "export facts for download",
+                "range_selector": {"type": "run_ids", "ids": [run.id]},
+                "export_format": "jsonl",
+            }
+        ),
+        content_type="application/json",
+    )
+    export_id = create_response.json()["data"]["export_id"]
+
+    detail_response = client.get(reverse("ops_console:review_dataset_export_detail", kwargs={"export_id": export_id}))
+    mark_response = client.post(
+        reverse("ops_console:review_dataset_export_download_mark", kwargs={"export_id": export_id}),
+        data=json.dumps({"trace_id": "trace-review-dataset-download"}),
+        content_type="application/json",
+    )
+
+    export = ReviewDatasetExport.objects.get(id=export_id)
+    assert detail_response.status_code == 200
+    assert detail_response.json()["data"]["id"] == export_id
+    assert mark_response.status_code == 200
+    assert export.downloaded_at_utc is not None
+    assert AuditRecord.objects.filter(operation_type="review_dataset_export_download", target_object_id=str(export_id)).exists()
 
 
 def test_ops_action_requires_confirm_write_before_account_refresh() -> None:

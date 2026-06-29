@@ -1861,7 +1861,7 @@ dry-run 必须：
 64. AtomicSignal 不读取账户或 PriceSnapshot。
 65. AtomicSignal 不请求 Binance。
 66. AtomicSignal 不调用 BinanceGateway。
-67. AtomicSignal 不调用 DeepSeekGateway。
+67. AtomicSignal 不调用大模型。
 68. AtomicSignal 不保存或查询编排 ID。
 69. adapter 显式映射原始业务结果。
 70. 全部业务时间使用 UTC。
@@ -1935,7 +1935,7 @@ created 时 allows_domain_signal = true，failed 或 unknown 时为 false；
 涉及 OrderPlan / CandidateOrderIntent：否；
 涉及 RiskCheck / ApprovedOrderIntent：否；
 涉及 ExecutionPreparation / Execution：否；
-涉及 OrderStatusSync / FillSync / PerformanceMetrics / AIReview：否；
+涉及 OrderStatusSync / FillSync / ReviewDataset：否；
 写 AlertEvent：单项失败、集合失败、阻断或未知状态；
 dry-run：可计算但不写正式业务对象；
 confirm-write：如提供，只控制落库，不改变放行标准。

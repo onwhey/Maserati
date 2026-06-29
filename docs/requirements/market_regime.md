@@ -609,13 +609,13 @@ allowed_regime_codes。
 
 定义本算法声明会进入 CalculatorInput、允许被 calculator 读取的领域代码。
 
-正式版本包必须生成 trend、momentum、volatility 三个领域，但单个 MarketRegimeDefinition 可以只声明并使用其中一部分。
+正式版本包必须生成 market_context、trend、momentum、volatility、structure、risk_state 六个领域，但单个 MarketRegimeDefinition 可以只声明并使用其中一部分。
 
 例如：
 
 ```text
 只使用趋势和波动的算法：allowed_domain_codes = [trend, volatility]；
-同时使用趋势、动量和波动的算法：allowed_domain_codes = [trend, momentum, volatility]。
+同时使用市场背景、趋势和结构的算法：allowed_domain_codes = [market_context, trend, structure]。
 ```
 
 未被列入 `allowed_domain_codes` 的领域，即使已经在 DomainSignalSet 中生成，也不得传入本算法。
@@ -1697,7 +1697,7 @@ dry-run 必须：
 68. MarketRegime 不生成 DecisionSnapshot。
 69. MarketRegime 不读取账户、持仓或 PriceSnapshot。
 70. MarketRegime 不请求 Binance。
-71. MarketRegime 不调用 DeepSeekGateway。
+71. MarketRegime 不调用大模型。
 72. MarketRegime 不保存或查询编排 ID。
 73. adapter 显式映射业务结果。
 74. 全部业务时间使用 UTC。

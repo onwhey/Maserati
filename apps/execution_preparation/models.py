@@ -120,6 +120,10 @@ class ExecutionPreparationResult(models.Model):
 
 
 class PreparedOrderIntent(models.Model):
+    limit_price = models.DecimalField("LIMIT price", max_digits=38, decimal_places=18, null=True, blank=True)
+    limit_valid_until_utc = models.DateTimeField("LIMIT valid until UTC", null=True, blank=True)
+    price_condition_hash = models.CharField("price condition hash", max_length=80, blank=True)
+    price_condition_evidence = models.JSONField("price condition evidence", default=dict, blank=True)
     prepared_order_intent_key = models.CharField("待提交请求幂等键", max_length=191, unique=True)
     execution_preparation_result = models.OneToOneField(
         ExecutionPreparationResult,

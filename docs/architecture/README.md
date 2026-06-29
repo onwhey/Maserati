@@ -133,7 +133,7 @@ pipeline_orchestrator.md。
 
 任务入口只负责触发和传递运行上下文，业务判断仍由 application service 和业务模块完成。
 
-### 5.5 开发 BinanceGateway、DeepSeekGateway 或外部通知
+### 5.5 开发 BinanceGateway 或外部通知
 
 重点阅读：
 
@@ -160,7 +160,7 @@ runtime_guard.md。
 
 RuntimeGuard 是生产运行期间的只读巡检能力；测试与安全验收架构是开发、持续集成和实盘前验收依据。二者不能互相替代。
 
-### 5.7 开发后台、绩效或 AI 复盘
+### 5.7 开发后台与复盘数据集
 
 重点阅读：
 
@@ -171,12 +171,10 @@ data_flow_architecture.md；
 runtime_task_architecture.md；
 testing_and_safety_architecture.md；
 ops_console.md；
-performance_metrics.md；
-ai_review.md；
-deepseek_gateway.md。
+review_dataset.md。
 ```
 
-这些属于后台或离线能力，不得进入实时策略判断和正式交易决策链路。
+这些属于后台或离线复盘数据能力，不得进入实时策略判断和正式交易决策链路。项目侧只提供可追溯数据集，不在生产系统内调用大模型。
 
 ## 6. 五份架构文档的分工
 
@@ -186,7 +184,8 @@ deepseek_gateway.md。
 
 ```text
 系统包含哪些业务层；
-正式主链路如何从行情走到成交同步；
+正式主链路如何从行情走到订单提交；
+订单生命周期如何独立同步状态和成交；
 底层能力、运行能力和后台能力位于哪里；
 各层之间的总体依赖方向是什么。
 ```

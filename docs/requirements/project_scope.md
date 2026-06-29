@@ -35,7 +35,7 @@ Celery 任务名称；
 
 本项目是一个中低频趋势跟踪自动交易系统。
 
-系统目标是构建一个从行情数据、特征、信号、目标仓位决策、账户事实、价格事实、订单计划、风控审批、执行准备、交易执行、订单追踪、成交同步、运行巡检、绩效复盘、后台运维和离线 AI 复盘的自动交易闭环。
+系统目标是构建一个从行情数据、特征、信号、目标仓位决策、账户事实、价格事实、订单计划、风控审批、执行准备、交易执行、订单追踪、成交同步、运行巡检、通知审计、复盘数据集导出和后台运维组成的自动交易闭环。
 
 本项目追求：
 
@@ -167,16 +167,16 @@ ExecutionPreparation；
 PreparedOrderIntent；
 Execution；
 OrderSubmissionAttempt；
+OrderCycleCloseout；
+OrderCancelAttempt；
 OrderStatusSync；
 FillSync；
 TradeFill / OrderFillSummary；
 PipelineOrchestrator；
 RuntimeGuard；
-PerformanceMetrics；
 Notifications / AlertEvent / NotificationDeliveryAttempt / NotificationSuppression；
 OpsConsole；
-DeepSeekGateway；
-AIReview。
+ReviewDataset。
 ```
 
 每个能力必须有清晰边界，不得把策略判断、账户事实、订单意图、风控审批、交易所订单、成交事实和复盘结论混成一个对象。
@@ -209,10 +209,26 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 → PreparedOrderIntent
 → Execution
 → OrderSubmissionAttempt
+→ 订单提交事实完成，主交易编排结束
+或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+```
+
+订单提交后的状态与成交同步属于独立订单生命周期分支，不内嵌在主交易编排尾部：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → FillSync
-→ 订单状态与成交事实同步完成
-或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+→ ActiveLock 安全收尾判断
+```
+
+LIMIT 订单到期仍未终态时，存在独立周期收尾分支：
+
+```text
+OrderCycleCloseout / OrderCancelAttempt
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
 ```
 
 编排、巡检和通知横跨主链路：
@@ -226,9 +242,8 @@ Notifications / AlertEvent
 后置复盘和后台能力不属于自动交易主链路必跑步骤：
 
 ```text
-PerformanceMetrics
 OpsConsole
-AIReview
+ReviewDataset
 ```
 
 ## 6. 编排范围
@@ -410,7 +425,7 @@ OrderPlan 是唯一允许把目标仓位转换成候选订单意图的模块。
 OrderPlan 消费 DecisionSnapshot、BinanceSyncRun 和 PriceSnapshot；
 OrderPlan 不访问 Binance；
 OrderPlan 不做最终风控审批；
-OrderPlan 创建 CandidateOrderIntent；
+OrderPlan 创建 MARKET 或 LIMIT CandidateOrderIntent；
 OrderPlan 拥有 OrderPlanActiveLock；
 OrderPlan 只有在 OrderPlanStepAdapter 完成真实交易权限检查后才会被调用并取得 ActiveLock。
 ```
@@ -456,7 +471,21 @@ Execution 调用 BinanceOrderSubmissionGateway；
 订单提交绝不重试；
 Gateway、业务层、Celery、编排层均不得重试订单提交；
 提交结果 unknown 时不得推断成功或失败；
-unknown 必须进入 OrderStatusSync 查询。
+unknown 必须通过独立订单生命周期同步管线进入 OrderStatusSync 查询。
+```
+
+OrderCycleCloseout 负责 LIMIT 订单的周期收尾。
+
+规则：
+
+```text
+只处理已经提交过且仍未终态的 LIMIT 订单；
+只在冻结的 limit_valid_until_utc 到达后执行；
+只通过 BinanceOrderCancelGateway 撤销既有限价单；
+撤单形成 OrderCancelAttempt；
+撤单后仍必须通过 OrderStatusSync 确认订单终态；
+明确终态后仍必须通过 FillSync 确认成交事实；
+不得提交新订单、改单、追单或释放 ActiveLock。
 ```
 
 当前阶段不实现模拟交易运行模式。dry-run 与 real trading 必须隔离：
@@ -530,10 +559,10 @@ RuntimeGuard 不负责：
 恢复编排；
 修改业务对象；
 释放锁；
-巡检 AIReview；
-巡检 PerformanceMetrics；
+巡检 ReviewDataset；
 巡检后台人工补算；
 巡检后台人工复盘；
+巡检 ReviewDataset；
 调用 Binance；
 调用 DeepSeek；
 直接发送 Hermes。
@@ -550,10 +579,9 @@ OpsConsole 可以：
 看订单；
 看 RuntimeGuardIssue；
 看 AlertEvent；
-看 PerformanceMetrics；
 查看市场配置并操作真实交易运行开关；
 触发受控人工入口；
-导出离线复盘数据。
+导出 ReviewDataset 复盘数据。
 ```
 
 OpsConsole 不得：
@@ -561,45 +589,33 @@ OpsConsole 不得：
 ```text
 直接访问数据库；
 直接调用 Binance Gateway；
-直接调用 DeepSeekGateway；
 直接提交订单；
 直接释放锁；
 直接写业务表；
 绕过后端安全校验。
 ```
 
-## 15. 绩效与 AI 复盘范围
+## 15. 复盘数据集范围
 
-PerformanceMetrics 是账户绩效复盘模块。
+ReviewDataset 是复盘数据集模块。
 
 规则：
 
 ```text
 只读取已落库事实；
-只使用自动边界 trade_preparation 账户快照；
-不使用 ops_display；
+按 UTC 4 小时周期组织数据；
+整理编排、行情、特征、信号、市场环境、策略、目标仓位、账户、价格、订单、成交、告警、巡检和审计事实；
+可使用自动边界 trade_preparation 账户快照作为周期账户事实；
 不请求 Binance；
+不调用 DeepSeek；
 不影响交易主流程；
-计算 UTC 4 小时周期浮动收益；
-订单 realized_pnl 和手续费只作为辅助字段。
+不生成复盘结论；
+不判断策略是否正确；
+不把复盘结果写回交易链路；
+导出数据供人工、本地脚本或 Codex skill 离线分析。
 ```
 
-AIReview 是离线大模型复盘模块。
-
-规则：
-
-```text
-AIReview 读取已落库事实；
-AIReview 生成脱敏复盘数据包；
-AIReview 通过 DeepSeekGateway 调用 DeepSeek；
-AIReview 保存报告、发现和人工建议；
-AIReview 不参与实时交易；
-AIReview 不自动修改策略；
-AIReview 不自动修改真实交易运行配置；
-AIReview 不自动下单。
-```
-
-DeepSeekGateway 是 DeepSeek API 的受控请求边界，不拥有复盘业务判断。
+当前阶段不在系统内保存大模型复盘报告。Codex skill 如参与复盘，只能读取 ReviewDataset API 或导出文件，并把分析结果保存到本地文件。
 
 ## 16. 当前阶段不做事项
 
@@ -677,8 +693,9 @@ observed_exchange_leverage 不得参与目标仓位放大计算；
 编排业务对象索引；
 真实交易运行开关；
 运行巡检问题；
-周期绩效记录；
-复盘请求、复盘数据包、复盘调用尝试、复盘报告、复盘发现和人工建议；
+ReviewDataset 记录；
+复盘数据集记录；
+复盘数据导出记录；
 通知事件；
 通知投递尝试；
 通知抑制记录；
@@ -719,9 +736,8 @@ observed_exchange_leverage 不得参与目标仓位放大计算；
 能够防止冲突订单链路并安全收尾 ActiveLock；
 能够通过 Notifications 记录并投递关键事件；
 能够通过 RuntimeGuard 发现卡住和不确定状态；
-能够通过 PerformanceMetrics 计算周期浮动收益；
-能够通过 OpsConsole 查看系统、账户、编排、订单、异常和收益；
-能够通过 AIReview 生成离线复盘报告。
+能够通过 OpsConsole 查看系统、账户、编排、订单和异常；
+能够通过 ReviewDataset 导出复盘数据集。
 ```
 
 ## 19. 当前阶段必须能回答的问题
@@ -753,10 +769,9 @@ ExecutionPreparation 是否通过？
 提交是否 accepted、rejected、unknown 或 blocked_before_submit？
 订单状态最终如何？
 成交是否同步完整？
-周期浮动收益是多少？
 哪些 AlertEvent 和 RuntimeGuardIssue 与本轮有关？
 如果发生异常，人工应该看哪里？
-AIReview 的复盘结论基于哪些输入？
+本轮 ReviewDataset 能导出哪些事实？
 ```
 
 ## 20. 当前阶段验收方向
@@ -802,9 +817,9 @@ PreparedOrderIntent 可追溯到 ExecutionPreparation；
 OrderSubmissionAttempt 可追溯到 PreparedOrderIntent；
 OrderStatusSyncRecord 可追溯到 OrderSubmissionAttempt；
 TradeFill 可追溯到订单状态和成交同步；
-PerformanceMetrics 可追溯到相邻自动边界账户快照；
+ReviewDatasetRecord 可追溯到 subject_orchestration_run、相邻自动边界账户快照和相关业务对象；
 AlertEvent 可追溯到相关业务对象；
-AIReviewReport 可追溯到复盘数据包、prompt 和 DeepSeekGateway 调用；
+ReviewDatasetExport 可追溯到导出范围、manifest 和内容 hash；
 当前阶段不实现模拟交易运行模式；
 OpsConsole 不能绕过后端安全校验。
 ```
@@ -829,7 +844,7 @@ ActiveLock 泄漏或误释放；
 把 dry-run 或回测结果当成 real trading 事实使用；
 执行不可审计；
 通知被误当成交易指令；
-大模型复盘结论被误当成实时交易决策；
+本地复盘结论被误当成实时交易决策；
 复盘无法解释系统行为。
 ```
 

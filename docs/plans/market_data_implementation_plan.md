@@ -937,9 +937,8 @@ PipelineOrchestrator；
 RuntimeGuard；
 Notifications 投递；
 OpsConsole 页面；
-PerformanceMetrics；
-DeepSeekGateway；
-AIReview；
+ReviewDataset；
+项目内大模型调用；
 WebSocket；
 多交易所；
 多品种主链路；
@@ -1202,4 +1201,3 @@ docs/plans/strategy_analysis_implementation_plan.md
 也就是策略分析框架阶段。
 
 在进入下一阶段前，不应开始账户同步、价格快照、订单计划、风控、执行或后台复盘能力。
-

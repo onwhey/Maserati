@@ -262,7 +262,6 @@ Redis client；
 Celery task；
 HTTP client；
 BinanceGateway；
-DeepSeekGateway；
 业务 service；
 可变全局对象；
 密钥或 Token。
@@ -736,7 +735,7 @@ used_domain_signal_value_refs；
 
 ```text
 只做跨领域环境分类；
-正式 DomainSignalSet 仍生成 trend、momentum、volatility 三个领域结果，但 calculator 只接收本算法声明允许使用的领域；
+正式 DomainSignalSet 仍生成 market_context、trend、momentum、volatility、structure、risk_state 六个领域结果，但 calculator 只接收本算法声明允许使用的领域；
 required domain 缺失时由业务 service 在调用前阻断；
 未列入 allowed_domain_codes 的领域不得进入 CalculatorInput；
 不生成策略方向；
@@ -1200,7 +1199,7 @@ Calculator 不接收、不保存、不解析编排 ID。
 19. calculator 不调用 Celery。
 20. calculator 不执行网络请求。
 21. calculator 不调用 BinanceGateway。
-22. calculator 不调用 DeepSeekGateway。
+22. calculator 不调用大模型。
 23. calculator 不写 AlertEvent。
 24. calculator 不读取账户或持仓。
 25. calculator 不生成订单对象。

@@ -397,13 +397,15 @@ def test_atomic_signal_same_input_identity_is_idempotent() -> None:
 
 @pytest.mark.django_db
 def test_seed_atomic_signal_definitions_is_idempotent() -> None:
-    feature_definition("sma_4h_20")
-    feature_definition("sma_4h_60")
-
+    call_command("seed_feature_definitions")
     call_command("seed_atomic_signal_definitions")
+    first_count = AtomicSignalDefinition.objects.count()
     call_command("seed_atomic_signal_definitions")
 
     definition = AtomicSignalDefinition.objects.get(signal_code="sma_4h_20_above_sma_4h_60")
-    assert AtomicSignalDefinition.objects.count() == 1
+    assert AtomicSignalDefinition.objects.count() == first_count
     assert definition.status == DefinitionLifecycleStatus.ACTIVE
     assert definition.enabled is True
+    assert AtomicSignalDefinition.objects.filter(signal_code="trend_1d_ma_bullish_alignment").exists()
+    assert AtomicSignalDefinition.objects.filter(signal_code="structure_minor_near_support").exists()
+    assert AtomicSignalDefinition.objects.filter(signal_code="risk_long_exposure_shock_down").exists()

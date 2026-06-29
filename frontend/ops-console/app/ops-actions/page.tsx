@@ -28,14 +28,9 @@ const actions = [
     endpoint: "POST /api/ops/runtime-guard/issues/{issue_id}/status/",
   },
   {
-    title: "PerformanceMetrics 一键补算",
-    description: "补齐缺失且可计算的账户绩效周期；不进入主交易链路。",
-    endpoint: "POST /api/ops/performance/backfill/",
-  },
-  {
-    title: "AIReview 离线复盘",
-    description: "创建离线复盘请求并通过 AIReview service 调用 DeepSeekGateway；不参与实时交易。",
-    endpoint: "POST /api/ops/ai-review/create/",
+    title: "ReviewDataset 导出",
+    description: "选择已落库编排事实，生成离线复盘数据集；不调用大模型，不保存复盘结论。",
+    endpoint: "POST /api/ops/review-datasets/exports/create/",
   },
 ];
 

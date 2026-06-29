@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from decimal import Decimal
 
 import pytest
 from django.utils import timezone
@@ -26,8 +27,8 @@ from tests.test_execution_preparation_stage4 import _approved, _gateway, _prepar
 pytestmark = pytest.mark.django_db
 
 
-def _prepared(settings, *, key: str = "submission") -> PreparedOrderIntent:
-    approved = _approved(settings, ratio="0.5", price_value="50000", key=key)
+def _prepared(settings, *, key: str = "submission", limit_condition: dict | None = None) -> PreparedOrderIntent:
+    approved = _approved(settings, ratio="0.5", price_value="50000", key=key, limit_condition=limit_condition)
     result = _prepare(approved, _gateway(bid="49990", ask="50010"), key=key)
     assert result.status == "succeeded"
     return PreparedOrderIntent.objects.get()
@@ -79,6 +80,7 @@ def test_submit_prepared_order_accepts_once_and_keeps_active_lock(settings) -> N
     assert result.status == "succeeded"
     assert result.data["order_submission_attempt_id"] == attempt.id
     assert attempt.status == OrderSubmissionAttemptStatus.ACCEPTED
+    assert "flow_action" not in result.data
     assert attempt.request_sent is True
     assert attempt.response_received is True
     assert attempt.gateway_attempt_count == 1
@@ -97,6 +99,40 @@ def test_submit_prepared_order_accepts_once_and_keeps_active_lock(settings) -> N
     assert "idempotency_key" not in frozen
     assert gateway.calls[0]["call_context"].metadata["order_submission_attempt_id"] == attempt.id
     assert AlertEvent.objects.filter(source_module="Execution", event_type="order_submission_accepted").count() == 1
+
+
+def test_submit_limit_order_sends_frozen_price_and_time_in_force(settings) -> None:
+    valid_until = timezone.now() + timedelta(hours=3, minutes=50)
+    prepared = _prepared(
+        settings,
+        key="limit-accepted",
+        limit_condition={
+            "order_type": "LIMIT",
+            "limit_price": "49000",
+            "limit_valid_until_utc": valid_until.isoformat(),
+            "time_in_force": "GTC",
+            "price_condition_hash": "limit-condition-hash",
+        },
+    )
+    gateway = FakeBinanceOrderSubmissionGateway()
+
+    result = _submit(prepared, gateway, key="limit-accepted")
+
+    attempt = OrderSubmissionAttempt.objects.get()
+    frozen = gateway.calls[0]["frozen_order_request"]
+    assert result.status == "succeeded"
+    assert len(gateway.calls) == 1
+    assert attempt.order_type == "LIMIT"
+    assert attempt.time_in_force == "GTC"
+    assert attempt.limit_price == Decimal("49000")
+    assert attempt.limit_valid_until_utc == valid_until
+    assert attempt.price_condition_hash == "limit-condition-hash"
+    assert attempt.order_notional == prepared.quantity * Decimal("49000")
+    assert frozen["type"] == "LIMIT"
+    assert frozen["price"] == "49000"
+    assert frozen["timeInForce"] == "GTC"
+    assert "idempotency_key" not in frozen
+    assert "stopPrice" not in frozen
 
 
 def test_submit_replay_returns_existing_attempt_without_second_gateway_call(settings) -> None:
@@ -180,6 +216,7 @@ def test_unknown_submission_keeps_active_lock_for_order_status_sync(settings) ->
     lock = OrderPlanActiveLock.objects.get(id=attempt.active_lock_id)
     assert result.status == "unknown"
     assert result.data["allows_order_status_sync"] is True
+    assert "flow_action" not in result.data
     assert attempt.status == OrderSubmissionAttemptStatus.UNKNOWN
     assert prepared.status == PreparedOrderIntentStatus.SUBMISSION_UNKNOWN
     assert lock.status == ActiveLockStatus.ACTIVE

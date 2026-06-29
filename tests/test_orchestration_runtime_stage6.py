@@ -4,7 +4,10 @@ from datetime import UTC, datetime
 
 import pytest
 
+from apps.foundation.results import ResultStatus, ServiceResult
 from apps.orchestration.adapters.base import BusinessObjectRef, OrchestrationStepResult, StepContext, result_hash
+from apps.orchestration.adapters.business import OrderSubmissionStepAdapter
+from apps.orchestration.adapters.registry import default_adapter_registry
 from apps.orchestration.models import (
     OrchestrationBusinessObjectLink,
     OrchestrationRun,
@@ -120,7 +123,60 @@ def test_registry_contains_formal_pipeline_order() -> None:
         "data_quality",
         "data_backfill",
     )
-    assert ordered_step_codes()[-3:] == ("order_submission", "order_status_sync", "fill_sync")
+    assert ordered_step_codes()[-1] == "order_submission"
+    assert "order_status_sync" not in ordered_step_codes()
+    assert "fill_sync" not in ordered_step_codes()
+    assert "OrderStatusSyncStepAdapter" not in default_adapter_registry()
+    assert "FillSyncStepAdapter" not in default_adapter_registry()
+
+
+@pytest.mark.parametrize(
+    ("service_status", "order_submission_status", "expected_normalized_status"),
+    (
+        (ResultStatus.SUCCEEDED, "accepted", "SUCCEEDED"),
+        (ResultStatus.UNKNOWN, "unknown", "UNKNOWN"),
+    ),
+)
+def test_order_submission_adapter_maps_lifecycle_required_result_to_main_run_complete(
+    monkeypatch: pytest.MonkeyPatch,
+    service_status: str,
+    order_submission_status: str,
+    expected_normalized_status: str,
+) -> None:
+    def fake_submit_prepared_order(**_kwargs: object) -> ServiceResult:
+        return ServiceResult(
+            service_status,
+            f"order_submission_{order_submission_status}",
+            "订单提交事实已形成。",
+            "trace-adapter",
+            "test",
+            {
+                "order_submission_attempt_id": 123,
+                "prepared_order_intent_id": 456,
+                "order_submission_status": order_submission_status,
+                "allows_order_status_sync": True,
+            },
+        )
+
+    monkeypatch.setattr("apps.execution.services.submission.submit_prepared_order", fake_submit_prepared_order)
+
+    result = OrderSubmissionStepAdapter().execute(
+        StepContext(
+            orchestration_run_id=1,
+            step_run_id=1,
+            step_code="order_submission",
+            business_request_key="test-order-submission-adapter",
+            trace_id="trace-adapter",
+            trigger_source="test",
+            reference_time_utc=datetime(2026, 1, 1, 0, 0, tzinfo=UTC),
+            object_links={"PreparedOrderIntent": [BusinessObjectRef("PreparedOrderIntent", "456")]},
+        )
+    )
+
+    assert result.normalized_status == expected_normalized_status
+    assert result.flow_action == "COMPLETE"
+    assert result.primary_object_ref is not None
+    assert result.primary_object_ref.object_type == "OrderSubmissionAttempt"
 
 
 @pytest.mark.django_db

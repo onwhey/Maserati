@@ -22,7 +22,7 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
 )
-from apps.strategy_analysis.services.feature_layer import build_feature_set
+from apps.strategy_analysis.services.feature_layer import _extract_feature_value, build_feature_set
 from apps.strategy_analysis.services.release import (
     approve_release,
     calculate_definition_set_hash,
@@ -31,6 +31,7 @@ from apps.strategy_analysis.services.release import (
     freeze_release_for_validation,
 )
 from apps.strategy_calculator.contracts import CalculatorInput, CalculatorMetadata, CalculatorOutput, CalculatorType
+from apps.strategy_calculator.feature_layer import KlinePriceFeatureCalculator
 from apps.strategy_calculator.registry import CalculatorRegistry
 from apps.strategy_calculator.utils import stable_hash
 
@@ -387,6 +388,107 @@ def test_feature_layer_uses_only_release_feature_slice_and_writes_feature_values
     assert result.status == ResultStatus.SUCCEEDED
     assert FeatureSet.objects.count() == 1
     assert FeatureValue.objects.get().numeric_value == Decimal("123.450000000000000000")
+
+
+@pytest.mark.django_db
+def test_feature_layer_writes_value_from_kline_price_feature_calculator() -> None:
+    registry = CalculatorRegistry()
+    registry.register(KlinePriceFeatureCalculator())
+    snapshot = create_market_snapshot()
+    params = {"operation": "sma", "timeframe": "4h", "window": 2}
+    params_hash = stable_hash(params)
+    feature = FeatureDefinition.objects.create(
+        feature_code="sma_4h_2",
+        definition_version="1.0.0",
+        definition_hash=stable_hash(
+            {
+                "feature_code": "sma_4h_2",
+                "algorithm_name": "kline_price_features",
+                "algorithm_version": "1.0.0",
+                "params_hash": params_hash,
+            }
+        ),
+        algorithm_name="kline_price_features",
+        algorithm_version="1.0.0",
+        params=params,
+        params_hash=params_hash,
+        value_type="decimal",
+        input_timeframes=["4h"],
+        output_schema_version="1.0",
+    )
+    release = StrategyAnalysisRelease.objects.create(release_code="feature_real_calculator")
+    StrategyAnalysisReleaseItem.objects.create(
+        release=release,
+        component_type=ReleaseItemComponentType.FEATURE_DEFINITION,
+        component_object_id=feature.id,
+        component_code=feature.feature_code,
+        definition_hash=feature.definition_hash,
+        algorithm_name=feature.algorithm_name,
+        algorithm_version=feature.algorithm_version,
+        params_hash=feature.params_hash,
+    )
+    release.release_hash = calculate_release_hash(release)
+    release.approval_status = ReleaseApprovalStatus.APPROVED
+    release.is_active = True
+    release.active_slot = 1
+    release.save(update_fields=["release_hash", "approval_status", "is_active", "active_slot", "updated_at_utc"])
+    StrategyAnalysisReleaseApproval.objects.create(
+        release=release,
+        release_hash=release.release_hash,
+        action=ReleaseAction.APPROVE,
+        validation_evidence_refs=["test-fixture"],
+        reason="real feature calculator fixture",
+        operator_id="tester",
+        trace_id="trace_release",
+        trigger_source="test",
+    )
+    StrategyAnalysisReleaseActivation.objects.create(
+        release=release,
+        release_hash=release.release_hash,
+        action=ReleaseAction.ACTIVATE,
+        operator_id="tester",
+        reason="real feature calculator fixture",
+        trace_id="trace_release",
+        trigger_source="test",
+    )
+    feature_items = tuple(release.items.filter(component_type=ReleaseItemComponentType.FEATURE_DEFINITION))
+
+    result = build_feature_set(
+        market_snapshot_id=snapshot.id,
+        strategy_analysis_release_id=release.id,
+        release_hash=release.release_hash,
+        expected_definition_set_hash=calculate_definition_set_hash(feature_items),
+        business_request_key="feature-set:real-calculator",
+        trace_id="trace_feature",
+        trigger_source="test",
+        registry=registry,
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    value = FeatureValue.objects.get(feature_code="sma_4h_2")
+    assert value.numeric_value == Decimal("105.000000000000000000")
+    assert value.evidence["calculation_summary"]["operation"] == "sma"
+
+
+def test_feature_layer_extracts_nullable_decimal_feature_value() -> None:
+    params = {"operation": "structure_zone_metric", "nullable": True}
+    feature = FeatureDefinition(
+        feature_code="structure_minor_support_lower_4h_120",
+        definition_version="1.0.0",
+        definition_hash=stable_hash({"feature": "structure_minor_support_lower_4h_120"}),
+        algorithm_name="kline_price_features",
+        algorithm_version="1.0.0",
+        params=params,
+        params_hash=stable_hash(params),
+        value_type="decimal",
+        input_timeframes=["4h"],
+        output_schema_version="1.0",
+    )
+    output = CalculatorOutput.succeeded(output_schema_version="1.0", values={"value": None})
+
+    value_kwargs = _extract_feature_value(feature, output)
+
+    assert value_kwargs == {"numeric_value": None, "bool_value": None, "text_value": ""}
 
 
 @pytest.mark.django_db

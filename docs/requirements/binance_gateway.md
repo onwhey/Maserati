@@ -115,13 +115,14 @@ session
 
 ## 5. 受限接口总览
 
-当前系统提供五类受限接口。
+当前系统提供六类受限接口。
 
 | 接口 | 权限性质 | 允许调用方 | 支持能力 |
 |---|---|---|---|
 | BinancePublicMarketGateway | 公共只读 | DataCollection、DataBackfill、BinanceAccountSync、PriceSnapshot、ExecutionPreparation | K 线、标记价格、最优买卖盘、交易规则、服务器时间 |
 | BinanceAccountReadGateway | 签名只读 | BinanceAccountSync | 账户、余额、持仓 |
 | BinanceOrderSubmissionGateway | 签名交易 | Execution | 提交一笔已经冻结的订单请求 |
+| BinanceOrderCancelGateway | 签名交易 | OrderCycleCloseout | 撤销一笔已经提交且仍未终态的限价订单 |
 | BinanceOrderStatusGateway | 签名只读 | OrderStatusSync | 查询一笔订单状态 |
 | BinanceFillQueryGateway | 签名只读 | FillSync | 查询一笔订单的成交明细 |
 
@@ -232,7 +233,6 @@ PipelineOrchestrator
 RuntimeGuard
 OpsConsole
 Notifications
-AIReview
 ```
 
 PipelineOrchestrator 和 OpsConsole 只能调用 Execution 的受控 application service，不能直接调用 Gateway。
@@ -247,7 +247,9 @@ submit_order(market_type, frozen_order_request, call_context)
 
 `frozen_order_request` 必须来自有效的 PreparedOrderIntent，不得由 Gateway 临时补充或修改业务参数。
 
-Gateway 必须通过类型明确的订单请求结构或等价字段白名单进行序列化。当前 MARKET 订单只允许向 Binance 发送：
+Gateway 必须通过类型明确的订单请求结构或等价字段白名单进行序列化。当前订单提交只支持 `MARKET` 与 `LIMIT`。
+
+MARKET 订单只允许向 Binance 发送：
 
 ```text
 symbol
@@ -261,12 +263,27 @@ newClientOrderId
 
 `market_type` 和调用上下文用于内部路由与校验，不作为调用方可注入的任意 Binance 参数透传。
 
+LIMIT 订单只允许向 Binance 发送：
+
+```text
+symbol
+side
+type = LIMIT
+quantity
+price
+timeInForce
+goodTillDate 或 Binance 对应到期字段（仅当上游 PreparedOrderIntent 已冻结且当前 market_type adapter 明确支持）
+positionSide = BOTH，或按 One-Way Mode 固定协议省略
+reduceOnly
+newClientOrderId
+```
+
+LIMIT 提交中的 `price`、`timeInForce` 和到期字段必须完全来自 `PreparedOrderIntent` 冻结结果。Gateway 不得自行计算限价、延长到期时间、替换 timeInForce 或把 LIMIT 改成 MARKET。
+
 Gateway 必须拒绝未知字段，并明确禁止发送：
 
 ```text
-price
 stopPrice
-timeInForce
 leverage
 marginType
 positionMode
@@ -278,7 +295,6 @@ Gateway 只做请求结构验证和序列化，不补充、修改、缩小、拆
 当前不提供：
 
 ```text
-cancel_order
 replace_order
 batch_order
 modify_order
@@ -286,6 +302,51 @@ change_leverage
 change_margin_type
 change_position_mode
 ```
+
+撤销既有限价单不属于 `BinanceOrderSubmissionGateway`。如需撤销本周期到期或残留的限价单，必须通过独立的 `BinanceOrderCancelGateway` 完成。
+
+### 8.5 BinanceOrderCancelGateway
+
+`BinanceOrderCancelGateway` 是独立的签名交易接口，只允许 `OrderCycleCloseout` 调用。
+
+它只提供：
+
+```text
+cancel_order(market_type, frozen_cancel_request, call_context)
+```
+
+`frozen_cancel_request` 必须来自已经落库的订单链路事实，至少包含：
+
+```text
+symbol
+client_order_id 或 exchange_order_id
+market_type
+account_domain
+order_submission_attempt_id
+prepared_order_intent_id
+cancel_reason_code
+```
+
+Gateway 只负责把已冻结撤单请求序列化并发送给 Binance，不负责决定是否应该撤单、是否应该解锁、是否应该重新下单、是否应该追单。
+
+撤单请求不得携带：
+
+```text
+quantity
+price
+side
+newClientOrderId
+leverage
+marginType
+positionMode
+任意未列入撤单白名单的 Binance 参数
+```
+
+撤单操作不属于订单提交重试。撤单只能针对已经提交过、身份明确、仍未终态的 LIMIT 订单；不得用于重新提交订单、改单、追单或绕过 ActiveLock。
+
+撤单结果只表示 Binance 对撤销请求的响应。订单最终状态仍必须由 `OrderStatusSync` 查询并落库，成交事实仍必须由 `FillSync` 查询并收尾。
+
+撤单请求属于交易写操作，但它处理的是既有订单风险收尾。关闭新的真实交易运行开关不得阻止已提交订单的受控撤单收尾；如果当前部署缺少撤单所需的交易凭据或市场权限，Gateway 必须在请求前返回 `permission_denied` 或 `configuration_error`，由 `OrderCycleCloseout` 保持锁并写 AlertEvent。
 
 ### 8.4 禁止自动重试
 
@@ -429,7 +490,7 @@ Gateway 必须校验调用上下文、冻结业务对象和所选 adapter 一致
 
 ### 11.3 既有订单追踪市场
 
-OrderStatusSync 和 FillSync 必须使用原 OrderSubmissionAttempt 及其上游订单链已经冻结的 market_type、account_domain 和 symbol，不得用当前部署 active market domain 覆盖历史订单身份。
+OrderCycleCloseout、OrderStatusSync 和 FillSync 必须使用原 OrderSubmissionAttempt 及其上游订单链已经冻结的 market_type、account_domain 和 symbol，不得用当前部署 active market domain 覆盖历史订单身份。
 
 如果当前部署具备原订单市场对应的只读凭据和查询能力，Gateway 必须按原订单 market_type 选择查询 adapter。该查询只用于既有订单收尾，不代表同时启用两个 active trading domain。
 
@@ -470,6 +531,17 @@ request_time_utc
 prepared_order_intent_id
 client_order_id
 execution_mode
+```
+
+订单撤销还必须包含：
+
+```text
+order_submission_attempt_id
+prepared_order_intent_id
+active_lock_id
+client_order_id
+exchange_order_id（如已知）
+cancel_reason_code
 ```
 
 调用上下文只用于校验、追踪、日志和元数据返回，不替代业务唯一键。
@@ -989,7 +1061,6 @@ Gateway 不生成业务决策，不写业务事实，不改变订单锁。
 ```text
 WebSocket 行情流；
 Binance User Data Stream；
-订单撤销；
 订单修改；
 批量订单；
 杠杆修改；

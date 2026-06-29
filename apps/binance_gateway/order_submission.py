@@ -10,6 +10,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from django.conf import settings
@@ -224,14 +225,29 @@ def validate_order_submission_request(
 def order_request_error(frozen_order_request: dict[str, Any]) -> bool:
     if not isinstance(frozen_order_request, dict):
         return True
-    if frozen_order_request.get("type") != "MARKET":
+    order_type = str(frozen_order_request.get("type") or "").upper()
+    if order_type not in {"MARKET", "LIMIT"}:
         return True
     if frozen_order_request.get("side") not in {"BUY", "SELL"}:
         return True
     if not frozen_order_request.get("symbol") or not frozen_order_request.get("quantity") or not frozen_order_request.get("newClientOrderId"):
         return True
-    forbidden = {"price", "stopPrice", "timeInForce", "idempotency_key", "signature"}
-    return any(key in frozen_order_request for key in forbidden)
+    forbidden = {"stopPrice", "idempotency_key", "signature"}
+    if any(key in frozen_order_request for key in forbidden):
+        return True
+    if order_type == "MARKET":
+        return "price" in frozen_order_request or "timeInForce" in frozen_order_request
+    if frozen_order_request.get("timeInForce") not in {"GTC", "GTX"}:
+        return True
+    return not _positive_decimal_string(frozen_order_request.get("price"))
+
+
+def _positive_decimal_string(value: Any) -> bool:
+    try:
+        decimal = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return False
+    return decimal.is_finite() and decimal > Decimal("0")
 
 
 def trade_credentials_for_market(market_type: str) -> tuple[str, str]:
@@ -251,16 +267,20 @@ def active_market_type() -> str:
 
 
 def build_signed_order_request(*, market_type: str, frozen_order_request: dict[str, Any], api_secret: str) -> tuple[str, str]:
+    order_type = str(frozen_order_request["type"]).upper()
     payload = {
         "symbol": str(frozen_order_request["symbol"]).upper(),
         "side": frozen_order_request["side"],
-        "type": "MARKET",
+        "type": order_type,
         "quantity": str(frozen_order_request["quantity"]),
         "newClientOrderId": frozen_order_request["newClientOrderId"],
         "reduceOnly": "true" if frozen_order_request.get("reduceOnly") else "false",
         "timestamp": utc_millis(timezone.now()),
         "recvWindow": int(getattr(settings, "BINANCE_RECV_WINDOW_MS", 5000)),
     }
+    if order_type == "LIMIT":
+        payload["price"] = str(frozen_order_request["price"])
+        payload["timeInForce"] = frozen_order_request["timeInForce"]
     query_without_signature = urllib.parse.urlencode(payload)
     signature = hmac.new(api_secret.encode("utf-8"), query_without_signature.encode("utf-8"), hashlib.sha256).hexdigest()
     body = f"{query_without_signature}&signature={signature}"

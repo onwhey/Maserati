@@ -342,7 +342,7 @@ short_cycle_direction = neutral
 trend_1d_bullish_4h_pullback
 ```
 
-解释成牛市回调、支撑做多或加仓。
+解释成牛市回调、支撑位置策略处理或仓位动作。
 
 不得把：
 
@@ -350,7 +350,7 @@ trend_1d_bullish_4h_pullback
 trend_1d_bearish_4h_rebound
 ```
 
-解释成熊市反弹、压力做空或开空。
+解释成熊市反弹、压力位置策略处理或仓位动作。
 
 完整市场环境必须由 MarketRegime 综合 market_context、trend、momentum、volatility、structure 和 risk_state 后形成。
 
@@ -525,10 +525,8 @@ trend_unclear。
 高位宽幅震荡；
 低位筑底；
 趋势中继整理；
-上涨背景下支撑做多；
-下跌背景下反弹做空；
-突破买入；
-跌破卖出。
+支撑或压力位置下的策略处理；
+突破或跌破后的交易动作。
 ```
 
 这些必须由 MarketRegime 或更下游模块在自身边界内完成。
@@ -600,7 +598,7 @@ state_code = trend_1d_bullish_4h_pullback
 strength 只按 1d 方向差计算，不因 4h 反向而扣减
 ```
 
-不得输出“牛市回调”或“支撑做多”。
+不得输出“牛市回调”或“支撑位置策略处理”。
 
 ### 12.3 1d 与 4h 同向偏空
 
@@ -638,7 +636,7 @@ state_code = trend_1d_bearish_4h_rebound
 strength 只按 1d 方向差计算，不因 4h 反向而扣减
 ```
 
-不得输出“熊市反弹”或“压力做空”。
+不得输出“熊市反弹”或“压力位置策略处理”。
 
 ### 12.5 1d 不明确但 4h 偏多
 

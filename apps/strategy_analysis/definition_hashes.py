@@ -48,6 +48,31 @@ def normalize_feature_codes(values: Iterable[Any]) -> tuple[str, ...]:
     return codes
 
 
+def feature_definition_hash(
+    *,
+    feature_code: str,
+    definition_version: str,
+    algorithm_name: str,
+    algorithm_version: str,
+    params_hash: str,
+    value_type: str,
+    input_timeframes: Iterable[Any],
+    output_schema_version: str,
+) -> str:
+    return stable_hash(
+        {
+            "feature_code": _required_text(feature_code, field_name="feature_code"),
+            "definition_version": _required_text(definition_version, field_name="definition_version"),
+            "algorithm_name": _required_text(algorithm_name, field_name="algorithm_name"),
+            "algorithm_version": _required_text(algorithm_version, field_name="algorithm_version"),
+            "params_hash": _required_text(params_hash, field_name="params_hash"),
+            "value_type": _required_text(value_type, field_name="value_type"),
+            "input_timeframes": tuple(str(value).strip() for value in input_timeframes if str(value).strip()),
+            "output_schema_version": _required_text(output_schema_version, field_name="output_schema_version"),
+        }
+    )
+
+
 def atomic_signal_definition_hash(
     *,
     signal_code: str,

@@ -131,7 +131,7 @@ AlertEvent 可以被：
 ```text
 OpsConsole 展示；
 RuntimeGuard 巡检；
-AIReview 离线复盘读取；
+ReviewDataset 复盘数据导出读取；
 Notifications 投递到 Hermes；
 人工排查引用。
 ```
@@ -161,6 +161,8 @@ fallback_reduce_only selected；
 ApprovedOrderIntent generated / expired / canceled；
 ExecutionPreparation passed / blocked / failed；
 OrderSubmissionAttempt accepted / rejected / unknown / blocked_before_submit / failed_before_submit；
+OrderCycleCloseout started / no_residual_order / blocked；
+OrderCancelAttempt accepted / not_found / unknown / failed_before_cancel / blocked_before_cancel；
 OrderStatusSync NEW / PARTIALLY_FILLED / FILLED / CANCELED / REJECTED / EXPIRED / EXPIRED_IN_MATCH / polling_timeout；
 TradeFill recorded；
 OrderFillSummary synced / synced_empty / incomplete / unknown；
@@ -168,8 +170,7 @@ BinancePositionSnapshot changed；
 ActiveLock released / failed / manual_finalized；
 real trading runtime permission changed；
 RuntimeGuardIssue created / reminded / resolved；
-PerformanceMetrics calculated / insufficient_snapshot / failed；
-AIReview requested / failed / completed；
+ReviewDataset export_requested / export_completed / export_failed；
 Notifications delivery failed / abandoned。
 ```
 
@@ -223,8 +224,7 @@ runtime_guard
 safety_control
 account_sync
 price_snapshot
-performance
-ai_review
+review_dataset
 data_pipeline
 notification_delivery
 system_security
@@ -913,7 +913,7 @@ deliver_notification_attempt(delivery_attempt_id, trace_id)
 query_alert_events(filters, pagination)
 ```
 
-用于 OpsConsole、RuntimeGuard 和 AIReview。
+用于 OpsConsole、RuntimeGuard 和 ReviewDataset。
 
 查询接口只能读取，不得产生投递副作用。
 
@@ -1096,11 +1096,11 @@ RuntimeGuard 不得：
 关闭通知路由。
 ```
 
-## 32. 与 AIReview 的关系
+## 32. 与 ReviewDataset 的关系
 
-AIReview 可以读取 AlertEvent 和 DeliveryAttempt 摘要作为离线复盘输入。
+ReviewDataset 可以读取 AlertEvent、DeliveryAttempt 和 Suppression 摘要作为复盘数据导出输入。
 
-AIReview 不得：
+ReviewDataset 不得：
 
 ```text
 根据告警自动修改策略；
@@ -1109,7 +1109,7 @@ AIReview 不得：
 根据告警自动触发 Hermes。
 ```
 
-AIReview 生成的复盘报告和建议本身也可以写 AlertEvent，但必须明确标识为离线复盘事件。
+ReviewDataset 导出事件可以写 AlertEvent，但必须明确标识为复盘数据导出事件，不得包含复盘结论。
 
 ## 33. 与真实交易运行开关的关系
 
@@ -1256,7 +1256,7 @@ Redis 不可用 → 降级为 MySQL 幂等和保守限频。
 18. 模板渲染只能使用脱敏字段。
 19. Redis 不可用时 AlertEvent 仍保存到 MySQL。
 20. Hermes secret 不会返回前端。
-21. AIReview 可以读取脱敏 AlertEvent 摘要。
+21. ReviewDataset 可以读取脱敏 AlertEvent 摘要。
 22. RuntimeGuard 可以巡检 DeliveryAttempt 卡住。
 23. Notifications 不访问 Binance Gateway。
 24. Notifications 不调用 DeepSeek。
@@ -1273,7 +1273,7 @@ Redis 不可用 → 降级为 MySQL 幂等和保守限频。
 35. 外部投递关闭时 AlertEvent 仍保存，并记录明确 Suppression。
 36. worker 关闭时 pending DeliveryAttempt 仍保存，恢复后可继续认领。
 37. 正式 AlertEvent 写入没有可关闭总开关。
-38. 交易事件清单使用 OrderSubmissionAttempt、OrderStatusSyncRecord、TradeFill、OrderFillSummary 和 BinancePositionSnapshot，不为通知额外引入新的交易业务对象。
+38. 交易事件清单使用 OrderSubmissionAttempt、OrderCancelAttempt、OrderStatusSyncRecord、TradeFill、OrderFillSummary 和 BinancePositionSnapshot，不为通知额外引入新的交易业务对象。
 39. AlertEvent 不直接保存 orchestration_run_id 或 step_run_id，由 OrchestrationBusinessObjectLink 关联。
 40. DeliveryAttempt 冻结 route_hash 和 template_hash，后续配置变更不改写历史。
 41. RuntimeGuard 能发现应投递事件缺少 DeliveryAttempt / Suppression 的异常。

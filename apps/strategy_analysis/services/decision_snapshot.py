@@ -76,6 +76,8 @@ class DecisionDraft:
     target_confidence: Decimal | None
     target_reason_code: str
     target_reason_summary_zh: str
+    frozen_trade_price_condition: dict[str, Any]
+    frozen_trade_price_condition_hash: str
     decision_calculation_snapshot: dict[str, Any]
     input_snapshot: dict[str, Any]
     evidence_summary: dict[str, Any]
@@ -246,6 +248,8 @@ def _model_data(snapshot: DecisionSnapshot) -> dict[str, Any]:
         "target_intent": snapshot.target_intent,
         "target_position_ratio": snapshot.target_position_ratio,
         "target_confidence": snapshot.target_confidence,
+        "frozen_trade_price_condition": snapshot.frozen_trade_price_condition,
+        "frozen_trade_price_condition_hash": snapshot.frozen_trade_price_condition_hash,
         "is_usable": snapshot.is_usable,
         "allows_order_plan": snapshot.allows_order_plan,
         "error_code": snapshot.error_code,
@@ -433,6 +437,7 @@ def _input_snapshot(context: DecisionContext) -> dict[str, Any]:
         "definition_hash": context.policy.definition_hash,
         "market_as_of_utc": _json_ready(quality.market_as_of_utc or signal.analysis_close_time_utc),
         "analysis_close_time_utc": _json_ready(signal.analysis_close_time_utc),
+        "has_trade_price_condition": bool(signal.trade_price_condition),
     }
 
 
@@ -446,6 +451,8 @@ def _failed_draft(context: DecisionContext, *, error_code: str, error_message: s
         target_confidence=None,
         target_reason_code="",
         target_reason_summary_zh="DecisionPolicy calculator 计算失败。",
+        frozen_trade_price_condition={},
+        frozen_trade_price_condition_hash="",
         decision_calculation_snapshot={},
         input_snapshot=_input_snapshot(context),
         evidence_summary={"strategy_signal_quality_result_id": quality.id, "strategy_signal_id": signal.id},
@@ -490,6 +497,8 @@ def _validate_output(*, output: CalculatorOutput, context: DecisionContext, late
     is_target_position = intent == DecisionTargetIntent.TARGET_POSITION
     is_usable = intent in set(DecisionTargetIntent.values) and (not is_target_position or expires_at > now)
     allows_order_plan = bool(is_target_position and ratio is not None and is_usable)
+    frozen_condition = _frozen_trade_price_condition(context)
+    frozen_condition_hash = _frozen_trade_price_condition_hash(frozen_condition)
     evidence_items = _json_ready(output.evidence_items)
     if not evidence_items:
         raise InvalidCalculatorContractError("DecisionPolicy 输出证据不能为空")
@@ -500,6 +509,8 @@ def _validate_output(*, output: CalculatorOutput, context: DecisionContext, late
         target_confidence=confidence,
         target_reason_code=_limited_text(reason_code, max_length=MAX_ERROR_CODE_LENGTH),
         target_reason_summary_zh=_limited_text(reason_summary, max_length=MAX_REASON_SUMMARY_LENGTH),
+        frozen_trade_price_condition=frozen_condition,
+        frozen_trade_price_condition_hash=frozen_condition_hash,
         decision_calculation_snapshot={
             **_json_ready(calculation_snapshot),
             "latency_ms": latency_ms,
@@ -508,6 +519,8 @@ def _validate_output(*, output: CalculatorOutput, context: DecisionContext, late
         evidence_summary={
             "calculator_evidence": evidence_items,
             "calculation_summary": _json_ready(output.calculation_summary),
+            "has_frozen_trade_price_condition": bool(frozen_condition),
+            "frozen_trade_price_condition_hash": frozen_condition_hash,
         },
         expires_at_utc=expires_at,
         is_usable=is_usable,
@@ -524,6 +537,19 @@ def _target_position_ratio(value: Any, *, target_intent: str) -> Decimal | None:
     if value not in (None, ""):
         raise InvalidCalculatorContractError("NO_TRADE / NO_TARGET_CHANGE 不得包含 target_position_ratio")
     return None
+
+
+def _frozen_trade_price_condition(context: DecisionContext) -> dict[str, Any]:
+    condition = getattr(context.quality_result.strategy_signal, "trade_price_condition", None)
+    if not isinstance(condition, dict):
+        return {}
+    return _json_ready(condition)
+
+
+def _frozen_trade_price_condition_hash(condition: dict[str, Any]) -> str:
+    if not condition:
+        return ""
+    return stable_hash({"frozen_trade_price_condition": condition})
 
 
 def _expires_at(context: DecisionContext) -> datetime:
@@ -573,6 +599,7 @@ def _decision_snapshot_key(context: DecisionContext, draft: DecisionDraft) -> st
             "target_position_ratio": str(draft.target_position_ratio) if draft.target_position_ratio is not None else None,
             "target_confidence": str(draft.target_confidence) if draft.target_confidence is not None else None,
             "target_reason_code": draft.target_reason_code,
+            "frozen_trade_price_condition_hash": draft.frozen_trade_price_condition_hash,
             "market_as_of_utc": (quality.market_as_of_utc or signal.analysis_close_time_utc).isoformat(),
         }
     )
@@ -611,6 +638,8 @@ def _persist_snapshot(
         target_confidence=draft.target_confidence,
         target_reason_code=draft.target_reason_code,
         target_reason_summary_zh=draft.target_reason_summary_zh,
+        frozen_trade_price_condition=draft.frozen_trade_price_condition,
+        frozen_trade_price_condition_hash=draft.frozen_trade_price_condition_hash,
         decision_calculation_snapshot=_json_ready(draft.decision_calculation_snapshot),
         input_snapshot=_json_ready(draft.input_snapshot),
         evidence_summary=_json_ready(draft.evidence_summary),

@@ -535,10 +535,11 @@ COIN-M estimated_notional_usd
 
 ## 16. 支持的订单合同
 
-当前只支持：
+当前支持：
 
 ```text
 order_type = MARKET
+order_type = LIMIT
 position_mode = one_way
 position_side = BOTH
 ```
@@ -557,6 +558,20 @@ PreparedOrderIntent 中可以记录：
 ```text
 time_in_force = null 或 not_applicable
 ```
+
+LIMIT 单必须冻结：
+
+```text
+limit_price；
+limit_valid_until_utc；
+time_in_force；
+price_condition_hash；
+price_condition_evidence_refs。
+```
+
+LIMIT 单的 `limit_valid_until_utc` 必须来自上游 CandidateOrderIntent / ApprovedOrderIntent，不得由 ExecutionPreparation 临时延长。若执行准备时已经晚于或等于 `limit_valid_until_utc`，必须 BLOCKED，不得生成 PreparedOrderIntent。
+
+`selected_live_price` 仍只用于 price guard、名义复核和审计。对于 LIMIT 单，`selected_live_price` 不得覆盖 `limit_price`。
 
 不支持的订单类型、持仓模式、position_side 或数量单位必须阻断，不得临时转换。
 
@@ -577,13 +592,16 @@ quantity
 quantity_unit
 reduce_only
 time_in_force
+limit_price
+limit_valid_until_utc
+price_condition_hash
 client_order_id
 idempotency_key
 ```
 
 冻结值必须来自获批的 CandidateOrderIntent，不得由本模块重新规划。
 
-`selected_live_price` 只用于 price guard 和审计，不得作为 MARKET 单的 limit price 发送。
+`selected_live_price` 只用于 price guard 和审计。MARKET 单不得发送 limit price；LIMIT 单只能发送已冻结的 `limit_price`，不得用 `selected_live_price` 替换。
 
 ## 18. ExecutionPreparationResult
 
@@ -724,6 +742,14 @@ expires_at_utc = min(
 
 30 秒有效窗口从本次实时盘口价格被成功观测的时间开始，不从数据库写入完成时间重新计时。
 
+LIMIT 单还必须满足：
+
+```text
+expires_at_utc <= limit_valid_until_utc
+```
+
+PreparedOrderIntent 的 30 秒有效期只限制“提交动作必须尽快发生”，不表示限价单在交易所的挂单有效期。限价单挂单有效期由 `limit_valid_until_utc` 和后续订单周期收尾流程约束。
+
 如果准备过程消耗了部分时间，PreparedOrderIntent 只能使用剩余有效时间。如果计算出的 `expires_at_utc <= prepared_at_utc`，本次准备必须阻断。
 
 Execution 在发送任何订单请求前必须再次确认：
@@ -794,6 +820,9 @@ quantity
 quantity_unit
 reduce_only
 order_type
+limit_price
+limit_valid_until_utc
+price_condition_hash
 ```
 
 实时盘口返回值不参与幂等 key；它属于该唯一准备结果的证据。
@@ -995,7 +1024,7 @@ config_snapshot
 EXECUTION_PREPARATION_ENABLED
 EXECUTION_PREPARATION_MAX_PRICE_DEVIATION_BPS=100
 PREPARED_ORDER_INTENT_TTL_SECONDS=30
-EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES=MARKET
+EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES=MARKET,LIMIT
 EXECUTION_PREPARATION_SUPPORTED_POSITION_MODE=one_way
 ```
 
@@ -1088,7 +1117,7 @@ Binance 实时盘口不可获得或不可验证 → BLOCKED；
 23. 交易规则不满足时阻断且不改数量。
 24. USDS-M quantity 路径正确。
 25. COIN-M contracts 与 contract_size 路径正确。
-26. 只支持 MARKET、One-Way Mode 和 position_side = BOTH，且不发送 timeInForce。
+26. 支持 MARKET / LIMIT、One-Way Mode 和 position_side = BOTH；MARKET 不发送 timeInForce，LIMIT 必须冻结 timeInForce 与 limit_price。
 27. 成功只生成一份 PreparedOrderIntent。
 28. PreparedOrderIntent 与 ApprovedOrderIntent 一对一。
 29. client_order_id 和 idempotency_key 唯一且稳定。
@@ -1108,6 +1137,10 @@ Binance 实时盘口不可获得或不可验证 → BLOCKED；
 43. trace_id 进入 ExecutionPreparationResult、AlertEvent、Gateway 元数据和日志，但不重复写入 PreparedOrderIntent。
 44. 正式自动链路缺少 trace_id 时 FAILED，且本模块不自行生成替代值。
 45. 持仓复核只核对已绑定账户快照，不宣称已重新查询 Binance 当前持仓。
+46. LIMIT 单的 limit_valid_until_utc 已过期时 BLOCKED。
+47. LIMIT 单的 PreparedOrderIntent.expires_at_utc 不得晚于 limit_valid_until_utc。
+48. LIMIT 单不得用 selected_live_price 覆盖 limit_price。
+49. limit_price、limit_valid_until_utc 和 price_condition_hash 进入幂等键。
 ```
 
 ## 32. 验收标准
@@ -1139,7 +1172,7 @@ WebSocket 实时行情；
 dry-run；
 盘口深度和预估冲击成本；
 根据流动性动态缩单；
-限价单、止损单或追踪止损单；
+止损单或追踪止损单；
 自动重新风控；
 自动重新生成账户或价格快照；
 订单提交；

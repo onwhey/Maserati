@@ -14,6 +14,8 @@ OrderSubmissionAttempt
 
 本模块只查询一条既有 `OrderSubmissionAttempt` 对应的 Binance 订单状态，并保存独立、可审计的查询事实。
 
+OrderStatusSync 属于独立订单生命周期同步管线，不属于主交易编排在 OrderSubmission 后继续内嵌执行的尾部步骤。
+
 本模块不提交订单，不重试订单提交，不把订单状态当作成交明细，也不单独释放 ActiveLock。
 
 ## 2. 核心目标
@@ -650,6 +652,10 @@ is_terminal_status=false；
 
 OrderStatusSync 不在此时计算成交汇总，也不因市价单部分成交而假设剩余数量会立即完成。
 
+对于 LIMIT 订单，`NEW` 表示交易所仍可能保留挂单，`PARTIALLY_FILLED` 表示订单仍可能继续成交。二者都不是失败，也不是允许解锁的证据。
+
+如果 LIMIT 订单在 30 秒立即轮询窗口结束时仍为 `NEW` 或 `PARTIALLY_FILLED`，OrderStatusSync 只保存当前状态并保持 ActiveLock。到达该订单冻结的 `limit_valid_until_utc` 后，应由 OrderCycleCloseout 执行受控周期收尾；OrderStatusSync 自身不得撤单。
+
 ## 25. 未识别状态
 
 如果 Binance 返回不在已识别集合中的状态：
@@ -735,6 +741,8 @@ polling_timeout
 ```
 
 如果最后状态是 NEW 或 PARTIALLY_FILLED，订单可能仍在交易所活动；如果最后结果是 not_found 或 unknown，订单是否存在仍未解决。两类情况都不能自动解锁。
+
+对于 LIMIT 订单，`NEW / PARTIALLY_FILLED` 持续到 30 秒窗口结束属于“订单仍未终态”的正常可能结果，不得写成提交失败、成交失败或策略失败。后续是否到期撤单由 OrderCycleCloseout 按冻结有效期处理。
 
 ## 28. 崩溃恢复补查
 

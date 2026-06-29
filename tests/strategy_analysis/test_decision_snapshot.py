@@ -197,6 +197,7 @@ def build_decision_fixture(
     strategy_direction: str = StrategySignalDirection.BULLISH,
     policy_enabled: bool = True,
     policy_params: dict[str, Any] | None = None,
+    trade_price_condition: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], StrategySignalQualityRuleSet, StrategySignal, StrategySignalQualityResult, DecisionPolicyDefinition]:
     fixture = build_routing_fixture()
     rule_set = create_quality_rule_set()
@@ -206,7 +207,12 @@ def build_decision_fixture(
     route_result = run_route(fixture)
     assert route_result.status == "succeeded"
     fixture["decision"] = StrategyRouteDecision.objects.get(id=route_result.data["strategy_route_decision_id"])
-    strategy_registry, _strategy_calculator = signal_registry(FakeStrategySignalCalculator(direction=strategy_direction))
+    strategy_registry, _strategy_calculator = signal_registry(
+        FakeStrategySignalCalculator(
+            direction=strategy_direction,
+            trade_price_condition=trade_price_condition,
+        )
+    )
     signal_result = run_signal(fixture, registry=strategy_registry)
     assert signal_result.status == "succeeded"
     signal = StrategySignal.objects.get(id=signal_result.data["strategy_signal_id"])
@@ -317,7 +323,34 @@ def test_decision_snapshot_calculator_receives_strategy_signal_not_market_analys
     assert "strategy_code" not in payload
     assert "market_regime_snapshot" not in payload
     assert "domain_signal_values" not in payload
+    assert "trade_price_condition" not in payload
     assert "market_regime_snapshot_id" not in refs
+
+
+@pytest.mark.django_db
+def test_decision_snapshot_freezes_strategy_trade_price_condition_without_calculator_consumption() -> None:
+    condition = {
+        "condition_type": "near_support_only",
+        "reference_price_zone": "支撑区附近",
+        "acceptable_price_zone": {"lower": "49000", "upper": "50000"},
+        "support_or_resistance_refs": ["structure.support.primary"],
+        "allow_chasing": False,
+        "reason_code": "long_pullback_support_entry",
+        "reason_summary_zh": "只在支撑区附近考虑执行。",
+    }
+    fixture, _rule_set, signal, quality, _policy = build_decision_fixture(trade_price_condition=condition)
+    registry, calculator = decision_registry()
+
+    result = run_decision(quality=quality, release=fixture["release"], registry=registry)
+
+    snapshot = DecisionSnapshot.objects.get()
+    assert result.status == "succeeded"
+    assert signal.trade_price_condition == condition
+    assert snapshot.frozen_trade_price_condition == condition
+    assert snapshot.frozen_trade_price_condition_hash
+    assert snapshot.evidence_summary["has_frozen_trade_price_condition"] is True
+    assert calculator.last_input is not None
+    assert "trade_price_condition" not in thaw_value(calculator.last_input.values)
 
 
 @pytest.mark.django_db

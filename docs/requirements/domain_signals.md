@@ -87,9 +87,12 @@ StrategySignal = 选定策略产生的策略级判断。
 当前正式领域范围包括：
 
 ```text
-trend       = 趋势领域；
-momentum    = 动量领域；
-volatility  = 波动领域。
+market_context = 大级别市场背景领域；
+trend          = 趋势领域；
+momentum       = 动量领域；
+volatility     = 波动领域；
+structure      = 支撑压力与区间结构领域；
+risk_state     = 市场风险状态领域。
 ```
 
 允许通过 DomainSignalDefinition 注册其他领域，但必须满足：
@@ -204,7 +207,7 @@ portfolio_weight。
 ```text
 一个领域最多产生一份正式 DomainSignalValue；
 MarketRegime 只能读取该领域唯一的正式结果；
-正式版本包必须同时包含 trend、momentum、volatility 三个领域；
+正式版本包必须同时包含 market_context、trend、momentum、volatility、structure、risk_state 六个领域；
 同领域缺失或存在多个定义时必须 blocked，不得自动选择版本。
 ```
 
@@ -303,7 +306,7 @@ definition_set_hash。
 `strategy_analysis_release_id` 与 `strategy_analysis_release_hash` 必须对应本轮编排开始时冻结的已批准并已启用版本包。DomainSignalService 必须只读取版本包的领域切片，并校验：
 
 ```text
-trend、momentum、volatility 三个领域全部存在；
+market_context、trend、momentum、volatility、structure、risk_state 六个领域全部存在；
 每个 domain_code 恰好选择一个 DomainSignalDefinition；
 每个被选定义为 active、enabled 且 calculator 已注册；
 每个正式 AtomicSignalDefinition 恰好归属于一个被选领域；
@@ -393,13 +396,13 @@ unknown
 所有 required DomainSignalValue 有效；
 定义集合身份完整；
 DomainSignalSet 与 Value 完整落库；
-trend、momentum、volatility 三个正式领域结果齐全。
+market_context、trend、momentum、volatility、structure、risk_state 六个正式领域结果齐全。
 ```
 
 放行规则：
 
 ```text
-三个领域的 DomainSignalValue 全部有效
+六个领域的 DomainSignalValue 全部有效
 + 所有 is_required = true 的输入有效
 + 正式领域归属唯一且版本包指纹一致
 → allows_market_regime = true；
@@ -422,7 +425,7 @@ AtomicSignalSet 非 created；
 AtomicSignalSet.is_usable = false；
 AtomicSignalSet.allows_domain_signal = false；
 StrategyAnalysisRelease 不存在、未批准、未启用或指纹不一致；
-版本包未完整选择 trend、momentum、volatility 三个领域；
+版本包未完整选择 market_context、trend、momentum、volatility、structure、risk_state 六个领域；
 版本包领域切片缺失、多出、重复或定义集指纹不一致；
 版本包选择了不可用的 DomainSignalDefinition；
 正式领域归属冲突；
@@ -679,7 +682,7 @@ DomainSignalDefinition 不保存额外的算法运行等级或“参与正式 Ma
 定义被本轮 StrategyAnalysisRelease 领域切片选择；
 定义为 active 且 enabled；
 同一 domain_code 只选择一个定义；
-trend、momentum、volatility 三个领域齐全；
+market_context、trend、momentum、volatility、structure、risk_state 六个领域齐全；
 原子依赖与同一版本包原子信号切片一致。
 ```
 
@@ -847,7 +850,7 @@ definition_hash；
 is_required。
 ```
 
-该集合必须严格等于本轮 StrategyAnalysisRelease 的领域切片，且必须包含 trend、momentum、volatility 各一个定义。数据库中其他 active 或 enabled 定义不得加入本次 definition_set_hash。
+该集合必须严格等于本轮 StrategyAnalysisRelease 的领域切片，且必须包含 market_context、trend、momentum、volatility、structure、risk_state 各一个定义。数据库中其他 active 或 enabled 定义不得加入本次 definition_set_hash。
 
 definition_set_hash 不能替代 DomainSignalValue 对 DomainSignalDefinition 的逐条绑定。
 
@@ -865,7 +868,7 @@ unknown → is_usable = false → allows_market_regime = false。
 created 的放行规则：
 
 ```text
-trend、momentum、volatility 三个正式领域结果全部有效
+market_context、trend、momentum、volatility、structure、risk_state 六个正式领域结果全部有效
 + 所有 is_required = true 的 DomainSignalValue 有效
 + 正式领域归属唯一且版本包指纹一致
 → allows_market_regime = true；
@@ -876,7 +879,7 @@ trend、momentum、volatility 三个正式领域结果全部有效
 → allows_market_regime = false。
 ```
 
-正式服务不得创建仅供研究使用的 DomainSignalSet。无法满足三个领域完整性与放行条件时，应按发生阶段返回 blocked 或持久化 failed，不得以 created 规避失败。
+正式服务不得创建仅供研究使用的 DomainSignalSet。无法满足六个领域完整性与放行条件时，应按发生阶段返回 blocked 或持久化 failed，不得以 created 规避失败。
 
 MarketRegimeDefinition 的 required domain 合同属于下游配置，由 MarketRegimeService 校验，不参与 DomainSignalSet 的放行计算。
 
@@ -1350,7 +1353,7 @@ strength 使用该算法需求文档明确的恒等或归一化公式；
 
 该算法只是可选择的基准算法，不自动进入正式链路。其实现必须记录在独立 algorithm_version 文件中；以后替换聚合逻辑时新增算法版本，不修改 DomainSignalService。
 
-如果算法库尚不能为 trend、momentum、volatility 三个领域组成完整版本包，则不得批准或启用正式 StrategyAnalysisRelease；系统应在 FeatureLayer 前阻断，而不是用空领域或默认值补齐。
+如果算法库尚不能为 market_context、trend、momentum、volatility、structure、risk_state 六个领域组成完整版本包，则不得批准或启用正式 StrategyAnalysisRelease；系统应在 FeatureLayer 前阻断，而不是用空领域或默认值补齐。
 
 ## 16. DomainSignalService 主流程
 
@@ -1365,7 +1368,7 @@ strength 使用该算法需求文档明确的恒等或归一化公式；
 6. 校验 AtomicSignalSet 与本轮 StrategyAnalysisRelease 身份和原子信号切片一致；
 7. 读取 AtomicSignalValue 并构建 signal_code → Value 映射；
 8. 读取版本包领域切片，不追加其他 active 定义；
-9. 校验 trend、momentum、volatility 各一个定义以及原子证据唯一归属；
+9. 校验 market_context、trend、momentum、volatility、structure、risk_state 各一个定义以及原子证据唯一归属；
 10. 校验所有 Definition 为 active、enabled 且 calculator 已注册；
 11. 冻结定义集合、计算 definition_set_hash 并与版本包预期指纹比较；
 12. 生成 domain_signal_set_key；
@@ -1770,7 +1773,7 @@ dry-run 必须：
 8. 版本包领域切片缺项、多项、重复或 definition_set_hash 不一致时 blocked。
 9. 同一版本包中相同原子信号不能属于两个正式领域。
 10. 后台研究的重叠组合不得写入正式 DomainSignalSet。
-11. 正式版本包必须包含 trend、momentum、volatility 各一个定义。
+11. 正式版本包必须包含 market_context、trend、momentum、volatility、structure、risk_state 各一个定义。
 12. 同领域缺失或存在多个定义时 blocked，不自动选择。
 13. CalculatorRegistry 按完整算法身份定位实现。
 14. calculator 缺失时不生成可消费集合。
@@ -1805,7 +1808,7 @@ dry-run 必须：
 43. required 领域失败会阻断 DomainSignalSet。
 44. 未被版本包选择的定义和后台研究结果不进入 MarketRegime。
 45. 正式服务不得创建仅用于研究的 DomainSignalSet。
-46. 三个领域齐全、created 且 allows_market_regime = true 才能进入 MarketRegime。
+46. 六个领域齐全、created 且 allows_market_regime = true 才能进入 MarketRegime。
 47. blocked、failed、unknown 均不允许下游消费。
 48. definition_set_hash 对相同定义集合稳定。
 49. domain_signal_set_key 对相同输入身份稳定。
@@ -1825,7 +1828,7 @@ dry-run 必须：
 63. DomainSignal 不生成 DecisionSnapshot。
 64. DomainSignal 不请求 Binance。
 65. DomainSignal 不调用 BinanceGateway。
-66. DomainSignal 不调用 DeepSeekGateway。
+66. DomainSignal 不调用大模型。
 67. DomainSignal 不保存或查询编排 ID。
 68. adapter 显式映射业务结果。
 69. 全部业务时间使用 UTC。
@@ -1856,7 +1859,7 @@ python manage.py build_domain_signals --atomic-signal-set-id <id> --strategy-ana
 
 ```text
 DomainSignalDefinition 的状态、配置和 hash 完整；
-StrategyAnalysisRelease 身份、三领域切片与原子归属完整；
+StrategyAnalysisRelease 身份、六领域切片与原子归属完整；
 DomainSignalSet 正确绑定 AtomicSignalSet；
 definition_set_hash 可复算；
 Value 数量与冻结定义集合一致；

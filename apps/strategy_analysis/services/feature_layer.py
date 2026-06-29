@@ -170,6 +170,8 @@ def _kline_summary(kline: Kline) -> dict[str, str]:
 def _extract_feature_value(definition: FeatureDefinition, output: CalculatorOutput) -> dict[str, Any]:
     value = thaw_value(output.values).get("value")
     if definition.value_type == FeatureValueType.DECIMAL:
+        if value is None and bool((definition.params or {}).get("nullable")):
+            return {"numeric_value": None, "bool_value": None, "text_value": ""}
         try:
             decimal_value = Decimal(str(value))
             if not decimal_value.is_finite():

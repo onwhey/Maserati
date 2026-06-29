@@ -192,6 +192,11 @@ class OrderPlanActiveLockEvent(models.Model):
 
 
 class CandidateOrderIntent(models.Model):
+    time_in_force = models.CharField("timeInForce", max_length=40, blank=True)
+    limit_price = models.DecimalField("LIMIT price", max_digits=38, decimal_places=18, null=True, blank=True)
+    limit_valid_until_utc = models.DateTimeField("LIMIT valid until UTC", null=True, blank=True)
+    price_condition_hash = models.CharField("price condition hash", max_length=80, blank=True)
+    price_condition_evidence = models.JSONField("price condition evidence", default=dict, blank=True)
     order_plan = models.ForeignKey(OrderPlan, on_delete=models.PROTECT, related_name="candidate_intents")
     intent_role = models.CharField("候选意图角色", max_length=40, choices=CandidateIntentRole.choices)
     symbol = models.CharField("交易品种", max_length=40)

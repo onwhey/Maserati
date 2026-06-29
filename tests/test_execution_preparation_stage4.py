@@ -36,11 +36,36 @@ def _enable_execution_preparation(settings) -> None:
     settings.EXECUTION_PREPARATION_SUPPORTED_POSITION_MODE = "one_way"
 
 
-def _approved(settings, *, ratio: str = "0.5", price_value: str = "50000", position: str = "0", available: str = "1000", key: str = "approved"):
+def _approved(
+    settings,
+    *,
+    ratio: str = "0.5",
+    price_value: str = "50000",
+    position: str = "0",
+    available: str = "1000",
+    key: str = "approved",
+    limit_condition: dict | None = None,
+):
     _enable_execution_preparation(settings)
-    account = _account_facts(position=position, equity="1000", available=available, leverage="20")
+    if limit_condition is not None:
+        settings.ORDER_PLAN_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+        settings.EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES = ["MARKET", "LIMIT"]
+    account = _account_facts(
+        position=position,
+        equity="1000",
+        available=available,
+        leverage="20",
+        order_types=["MARKET", "LIMIT"] if limit_condition is not None else None,
+    )
     price = _price(value=price_value)
-    _order_plan(settings=settings, ratio=ratio, account=account, price=price, key=key)
+    _order_plan(
+        settings=settings,
+        ratio=ratio,
+        account=account,
+        price=price,
+        key=key,
+        decision_calculation_snapshot={"frozen_trade_price_condition": limit_condition} if limit_condition is not None else None,
+    )
     candidate = ApprovedOrderIntent.objects.first()
     if candidate is None:
         primary = OrderPlan.objects.get().candidate_intents.get(intent_role="primary")
@@ -106,6 +131,35 @@ def test_prepare_buy_uses_best_ask_and_creates_prepared_order(settings) -> None:
     assert OrderPlanActiveLock.objects.get().status == ActiveLockStatus.ACTIVE
     assert gateway.calls == [{"operation": "get_book_ticker", "market_type": MARKET_TYPE_USDS_M, "symbol": "BTCUSDT"}]
     assert AlertEvent.objects.filter(source_module="ExecutionPreparation", event_type="execution_preparation_prepared").count() == 1
+
+
+def test_prepare_limit_order_preserves_frozen_price_condition(settings) -> None:
+    valid_until = timezone.now() + timedelta(hours=3, minutes=50)
+    approved = _approved(
+        settings,
+        ratio="0.5",
+        price_value="50000",
+        key="limit",
+        limit_condition={
+            "order_type": "LIMIT",
+            "limit_price": "49000",
+            "limit_valid_until_utc": valid_until.isoformat(),
+            "time_in_force": "GTC",
+            "price_condition_hash": "limit-condition-hash",
+        },
+    )
+    gateway = _gateway(bid="49990", ask="50010")
+
+    result = _prepare(approved, gateway, key="limit")
+
+    prepared = PreparedOrderIntent.objects.get()
+    assert result.status == "succeeded"
+    assert prepared.order_type == "LIMIT"
+    assert prepared.time_in_force == "GTC"
+    assert prepared.limit_price == Decimal("49000")
+    assert prepared.limit_valid_until_utc == valid_until
+    assert prepared.price_condition_hash == "limit-condition-hash"
+    assert prepared.expires_at_utc <= valid_until
 
 
 def test_price_deviation_equal_one_percent_is_allowed(settings) -> None:

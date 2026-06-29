@@ -12,14 +12,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q, QuerySet
 
 from apps.alerts.models import AlertEvent, NotificationDeliveryAttempt, NotificationSuppression
-from apps.ai_review.models import (
-    AIReviewAttempt,
-    AIReviewFinding,
-    AIReviewPackage,
-    AIReviewReport,
-    AIReviewRequest,
-    AIReviewSuggestion,
-)
 from apps.audit.models import AuditRecord
 from apps.binance_account_sync.models import (
     BinanceAccountSnapshot,
@@ -36,8 +28,14 @@ from apps.foundation.redaction import sanitize_mapping, sanitize_value
 from apps.orchestration.models import OrchestrationBusinessObjectLink, OrchestrationRun
 from apps.orchestration.selectors.detail import orchestration_run_detail
 from apps.order_plan.models import ActiveLockStatus, OrderPlanActiveLock
-from apps.performance_metrics.selectors import latest_performance_summary
 from apps.order_status_sync.models import OrderStatusSyncRecord
+from apps.review_dataset.selectors import (
+    get_review_dataset_export_detail,
+    get_review_dataset_record_detail,
+    latest_review_dataset_summary,
+    list_review_dataset_exports,
+    list_review_dataset_records,
+)
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueStatus
@@ -112,7 +110,7 @@ def _object_link_flags(links: list[OrchestrationBusinessObjectLink]) -> dict[str
         "has_order_submission": "OrderSubmissionAttempt" in object_types,
         "has_order_status_sync": "OrderStatusSyncRecord" in object_types,
         "has_fill_sync": "FillSyncResult" in object_types or "OrderFillSummary" in object_types or "TradeFill" in object_types,
-        "has_performance_metrics": "OrchestrationRunPerformance" in object_types,
+        "has_review_dataset": "ReviewDatasetRecord" in object_types,
     }
 
 
@@ -178,7 +176,7 @@ def dashboard_summary() -> dict[str, Any]:
         "latest_trade_preparation_account_sync": _sync_run_row(latest_trade_sync),
         "latest_ops_display_account_sync": _sync_run_row(latest_ops_sync),
         "real_trading": real_trading_status(),
-        "performance_metrics": latest_performance_summary(),
+        "review_dataset": latest_review_dataset_summary(),
     }
 
 
@@ -668,233 +666,3 @@ def list_audit_log(params: Mapping[str, Any]) -> dict[str, Any]:
         "pagination": pagination,
     }
 
-
-def _ai_review_request_row(request: AIReviewRequest) -> dict[str, Any]:
-    return _model_summary(
-        request,
-        (
-            "id",
-            "request_key",
-            "review_mode",
-            "status",
-            "reason_code",
-            "reason_message",
-            "model_profile_code",
-            "requested_by",
-            "frozen_orchestration_run_ids",
-            "attempt_count",
-            "input_size_estimate",
-            "input_token_count",
-            "output_token_count",
-            "total_token_count",
-            "cost_estimate",
-            "trace_id",
-            "trigger_source",
-            "active_package_id",
-            "completed_report_id",
-            "created_at_utc",
-            "updated_at_utc",
-        ),
-    ) or {}
-
-
-def _ai_review_package_row(package: AIReviewPackage | None) -> dict[str, Any] | None:
-    return _model_summary(
-        package,
-        (
-            "id",
-            "status",
-            "package_format",
-            "data_schema_version",
-            "sanitization_version",
-            "package_hash",
-            "input_refs_hash",
-            "run_count",
-            "order_count",
-            "alert_count",
-            "runtime_issue_count",
-            "performance_record_count",
-            "payload_size_bytes",
-            "input_size_estimate",
-            "sanitized",
-            "payload_storage_ref",
-            "trace_id",
-            "created_at_utc",
-        ),
-    )
-
-
-def _ai_review_attempt_row(attempt: AIReviewAttempt) -> dict[str, Any]:
-    return _model_summary(
-        attempt,
-        (
-            "id",
-            "attempt_sequence",
-            "gateway_status",
-            "status",
-            "request_sent",
-            "provider",
-            "provider_request_id",
-            "model_profile_code",
-            "model_name",
-            "api_format",
-            "prompt_hash",
-            "input_package_hash",
-            "finish_reason",
-            "input_token_count",
-            "output_token_count",
-            "total_token_count",
-            "attempt_count_in_gateway",
-            "retryable",
-            "http_status",
-            "provider_error_code",
-            "error_code",
-            "error_message",
-            "started_at_utc",
-            "finished_at_utc",
-            "duration_ms",
-            "trace_id",
-            "created_at_utc",
-            "updated_at_utc",
-        ),
-    ) or {}
-
-
-def _ai_review_report_row(report: AIReviewReport | None) -> dict[str, Any] | None:
-    return _model_summary(
-        report,
-        (
-            "id",
-            "title",
-            "summary",
-            "review_mode",
-            "model_provider",
-            "model_profile_code",
-            "model_name",
-            "prompt_name",
-            "prompt_version",
-            "prompt_hash",
-            "package_hash",
-            "output_hash",
-            "confidence",
-            "data_limitations",
-            "trace_id",
-            "created_at_utc",
-        ),
-    )
-
-
-def _ai_review_finding_row(finding: AIReviewFinding) -> dict[str, Any]:
-    return _model_summary(
-        finding,
-        (
-            "id",
-            "finding_type",
-            "severity",
-            "title",
-            "description",
-            "evidence_refs",
-            "related_orchestration_run_ids",
-            "related_order_submission_attempt_ids",
-            "related_object_refs",
-            "confidence",
-            "needs_manual_attention",
-            "trace_id",
-            "created_at_utc",
-        ),
-    ) or {}
-
-
-def _ai_review_suggestion_row(suggestion: AIReviewSuggestion) -> dict[str, Any]:
-    return _model_summary(
-        suggestion,
-        (
-            "id",
-            "suggestion_type",
-            "priority",
-            "title",
-            "description",
-            "target_area",
-            "target_object_type",
-            "target_object_id",
-            "suggested_action",
-            "rationale",
-            "expected_impact",
-            "risk_note",
-            "status",
-            "reviewed_by",
-            "reviewed_at_utc",
-            "decision_note",
-            "trace_id",
-            "created_at_utc",
-            "updated_at_utc",
-        ),
-    ) or {}
-
-
-def list_ai_review_requests(params: Mapping[str, Any]) -> dict[str, Any]:
-    queryset = AIReviewRequest.objects.select_related("active_package", "completed_report").order_by("-created_at_utc", "-id")
-    for field in ("status", "review_mode", "requested_by", "trace_id", "request_key"):
-        if value := params.get(field):
-            queryset = queryset.filter(**{field: value})
-    rows, pagination = _paginated(queryset, params)
-    return {"items": [_ai_review_request_row(request) for request in rows], "pagination": pagination}
-
-
-def get_ai_review_detail(request_id: int) -> dict[str, Any]:
-    try:
-        request = AIReviewRequest.objects.select_related("active_package", "completed_report").get(id=request_id)
-    except ObjectDoesNotExist as exc:
-        raise OpsConsoleObjectNotFound(f"AIReviewRequest {request_id} not found") from exc
-
-    report = request.completed_report
-    if report is None:
-        try:
-            report = request.report
-        except ObjectDoesNotExist:
-            report = None
-
-    alert_query = _related_object_or_trace_query(
-        related_object_type="AIReviewRequest",
-        related_object_id=request.id,
-        trace_lookup="trace_id",
-        trace_id=request.trace_id,
-    )
-    audit_query = Q(target_object_type="AIReviewRequest", target_object_id=str(request.id))
-    if request.trace_id:
-        audit_query |= Q(trace_id=request.trace_id)
-    if report is not None:
-        audit_query |= Q(target_object_type="AIReviewSuggestion", target_object_id__in=[str(value) for value in report.suggestions.values_list("id", flat=True)])
-
-    return {
-        "request": _ai_review_request_row(request),
-        "range_selector": _clean(request.range_selector),
-        "filters": _clean(request.filters),
-        "manual_question": _clean(request.manual_question),
-        "active_package": _ai_review_package_row(request.active_package),
-        "packages": [_ai_review_package_row(package) for package in request.packages.order_by("-created_at_utc", "-id")[:20]],
-        "attempts": [_ai_review_attempt_row(attempt) for attempt in request.attempts.order_by("-attempt_sequence", "-id")[:20]],
-        "report": _ai_review_report_row(report),
-        "report_markdown": _clean(report.full_report_markdown) if report is not None else "",
-        "structured_report_json": _clean(report.structured_report_json) if report is not None else {},
-        "findings": [_ai_review_finding_row(finding) for finding in report.findings.order_by("-created_at_utc", "-id")[:100]] if report is not None else [],
-        "suggestions": [_ai_review_suggestion_row(suggestion) for suggestion in report.suggestions.order_by("-created_at_utc", "-id")[:100]] if report is not None else [],
-        "related_alerts": [
-            _alert_row(alert)
-            for alert in AlertEvent.objects.filter(alert_query).order_by("-event_time_utc", "-id")[:20]
-        ],
-        "audit_records": [
-            {
-                "id": record.id,
-                "operator_id": record.operator_id,
-                "operation_type": record.operation_type,
-                "target_object_type": record.target_object_type,
-                "target_object_id": record.target_object_id,
-                "reason": record.reason,
-                "result": record.result,
-                "trace_id": record.trace_id,
-                "created_at_utc": _dt(record.created_at_utc),
-            }
-            for record in AuditRecord.objects.filter(audit_query).order_by("-created_at_utc", "-id")[:50]
-        ],
-    }

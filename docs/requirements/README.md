@@ -36,7 +36,6 @@ core_contracts.md
 project_foundation.md
 notifications.md
 binance_gateway.md
-deepseek_gateway.md
 ```
 
 ### 3.2 行情数据与市场事实
@@ -77,6 +76,7 @@ risk_check.md
 ```text
 execution_preparation.md
 order_submission.md
+order_cycle_closeout.md
 order_status_sync.md
 fill_sync.md
 ```
@@ -86,9 +86,8 @@ fill_sync.md
 ```text
 pipeline_orchestrator.md
 runtime_guard.md
-performance_metrics.md
+review_dataset.md
 ops_console.md
-ai_review.md
 ```
 
 ## 4. 核心依赖顺序
@@ -112,15 +111,31 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 → RiskCheck / ApprovedOrderIntent
 → ExecutionPreparation / PreparedOrderIntent
 → Execution / OrderSubmissionAttempt
+→ 订单提交事实完成，主交易编排结束
+或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+```
+
+订单提交后的状态与成交同步属于独立订单生命周期分支，不内嵌在主交易编排尾部：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → FillSync
-→ 订单状态与成交事实同步完成
-或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+→ ActiveLock 安全收尾判断
+```
+
+LIMIT 订单在本周期到期后仍未终态时，走独立周期收尾分支：
+
+```text
+OrderCycleCloseout / OrderCancelAttempt
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
 ```
 
 `PipelineOrchestrator` 负责按业务结果编排上述能力，但不拥有各模块的业务判断。
 
-`PerformanceMetrics`、`OpsConsole` 和 `AIReview` 属于后置复盘和后台能力，不是自动交易主链路必跑步骤。
+`ReviewDataset` 和 `OpsConsole` 属于后置复盘和后台能力，不是自动交易主链路必跑步骤。
 
 `RuntimeGuard` 负责发现自动编排主链路、订单链路、ActiveLock 和通知投递中的卡住、不确定或静默异常，但不自动修改交易事实。
 

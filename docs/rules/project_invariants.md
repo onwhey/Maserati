@@ -185,9 +185,16 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 → PreparedOrderIntent
 → Execution
 → OrderSubmissionAttempt
+→ 订单提交事实完成，主交易编排结束
+```
+
+订单提交后的状态与成交同步属于独立订单生命周期分支，不内嵌在正式自动主链路尾部：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → FillSync
-→ 订单状态与成交事实闭环
+→ ActiveLock 安全收尾判断
 ```
 
 规则：
@@ -249,7 +256,7 @@ DataCollectionRun 和 BackfillRun 都不能替代 DataQualityResult 成为 Marke
 某一步失败后改用另一个版本包继续；
 混用不同版本包产生的 Feature、AtomicSignal、DomainSignal、MarketRegime、StrategySignal 或 DecisionSnapshot；
 把后台研究、回测、dry-run 或未批准算法结果写入正式主链路对象；
-用 AIReview 结果实时改变算法、路由、权重或目标仓位。
+用复盘结果实时改变算法、路由、权重或目标仓位。
 ```
 
 如果没有唯一可用 StrategyAnalysisRelease：
@@ -331,7 +338,8 @@ TradeFill 不等于 BinancePositionSnapshot；
 BinanceSyncRun 不等于交易执行；
 PriceSnapshot 不等于策略行情快照，也不等于实际成交价；
 RuntimeGuardIssue 不等于原业务对象状态；
-AIReviewReport 不等于交易决策或策略变更指令；
+ReviewDatasetRecord 不等于交易决策、策略评估结论或策略变更指令；
+ReviewDatasetExport 不等于复盘结论或大模型报告；
 AlertEvent 不等于 NotificationDeliveryAttempt；
 NotificationSuppression 不等于投递失败。
 ```
@@ -366,7 +374,7 @@ DecisionSnapshot 不得：
 直接进入 Execution。
 ```
 
-`NO_TARGET_CHANGE / NO_TRADE` 不进入 PriceSnapshot 或订单链路。本轮 PerformanceMetrics 所需的账户边界事实必须已经由自动四小时编排起始阶段的 `trade_preparation` Binance Account Sync 形成。
+`NO_TARGET_CHANGE / NO_TRADE` 不进入 PriceSnapshot 或订单链路。本轮 ReviewDataset 所需的账户边界事实必须已经由自动四小时编排起始阶段的 `trade_preparation` Binance Account Sync 形成。
 
 该账户边界同步必须在自动四小时编排起始阶段完成。DecisionSnapshot 不直接调用 Binance Account Sync，也不读取同步结果；它只决定是否继续进入 PriceSnapshot 与订单链路。
 
@@ -442,10 +450,11 @@ OrderPlanStepAdapter 在调用 OrderPlan 前检查一次最终权限；
 检查通过后，本轮后续步骤不得重新读取 MySQL 运行开关；
 后台随后修改开关只影响下一次进入 OrderPlan 的检查；
 Execution、OrderStatusSync 和 FillSync 不重复检查该开关；
-已经存在的订单状态与成交同步不得因关闭新交易权限而中断。
+已经存在的订单状态与成交同步不得因关闭新交易权限而中断；
+已经提交的 LIMIT 订单周期收尾不得因关闭新交易权限而中断。
 ```
 
-不得新增未经 requirements 明确定义的模块级交易开关、人工补查开关、成交补同步开关或 AIReview 请求开关。
+不得新增未经 requirements 明确定义的模块级交易开关、人工补查开关、成交补同步开关或复盘请求开关。
 
 ## 14. OrderPlan 与 RiskCheck 不变量
 
@@ -496,7 +505,7 @@ RiskCheck 只允许在 primary 新增风险部分不通过时，选择 OrderPlan
 ```text
 调用 Binance 修改杠杆接口；
 调用 Binance 修改保证金模式接口；
-根据行情、策略、回测、AIReview 或绩效结果自动调整杠杆；
+根据行情、策略、回测或复盘结果自动调整杠杆；
 在 OrderPlan、RiskCheck、ExecutionPreparation 或 Execution 中修改杠杆；
 用 observed_exchange_leverage 放大目标仓位；
 用系统目标仓位比例冒充交易所杠杆。
@@ -581,11 +590,15 @@ HTTP 5xx；
 
 `OrderSubmissionAttempt.accepted` 只表示交易所接受请求，不表示订单已经成交。
 
-`OrderSubmissionAttempt.unknown` 不得推断成功或失败，不得自动释放 ActiveLock，必须进入 OrderStatusSync 查询。
+`OrderSubmissionAttempt.unknown` 不得推断成功或失败，不得自动释放 ActiveLock，必须通过独立订单生命周期同步管线进入 OrderStatusSync 查询。
+
+LIMIT 订单到达冻结有效期后仍未终态时，只能由 OrderCycleCloseout 针对既有订单执行周期收尾撤单。该撤单不属于订单提交重试，不得演变成改单、追单、补单或解锁。
 
 ## 18. 订单状态、成交与持仓不变量
 
 OrderStatusSync 只查询订单状态，不重新提交订单，不生成 TradeFill。
+
+OrderCycleCloseout 只保存 OrderCancelAttempt 并触发后续状态与成交事实闭环，不直接生成订单终态、成交事实或 ActiveLock 释放结论。
 
 FillSync 只消费明确终态的 OrderStatusSyncRecord，并通过 BinanceGateway 查询完整成交事实。
 
@@ -679,21 +692,18 @@ Binance Account Sync → 账户只读与公共交易规则；
 PriceSnapshot → mark price；
 ExecutionPreparation → book ticker；
 Execution → 订单提交；
+OrderCycleCloseout → 既有 LIMIT 订单撤销；
 OrderStatusSync → 订单状态查询；
 FillSync → 成交查询。
 ```
 
 Gateway 只返回技术事实，不替代业务模块写业务状态、业务对象或 AlertEvent。
 
-### 20.2 DeepSeekGateway
+### 20.2 大模型边界
 
-所有 DeepSeek 请求必须经过 DeepSeekGateway。
+当前正式系统内不调用大模型做复盘，也不保存大模型复盘报告。
 
-只有 AIReview 可以作为正式业务调用方。
-
-OpsConsole 只能通过 AIReview service 创建复盘请求，不得直接调用 DeepSeekGateway。
-
-DeepSeekGateway 不选择复盘范围，不生成交易结论，不修改策略、风控、权限或订单事实，不保存 AIReviewReport。
+如后续重新引入系统内大模型复盘，必须先新增独立需求和红线定义。
 
 ### 20.3 Notifications 与 Hermes
 
@@ -801,7 +811,7 @@ orchestration_run_id。
 
 重复调度、重复消息投递、进程恢复和并发调用不得产生重复核心业务对象或重复订单提交。
 
-## 23. RuntimeGuard、PerformanceMetrics 与 AIReview 不变量
+## 23. RuntimeGuard 与 ReviewDataset 不变量
 
 ### 23.1 RuntimeGuard
 
@@ -822,44 +832,34 @@ RuntimeGuard 不得：
 修改业务对象；
 释放 ActiveLock；
 重新提交订单；
-访问 BinanceGateway 或 DeepSeekGateway；
+访问 BinanceGateway；
 直接发送 Hermes；
-巡检 AIReview、PerformanceMetrics 或普通后台页面功能。
+巡检 ReviewDataset 或普通后台页面功能。
 ```
 
-### 23.2 PerformanceMetrics
+### 23.2 ReviewDataset
 
-PerformanceMetrics 是后台一键补算的离线绩效能力，不是自动主链路步骤。
+ReviewDataset 是后台受控导出的复盘数据集能力，不是自动主链路步骤。
 
-它只读取相邻自动 OrchestrationRun 绑定的 `trade_preparation` 账户边界事实。
+它只读取已经落库的编排、策略、账户、价格、订单、成交、告警、巡检和审计事实。
 
-PerformanceMetrics 不得：
+ReviewDataset 不得：
 
 ```text
 请求 Binance；
-读取 ops_display 作为计算输入；
-按数据库最新两份账户快照猜测周期；
+调用 DeepSeek；
+生成复盘结论；
+判断策略是否正确；
+按数据库最新对象猜测周期事实；
 影响 OrchestrationRun；
 生成交易信号；
 修改订单、成交、账户或策略；
 自动暂停或恢复交易。
 ```
 
-### 23.3 AIReview
+### 23.3 本地复盘结果
 
-AIReview 只能离线读取已落库事实、生成脱敏资料包、调用 DeepSeekGateway 并保存复盘报告、发现和人工建议。
-
-AIReview 和任何大模型输出不得：
-
-```text
-参与实时交易决策；
-生成订单或仓位指令；
-影响 RiskCheck 放行；
-修改 StrategyAnalysisRelease；
-自动调整参数、权重、策略或风控；
-修改真实交易运行开关；
-自动上线、停用或回滚策略。
-```
+Codex skill 或本地脚本生成的复盘结果默认只保存为本地文件，不是生产系统事实。
 
 任何复盘建议进入生产前，必须经过人工确认、需求更新、回测或验证和风险复核。
 
@@ -881,13 +881,14 @@ OrderPlan、CandidateOrderIntent 和 ActiveLock；
 RiskCheckResult 和 ApprovedOrderIntent；
 ExecutionPreparationResult 和 PreparedOrderIntent；
 OrderSubmissionAttempt；
+OrderCancelAttempt；
 OrderStatusSyncRecord；
 FillSyncResult、TradeFill 和 OrderFillSummary；
 OrchestrationRun、StepRun 和 ObjectLink；
 RuntimeGuardIssue；
 AlertEvent、NotificationDeliveryAttempt 和 NotificationSuppression；
-OrchestrationRunPerformance；
-AIReview 业务结果；
+ReviewDatasetRecord；
+ReviewDatasetExport；
 AuditRecord。
 ```
 
@@ -1153,7 +1154,7 @@ Binance 返回的时间戳按 UTC 解释。
 ```text
 Kline open_time / close_time 使用 Binance 返回的时间戳；
 请求 Kline 不传 timeZone，使用 Binance 默认 UTC；
-行情排序、连续性、策略周期、任务调度、订单追踪、成交同步、绩效周期和复盘全部使用 UTC；
+行情排序、连续性、策略周期、任务调度、订单追踪、成交同步和复盘全部使用 UTC；
 不得根据服务器本地时区、用户 IP、浏览器时区或运行机器时区改变业务判断；
 系统不设计参与业务判断的本地时间字段；
 通知、日志和后台展示默认显示 UTC，并明确标注 UTC。
@@ -1171,6 +1172,7 @@ RiskCheck 结果和 fallback 选择；
 ApprovedOrderIntent 结果；
 ExecutionPreparation 结果；
 OrderSubmissionAttempt 结果；
+OrderCycleCloseout 和 OrderCancelAttempt 结果；
 OrderStatusSync 关键状态；
 FillSync 和 TradeFill 结果；
 ActiveLock 保持、失败和释放；
@@ -1212,7 +1214,7 @@ PriceSnapshot 缺失或过期时读取 latest、Kline close 或持仓 mark price
 Redis 故障时使用不可信缓存放行交易；
 通知失败时回滚或重放业务动作；
 RuntimeGuard 发现问题后自动修改原业务对象；
-AIReview 建议自动改变生产系统。
+复盘建议自动改变生产系统。
 ```
 
 无法可靠判断时必须 fail-closed、保持 unknown、停止自动推进或保留保护状态，具体行为由对应 requirements 定义。

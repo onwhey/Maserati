@@ -26,7 +26,7 @@ export default async function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Dashboard" description="快速查看系统运行事实；收益曲线已由 Performance 页面展示，本页不自行计算收益。" />
+      <PageHeader title="Dashboard" description="快速查看系统运行事实；复盘数据由 Review Dataset 页面导出，本页不自行计算收益或复盘结论。" />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Open RuntimeGuardIssue" value={String(data.open_runtime_guard_issue_count ?? 0)} icon={AlertTriangle} />
         <StatCard label="ActiveLock" value={String(data.active_lock_count ?? 0)} icon={Lock} />

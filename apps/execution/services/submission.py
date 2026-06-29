@@ -145,6 +145,10 @@ def _claim_submission_attempt(
             quantity=prepared.quantity,
             quantity_unit=prepared.quantity_unit,
             reduce_only=prepared.reduce_only,
+            time_in_force=prepared.time_in_force,
+            limit_price=prepared.limit_price,
+            limit_valid_until_utc=prepared.limit_valid_until_utc,
+            price_condition_hash=prepared.price_condition_hash,
             order_notional=_order_notional(prepared),
             client_order_id=prepared.client_order_id,
             idempotency_key=prepared.idempotency_key,
@@ -252,7 +256,7 @@ def _active_lock_error(prepared: PreparedOrderIntent) -> str:
 
 
 def _order_contract_error(prepared: PreparedOrderIntent) -> str:
-    if prepared.order_type != "MARKET":
+    if prepared.order_type not in {"MARKET", "LIMIT"}:
         return "unsupported_order_type"
     if prepared.position_mode != "one_way":
         return "unsupported_position_mode"
@@ -266,6 +270,16 @@ def _order_contract_error(prepared: PreparedOrderIntent) -> str:
         return "unsupported_quantity_unit"
     if prepared.market_type == MARKET_TYPE_COIN_M and (prepared.symbol_rule_snapshot.contract_size is None or prepared.symbol_rule_snapshot.contract_size <= ZERO):
         return "invalid_frozen_order_request"
+    if prepared.order_type == "MARKET":
+        if prepared.limit_price is not None or prepared.time_in_force or prepared.limit_valid_until_utc is not None:
+            return "invalid_frozen_order_request"
+    elif prepared.order_type == "LIMIT":
+        if prepared.limit_price is None or prepared.limit_price <= ZERO:
+            return "invalid_frozen_order_request"
+        if prepared.time_in_force not in {"GTC", "GTX"}:
+            return "invalid_frozen_order_request"
+        if prepared.limit_valid_until_utc is None or _ensure_utc(prepared.limit_valid_until_utc) <= timezone.now():
+            return "prepared_order_intent_expired"
     return ""
 
 
@@ -415,18 +429,14 @@ def _release_if_safe(attempt: OrderSubmissionAttempt) -> None:
 
 def _result_from_attempt(attempt: OrderSubmissionAttempt, *, replay: bool = False) -> ServiceResult:
     status = ResultStatus.BLOCKED
-    flow_action = "STOP"
     if attempt.status == OrderSubmissionAttemptStatus.ACCEPTED:
         status = ResultStatus.SUCCEEDED
-        flow_action = "CONTINUE"
     elif attempt.status == OrderSubmissionAttemptStatus.UNKNOWN:
         status = ResultStatus.UNKNOWN
-        flow_action = "CONTINUE"
     elif attempt.status == OrderSubmissionAttemptStatus.FAILED_BEFORE_SUBMIT:
         status = ResultStatus.FAILED
     elif attempt.status == OrderSubmissionAttemptStatus.SUBMITTING:
         status = ResultStatus.UNKNOWN
-        flow_action = "STOP"
     reason_code = "order_submission_idempotent_replay" if replay else attempt.reason_code
     message = "OrderSubmissionAttempt 幂等重放，未重新调用 Gateway。" if replay else attempt.reason_message
     return ServiceResult(
@@ -446,7 +456,6 @@ def _result_from_attempt(attempt: OrderSubmissionAttempt, *, replay: bool = Fals
             "client_order_id": attempt.client_order_id,
             "active_lock_id": attempt.active_lock_id,
             "allows_order_status_sync": attempt.status in {OrderSubmissionAttemptStatus.ACCEPTED, OrderSubmissionAttemptStatus.UNKNOWN},
-            "flow_action": flow_action,
         },
     )
 
@@ -475,6 +484,11 @@ def _record_attempt_alert(attempt: OrderSubmissionAttempt, event_type: str) -> N
             "endpoint_family": attempt.endpoint_family,
             "symbol": attempt.symbol,
             "side": attempt.side,
+            "order_type": attempt.order_type,
+            "time_in_force": attempt.time_in_force,
+            "limit_price": _decimal_str(attempt.limit_price),
+            "limit_valid_until_utc": attempt.limit_valid_until_utc.isoformat() if attempt.limit_valid_until_utc else "",
+            "price_condition_hash": attempt.price_condition_hash,
             "quantity": _decimal_str(attempt.quantity),
             "quantity_unit": attempt.quantity_unit,
             "reduce_only": attempt.reduce_only,
@@ -535,7 +549,6 @@ def _result_without_attempt(
             "order_submission_attempt_id": None,
             "prepared_order_intent_id": None,
             "allows_order_status_sync": False,
-            "flow_action": "STOP",
         },
     )
 
@@ -571,7 +584,7 @@ def _prepared_status_for_attempt(status: str) -> str:
 
 
 def _frozen_order_request(prepared: PreparedOrderIntent) -> dict[str, Any]:
-    return {
+    request = {
         "symbol": prepared.symbol,
         "side": prepared.side,
         "type": prepared.order_type,
@@ -582,11 +595,18 @@ def _frozen_order_request(prepared: PreparedOrderIntent) -> dict[str, Any]:
         "position_mode": prepared.position_mode,
         "newClientOrderId": prepared.client_order_id,
     }
+    if prepared.order_type == "LIMIT":
+        request["price"] = _decimal_str(prepared.limit_price)
+        request["timeInForce"] = prepared.time_in_force
+    return request
 
 
 def _order_notional(prepared: PreparedOrderIntent) -> Decimal | None:
     if prepared.market_type == MARKET_TYPE_USDS_M:
-        return prepared.quantity * prepared.selected_live_price
+        reference_price = prepared.limit_price if prepared.order_type == "LIMIT" else prepared.selected_live_price
+        if reference_price is None or reference_price <= ZERO:
+            return None
+        return prepared.quantity * reference_price
     if prepared.market_type == MARKET_TYPE_COIN_M and prepared.symbol_rule_snapshot.contract_size is not None:
         return prepared.quantity * prepared.symbol_rule_snapshot.contract_size
     return None
@@ -614,7 +634,7 @@ def _reason_message(reason_code: str) -> str:
         "market_identity_mismatch": "冻结订单链路市场身份不一致。",
         "active_lock_not_active": "ActiveLock 不处于 active。",
         "active_lock_mismatch": "ActiveLock 未绑定当前 OrderPlan。",
-        "unsupported_order_type": "当前只支持 MARKET 订单。",
+        "unsupported_order_type": "当前只支持 MARKET 或 LIMIT 订单。",
         "unsupported_position_mode": "当前只支持 One-Way Mode。",
         "unsupported_position_side": "当前只支持 positionSide=BOTH。",
         "unsupported_quantity_unit": "冻结数量单位不符合市场类型。",

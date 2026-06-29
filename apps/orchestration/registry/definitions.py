@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from typing import Iterable
 
 
-REGISTRY_VERSION = "p0.1"
+REGISTRY_VERSION = "p0.2"
 PIPELINE_CODE = "main_trading_pipeline"
 
 
@@ -49,8 +49,6 @@ FORMAL_STEPS: tuple[StepDefinition, ...] = (
     StepDefinition(PIPELINE_CODE, REGISTRY_VERSION, "risk_check", 160, "risk_check", "RiskCheckStepAdapter", "1.0", ("order_plan",), is_required=False, is_conditional=True),
     StepDefinition(PIPELINE_CODE, REGISTRY_VERSION, "execution_preparation", 170, "execution_preparation", "ExecutionPreparationStepAdapter", "1.0", ("risk_check",), is_required=False, is_conditional=True),
     StepDefinition(PIPELINE_CODE, REGISTRY_VERSION, "order_submission", 180, "execution", "OrderSubmissionStepAdapter", "1.0", ("execution_preparation",), execution_mode="asynchronous_wait", is_required=False, is_conditional=True),
-    StepDefinition(PIPELINE_CODE, REGISTRY_VERSION, "order_status_sync", 190, "order_status_sync", "OrderStatusSyncStepAdapter", "1.0", ("order_submission",), execution_mode="asynchronous_wait", is_required=False, is_conditional=True),
-    StepDefinition(PIPELINE_CODE, REGISTRY_VERSION, "fill_sync", 200, "fill_sync", "FillSyncStepAdapter", "1.0", ("order_status_sync",), execution_mode="asynchronous_wait", is_required=False, is_conditional=True),
 )
 
 
@@ -123,4 +121,3 @@ def step_by_code(step_code: str) -> StepDefinition:
         if step.step_code == step_code:
             return step
     raise RegistryValidationError(f"step not found: {step_code}")
-

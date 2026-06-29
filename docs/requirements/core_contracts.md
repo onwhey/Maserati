@@ -70,6 +70,24 @@ ApprovedOrderIntent
 → PreparedOrderIntent
 → Execution
 → OrderSubmissionAttempt
+→ 订单提交事实完成
+```
+
+订单提交后的生命周期事实：
+
+```text
+OrderSubmissionAttempt
+→ OrderStatusSyncRecord
+→ FillSyncResult
+→ TradeFill / OrderFillSummary
+```
+
+LIMIT 订单到期仍未终态时的周期收尾事实：
+
+```text
+OrderSubmissionAttempt
+→ OrderCycleCloseout
+→ OrderCancelAttempt
 → OrderStatusSyncRecord
 → FillSyncResult
 → TradeFill / OrderFillSummary
@@ -82,8 +100,8 @@ OrchestrationRun
 → OrchestrationStepRun
 → OrchestrationBusinessObjectLink
 
-OrchestrationRunPerformance
-→ AIReviewRequest / AIReviewPackage / AIReviewAttempt / AIReviewReport / AIReviewFinding / AIReviewSuggestion
+ReviewDatasetRecord
+→ ReviewDatasetExport
 
 RuntimeGuardIssue
 → 人工确认、处理和关闭
@@ -126,6 +144,7 @@ AuditRecord
 | ExecutionPreparationResult | ExecutionPreparation | 执行前校验结果 |
 | PreparedOrderIntent | ExecutionPreparation | 参数已经冻结、具有有效期、等待唯一一次提交的执行请求 |
 | OrderSubmissionAttempt | Execution | 一次真实订单提交尝试及其确定或不确定结果 |
+| OrderCancelAttempt | OrderCycleCloseout | 一次针对既有限价订单的受控撤单尝试 |
 | OrderStatusSyncRecord | OrderStatusSync | 对一条提交尝试进行交易所订单状态查询的事实记录 |
 | FillSyncResult | FillSync | 一次正式成交查询、恢复同步及其完整性结果 |
 | TradeFill | FillSync | 交易所逐笔成交事实 |
@@ -134,13 +153,8 @@ AuditRecord
 | OrchestrationStepRun | PipelineOrchestrator | 一轮编排中某个业务步骤的执行记录 |
 | OrchestrationBusinessObjectLink | PipelineOrchestrator | 编排、步骤与业务对象的一对多审计索引 |
 | RuntimeGuardIssue | RuntimeGuard | 巡检发现的待人工关注问题 |
-| OrchestrationRunPerformance | PerformanceMetrics | 一个已关闭 UTC 4 小时周期的绩效记录，绑定开始边界 OrchestrationRun 和结束边界 OrchestrationRun |
-| AIReviewRequest | AIReview | 一次离线大模型复盘请求 |
-| AIReviewPackage | AIReview | 发送给大模型的脱敏复盘资料包和输入证据 |
-| AIReviewAttempt | AIReview | 一次通过 DeepSeekGateway 调用大模型的落库调用事实 |
-| AIReviewReport | AIReview | 大模型离线复盘报告 |
-| AIReviewFinding | AIReview | 复盘报告中拆分出的具体问题或观察点 |
-| AIReviewSuggestion | AIReview | 复盘报告中拆分出的人工建议 |
+| ReviewDatasetRecord | ReviewDataset | 一个已关闭 UTC 4 小时周期的复盘数据索引，绑定被复盘编排、开始边界编排和结束边界编排 |
+| ReviewDatasetExport | ReviewDataset | 一次受控复盘数据导出请求、导出清单和下载审计事实 |
 | AlertEvent | Notifications | 系统事件、异常和交易状态通知事实 |
 | NotificationDeliveryAttempt | Notifications | 一条 AlertEvent 向外部通知渠道投递的一次尝试记录 |
 | NotificationSuppression | Notifications | 一条 AlertEvent 未进行外部投递的明确抑制原因 |
@@ -160,12 +174,14 @@ CandidateOrderIntent 不等于 ApprovedOrderIntent。
 ApprovedOrderIntent 不等于 PreparedOrderIntent。
 PreparedOrderIntent 不等于 OrderSubmissionAttempt。
 OrderSubmissionAttempt 不等于交易所完整订单状态。
+OrderCancelAttempt 不等于交易所订单终态。
 OrderStatusSyncRecord 不等于 TradeFill。
 TradeFill 不等于 BinancePositionSnapshot。
 BinanceSyncRun 不等于交易执行。
 PriceSnapshot 不等于策略行情快照，也不等于实际成交价；不同业务请求生成的 PriceSnapshot 不得被 Connector 混用。
 RuntimeGuardIssue 不等于原业务对象的状态。
-AIReviewReport 不等于交易决策或生产策略变更指令。
+ReviewDatasetRecord 不等于交易决策、策略评估结论或生产策略变更指令。
+ReviewDatasetExport 不等于复盘结论或大模型报告。
 NotificationDeliveryAttempt 不等于 AlertEvent 本身。
 NotificationSuppression 不等于投递失败。
 ```
@@ -191,7 +207,7 @@ client_order_id
 
 `NO_TRADE` 和 `NO_TARGET_CHANGE` 只能表示本轮不进入价格与订单链路，不得作为订单动作传给 RiskCheck、ExecutionPreparation 或 Execution。
 
-自动四小时编排在起始阶段必须先执行本轮 `trade_preparation` Binance Account Sync，保存绩效周期所需的账户边界事实。后续即使形成 `NO_TRADE`、`NO_TARGET_CHANGE`、`no_strategy`、真实交易权限关闭或其他正常无交易结果，也不得补造或改用其他账户快照。
+自动四小时编排在起始阶段必须先执行本轮 `trade_preparation` Binance Account Sync，保存周期复盘所需的账户边界事实。后续即使形成 `NO_TRADE`、`NO_TARGET_CHANGE`、`no_strategy`、真实交易权限关闭或其他正常无交易结果，也不得补造或改用其他账户快照。
 
 该账户同步由编排衔接器调用。DecisionSnapshot 不得直接调用 Binance Account Sync，也不得读取同步结果。
 
@@ -208,6 +224,10 @@ client_order_id
 无论提交前失败、提交后超时、交易所明确拒绝、HTTP 429、HTTP 5xx、响应损坏或结果无法判断，都不得对同一个 `PreparedOrderIntent` 再次调用订单提交接口。
 
 后续如需再次交易，必须在 ActiveLock 安全释放后，由新的编排运行重新经过 DecisionSnapshot、OrderPlan、RiskCheck、ExecutionPreparation 和 Execution 生成新的订单链路。
+
+`OrderCycleCloseout` 只允许对既有、已提交且仍未终态的 LIMIT 订单执行周期收尾撤单。撤单必须形成 `OrderCancelAttempt`，但 `OrderCancelAttempt` 只描述撤单请求本身，不等于订单终态，也不等于成交事实。
+
+撤单后仍必须通过 `OrderStatusSyncRecord` 确认交易所订单状态，通过 `FillSyncResult / TradeFill / OrderFillSummary` 确认成交事实。OrderCycleCloseout 不得提交新订单，不得修改原订单，不得追单，不得释放 ActiveLock。
 
 ## 6. 订单提交结果与订单状态
 
@@ -233,21 +253,23 @@ blocked_before_submit
 
 持仓事实只能来自明确的账户同步结果。后续订单规划必须使用本轮自动编排起始账户边界同步绑定的 `BinancePositionSnapshot`，不得根据本地成交汇总自行推导交易所持仓。
 
-## 7.1 周期绩效事实
+## 7.1 复盘数据事实
 
-`OrchestrationRunPerformance` 是后台一键补算生成的复盘对象，不是自动交易主链路的必跑步骤。
+`ReviewDatasetRecord` 是后台或只读 API 生成的复盘数据索引，不是自动交易主链路的必跑步骤。
 
-它基于相邻两个自动编排边界绑定的 `trade_preparation` 账户快照，计算一个已关闭 UTC 4 小时周期的持仓表现。
+它基于一个已关闭 UTC 4 小时周期内已经落库的编排、策略、账户、价格、订单、成交、告警和巡检事实，整理出可导出的复盘数据范围。
 
 例如：
 
 ```text
-00:00 - 04:00 周期绩效
+00:00 - 04:00 复盘数据
 归属于 00:05 自动 OrchestrationRun
 结束账户事实来自 04:05 自动 OrchestrationRun
 ```
 
-PerformanceMetrics 缺失不等于自动交易主链路异常，不由 RuntimeGuard 巡检。AIReview 可以读取 PerformanceMetrics 作为离线复盘上下文，但 AIReview 不得重新计算周期收益。
+ReviewDataset 缺失不等于自动交易主链路异常，不由 RuntimeGuard 巡检。
+
+ReviewDataset 只提供事实数据，不判断策略是否正确，不在系统内调用大模型，也不把复盘结论写回生产交易链路。
 
 ## 8. ActiveLock 合同
 
@@ -331,6 +353,7 @@ RiskCheckResult
 ApprovedOrderIntent
 PreparedOrderIntent
 OrderSubmissionAttempt
+OrderCancelAttempt
 ```
 
 编排追踪由以下对象单独维护：
@@ -362,11 +385,9 @@ Execution 是唯一可以调用订单提交接口的业务模块。
 OrderStatusSync 只能调用订单状态查询接口并保存订单状态。
 FillSync 只能调用成交查询接口并保存成交事实。
 Notifications 只能通知和记录投递状态，不能触发交易。
-AIReview 只能进行离线复盘，不能影响实时交易。
-所有 DeepSeek API 请求必须通过 DeepSeekGateway 的受限接口。
-AIReview 不得直接创建 DeepSeek client，不得直接读取 DeepSeek API key，不得直接拼接 provider endpoint。
-OpsConsole 不得直接调用 DeepSeekGateway，只能通过 AIReview service 创建和查看离线复盘请求。
-DeepSeekGateway 只返回技术调用结果，不保存业务报告；AIReviewAttempt、AIReviewReport、AIReviewFinding 和 AIReviewSuggestion 才是 AIReview 的落库业务结果。
+ReviewDataset 只能读取已落库事实并生成复盘数据集，不能影响实时交易。
+当前正式复盘路径不在交易系统内调用大模型。
+如后续重新引入系统内大模型复盘，必须先新增独立需求，不得复用 ReviewDataset 私自保存大模型结论。
 AlertEvent 必须形成明确通知交接：需要外部投递时创建 NotificationDeliveryAttempt；不外部投递时创建 NotificationSuppression 或等价抑制记录。
 RuntimeGuard 可以巡检通知投递状态，但不得修改 NotificationDeliveryAttempt、不得创建新投递尝试、不得直接调用 Hermes。
 ```

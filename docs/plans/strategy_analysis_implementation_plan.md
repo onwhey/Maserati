@@ -415,7 +415,7 @@ AtomicSignal 不得：
 接收明确 atomic_signal_set_id；
 只计算版本包选中的 DomainSignalDefinition；
 校验每个正式 AtomicSignalValue 只能归属一个领域；
-正式版本包必须同时具备 trend、momentum、volatility 三个领域；
+正式版本包必须同时具备 market_context、trend、momentum、volatility、structure、risk_state 六个领域；
 按领域读取同一 AtomicSignalSet 中的原子信号；
 构造 DomainSignal calculator input；
 写 DomainSignalSet；
@@ -1074,7 +1074,7 @@ seed 不把测试 fake calculator 放进正式版本包；
 ```text
 实现 DomainSignalSet / DomainSignalValue；
 实现 DomainSignalService；
-校验 trend、momentum、volatility 三领域定义；
+校验 market_context、trend、momentum、volatility、structure、risk_state 六领域定义；
 校验原子信号唯一归属；
 接入 DomainSignal calculator；
 实现 dry-run；
@@ -1087,7 +1087,7 @@ seed 不把测试 fake calculator 放进正式版本包；
 领域只聚合同领域原子信号；
 不跨领域聚合；
 不使用策略权重；
-正式版本包缺少三领域时不得批准。
+正式版本包缺少六领域时不得批准。
 ```
 
 ### 11.7 实现 MarketRegime 框架
@@ -1475,9 +1475,8 @@ PipelineOrchestrator；
 RuntimeGuard；
 Notifications 投递；
 OpsConsole 页面；
-PerformanceMetrics；
-DeepSeekGateway；
-AIReview；
+ReviewDataset；
+项目内大模型调用；
 后台自由组合回测界面；
 完整回测撮合引擎；
 策略收益归因；
@@ -1509,8 +1508,7 @@ AIReview；
 ```text
 访问 Binance；
 调用 BinanceGateway；
-访问 DeepSeek；
-调用 DeepSeekGateway；
+访问外部大模型；
 发送 Hermes；
 提交真实订单；
 查询账户；

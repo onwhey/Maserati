@@ -477,7 +477,7 @@ def _active_lock_error(context: PreparationContext) -> tuple[str, str] | None:
 def _order_contract_error(context: PreparationContext) -> tuple[str, str] | None:
     approved = context.approved
     if approved.order_type not in _supported_order_types():
-        return "unsupported_order_type", "当前仅支持 MARKET 订单进入执行准备"
+        return "unsupported_order_type", "当前配置不支持该订单类型进入执行准备"
     if approved.position_side != "BOTH":
         return "unsupported_position_mode", "当前仅支持 One-Way / BOTH 持仓语义"
     if context.candidate.position_mode != BinancePositionMode.ONE_WAY or context.order_plan.position_mode != BinancePositionMode.ONE_WAY:
@@ -490,6 +490,18 @@ def _order_contract_error(context: PreparationContext) -> tuple[str, str] | None
         return "unsupported_quantity_unit", "COIN-M 必须使用 contracts 数量单位"
     if approved.requested_size <= ZERO:
         return "exchange_rule_violation", "冻结数量必须大于零"
+    if approved.order_type == "MARKET":
+        if approved.limit_price is not None or approved.time_in_force or approved.limit_valid_until_utc is not None:
+            return "market_order_has_limit_fields", "MARKET 订单不得携带 LIMIT 参数"
+    elif approved.order_type == "LIMIT":
+        if approved.limit_price is None or approved.limit_price <= ZERO:
+            return "limit_price_invalid", "LIMIT 订单必须具备冻结限价"
+        if approved.time_in_force not in {"GTC", "GTX"}:
+            return "limit_time_in_force_invalid", "LIMIT 订单必须冻结 GTC 或 GTX"
+        if approved.limit_valid_until_utc is None or _ensure_utc(approved.limit_valid_until_utc) <= timezone.now():
+            return "limit_price_condition_expired", "LIMIT 价格条件已经过期"
+    else:
+        return "unsupported_order_type", "当前只支持 MARKET 或 LIMIT 订单"
     return None
 
 
@@ -591,7 +603,10 @@ def _symbol_rule_error(context: PreparationContext, live_price: LiveBookTicker) 
 
 def _estimated_notional(context: PreparationContext, live_price: LiveBookTicker) -> Decimal | None:
     if context.approved.market_type == MARKET_TYPE_USDS_M:
-        return context.approved.requested_size * live_price.selected_live_price
+        reference_price = context.approved.limit_price if context.approved.order_type == "LIMIT" else live_price.selected_live_price
+        if reference_price is None or reference_price <= ZERO:
+            return None
+        return context.approved.requested_size * reference_price
     if context.approved.market_type == MARKET_TYPE_COIN_M:
         contract_size = context.symbol_rule_snapshot.contract_size
         if contract_size is None or contract_size <= ZERO:
@@ -614,12 +629,15 @@ def _finalize_prepared(
     trigger_source: str,
 ) -> ServiceResult:
     prepared_at = timezone.now()
-    expires_at = min(
+    expiry_candidates = [
         live_price.observed_at_utc + timedelta(seconds=int(config["prepared_order_intent_ttl_seconds"])),
         context.approved.expires_at_utc,
         context.price_snapshot.expires_at_utc,
         context.sync_run.expires_at_utc,
-    )
+    ]
+    if context.approved.order_type == "LIMIT" and context.approved.limit_valid_until_utc is not None:
+        expiry_candidates.append(_ensure_utc(context.approved.limit_valid_until_utc))
+    expires_at = min(expiry_candidates)
     if expires_at <= prepared_at:
         return _finalize_blocked(
             result=result,
@@ -676,7 +694,11 @@ def _finalize_prepared(
                 quantity=context.approved.requested_size,
                 quantity_unit=context.approved.requested_size_unit,
                 reduce_only=context.approved.exchange_reduce_only,
-                time_in_force="",
+                time_in_force=context.approved.time_in_force if context.approved.order_type == "LIMIT" else "",
+                limit_price=context.approved.limit_price,
+                limit_valid_until_utc=context.approved.limit_valid_until_utc,
+                price_condition_hash=context.approved.price_condition_hash,
+                price_condition_evidence=context.approved.price_condition_evidence,
                 client_order_id=client_order_id,
                 idempotency_key=idempotency_key,
                 price_snapshot=context.price_snapshot,
@@ -1029,13 +1051,13 @@ def _load_config() -> tuple[dict[str, Any], str]:
         return {}, "execution_preparation_disabled"
     max_bps = getattr(settings, "EXECUTION_PREPARATION_MAX_PRICE_DEVIATION_BPS", None)
     ttl = getattr(settings, "PREPARED_ORDER_INTENT_TTL_SECONDS", None)
-    supported_order_types = set(getattr(settings, "EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES", ["MARKET"]))
+    supported_order_types = {str(item).strip().upper() for item in getattr(settings, "EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES", ["MARKET"]) if str(item).strip()}
     supported_position_mode = str(getattr(settings, "EXECUTION_PREPARATION_SUPPORTED_POSITION_MODE", "one_way"))
     if not isinstance(max_bps, int | Decimal) or Decimal(str(max_bps)) < ZERO:
         return {}, "execution_preparation_config_invalid"
     if not isinstance(ttl, int) or ttl <= 0:
         return {}, "execution_preparation_config_invalid"
-    if "MARKET" not in supported_order_types or supported_position_mode != BinancePositionMode.ONE_WAY:
+    if "MARKET" not in supported_order_types or not supported_order_types.issubset({"MARKET", "LIMIT"}) or supported_position_mode != BinancePositionMode.ONE_WAY:
         return {}, "execution_preparation_config_invalid"
     config = {
         "schema_version": "1.0",
@@ -1049,7 +1071,7 @@ def _load_config() -> tuple[dict[str, Any], str]:
 
 
 def _supported_order_types() -> set[str]:
-    return set(getattr(settings, "EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES", ["MARKET"]))
+    return {str(item).strip().upper() for item in getattr(settings, "EXECUTION_PREPARATION_SUPPORTED_ORDER_TYPES", ["MARKET"]) if str(item).strip()}
 
 
 def _execution_preparation_key(*, context: PreparationContext, business_request_key: str, config: dict[str, Any]) -> str:
@@ -1098,6 +1120,10 @@ def _prepared_idempotency_key(*, context: PreparationContext, result: ExecutionP
             "quantity_unit": context.approved.requested_size_unit,
             "reduce_only": context.approved.exchange_reduce_only,
             "order_type": context.approved.order_type,
+            "time_in_force": context.approved.time_in_force,
+            "limit_price": decimal_hash_value(context.approved.limit_price) if context.approved.limit_price is not None else "",
+            "limit_valid_until_utc": context.approved.limit_valid_until_utc.isoformat() if context.approved.limit_valid_until_utc else "",
+            "price_condition_hash": context.approved.price_condition_hash,
         }
     )[:MAX_KEY_LENGTH]
 
@@ -1133,6 +1159,11 @@ def _evidence(
             "price_deviation_ratio": price_deviation_ratio,
             "price_deviation_bps": price_deviation_bps,
             "price_deviation_limit_bps": config["max_price_deviation_bps"],
+            "order_type": context.approved.order_type,
+            "time_in_force": context.approved.time_in_force,
+            "limit_price": context.approved.limit_price,
+            "limit_valid_until_utc": context.approved.limit_valid_until_utc,
+            "price_condition_hash": context.approved.price_condition_hash,
             "gateway_result_metadata": _gateway_metadata(gateway_result),
         }
     )

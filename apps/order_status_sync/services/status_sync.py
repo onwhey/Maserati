@@ -27,6 +27,7 @@ MAX_KEY_LENGTH = 191
 MAX_TRACE_FIELD_LENGTH = 80
 POLL_MODE_IMMEDIATE = "immediate"
 POLL_MODE_RECOVERY = "recovery"
+POLL_MODE_CLOSEOUT = "closeout"
 TERMINAL_STATUSES = {"FILLED", "CANCELED", "REJECTED", "EXPIRED", "EXPIRED_IN_MATCH"}
 NON_TERMINAL_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 QUERYABLE_SUBMISSION_STATUSES = {
@@ -211,7 +212,7 @@ def _claim_poll_record(
         pre_error = _pre_query_error(attempt)
         if poll_mode == POLL_MODE_RECOVERY and not pre_error:
             pre_error = _recovery_pre_query_error(attempt, now)
-        timing = _poll_timing(attempt, poll_sequence)
+        timing = _poll_timing_for_mode(attempt, poll_sequence, poll_mode, now)
         outcome = _outcome_for_pre_error(pre_error)
         if pre_error:
             record = _create_record(
@@ -229,7 +230,7 @@ def _claim_poll_record(
             )
             return PollClaim(record=record, should_call_gateway=False)
 
-        if poll_mode != POLL_MODE_RECOVERY:
+        if poll_mode not in {POLL_MODE_RECOVERY, POLL_MODE_CLOSEOUT}:
             timing_result = _timing_result(attempt, timing, poll_mode, poll_sequence, trace_id, trigger_source)
             if timing_result is not None:
                 return PollClaim(result=timing_result)
@@ -276,6 +277,20 @@ def _poll_timing(attempt: OrderSubmissionAttempt, poll_sequence: int) -> PollTim
         max_duration_seconds=max_duration,
         max_poll_sequence=max_duration // interval,
     )
+
+
+def _poll_timing_for_mode(attempt: OrderSubmissionAttempt, poll_sequence: int, poll_mode: str, now: datetime) -> PollTiming:
+    if poll_mode == POLL_MODE_CLOSEOUT:
+        interval = max(1, int(getattr(settings, "ORDER_STATUS_POLL_INTERVAL_SECONDS", 2)))
+        return PollTiming(
+            started=now,
+            deadline=now,
+            scheduled=now,
+            interval_seconds=interval,
+            max_duration_seconds=interval,
+            max_poll_sequence=1,
+        )
+    return _poll_timing(attempt, poll_sequence)
 
 
 def _timing_result(
@@ -615,7 +630,7 @@ def _service_status(record: OrderStatusSyncRecord) -> ResultStatus:
 def _flow_action(record: OrderStatusSyncRecord) -> str:
     if record.query_outcome == OrderStatusQueryOutcome.FOUND and record.is_terminal_status:
         return "CONTINUE"
-    if record.poll_mode == POLL_MODE_RECOVERY:
+    if record.poll_mode in {POLL_MODE_RECOVERY, POLL_MODE_CLOSEOUT}:
         return "STOP"
     if _allows_next_poll(record):
         return "WAIT"
@@ -623,7 +638,7 @@ def _flow_action(record: OrderStatusSyncRecord) -> str:
 
 
 def _allows_next_poll(record: OrderStatusSyncRecord) -> bool:
-    if record.poll_mode == POLL_MODE_RECOVERY:
+    if record.poll_mode in {POLL_MODE_RECOVERY, POLL_MODE_CLOSEOUT}:
         return False
     return (
         record.query_outcome in {OrderStatusQueryOutcome.FOUND, OrderStatusQueryOutcome.UNKNOWN, OrderStatusQueryOutcome.NOT_FOUND}

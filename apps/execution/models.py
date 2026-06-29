@@ -16,6 +16,10 @@ class OrderSubmissionAttemptStatus(models.TextChoices):
 
 
 class OrderSubmissionAttempt(models.Model):
+    time_in_force = models.CharField("timeInForce", max_length=40, blank=True)
+    limit_price = models.DecimalField("LIMIT price", max_digits=38, decimal_places=18, null=True, blank=True)
+    limit_valid_until_utc = models.DateTimeField("LIMIT valid until UTC", null=True, blank=True)
+    price_condition_hash = models.CharField("price condition hash", max_length=80, blank=True)
     order_submission_attempt_key = models.CharField("订单提交尝试幂等键", max_length=191, unique=True)
     prepared_order_intent = models.OneToOneField(
         "execution_preparation.PreparedOrderIntent",

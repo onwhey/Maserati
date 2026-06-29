@@ -48,6 +48,7 @@ StrategySignal calculator 只负责：
 输出 strength；
 输出 confidence；
 输出 prediction_horizon；
+输出交易价格条件建议（如策略需要）；
 输出实际使用的领域输入和权重；
 输出聚合、冲突和结构化证据；
 输出可判定的计算失败。
@@ -247,7 +248,7 @@ MarketRegime.regime_confidence 作为领域权重；
 DomainSignal.coverage_ratio 直接替代权重；
 DomainSignal.agreement_ratio 直接替代权重；
 历史收益临时生成动态权重；
-AIReview 输出生成实时权重；
+复盘输出生成实时权重；
 账户权益或持仓生成策略权重。
 ```
 
@@ -296,7 +297,7 @@ conflict_snapshot。
 ```text
 target_position_ratio；
 target_notional；
-entry_price；
+交易所订单价格；
 stop_loss；
 take_profit；
 position_size；
@@ -308,6 +309,8 @@ CandidateOrderIntent。
 ```
 
 目标仓位由 DecisionSnapshot 生成，候选订单由 OrderPlan 生成。
+
+StrategySignal 可以表达“策略认为合理的交易价格区域”，但不得表达“应当提交哪一种订单”。价格条件只是策略证据的一部分，不是交易所订单参数。
 
 ### 4.7 MySQL 是正式事实来源
 
@@ -594,7 +597,7 @@ params 禁止包含：
 订单数量；
 杠杆；
 MarketRegime 权重；
-AIReview 实时输出；
+实时复盘输出；
 当前时间；
 编排 ID；
 在线自动优化结果。
@@ -744,6 +747,7 @@ strength
 confidence
 confidence_semantics
 prediction_horizon
+trade_price_condition
 status
 is_usable
 allows_strategy_signal_quality
@@ -835,6 +839,7 @@ direction = 统一的策略级市场方向；
 strength = 统一的目标方向强度；
 confidence = 统一的结构化策略置信评分；
 prediction_horizon = 统一的策略判断适用期限；
+trade_price_condition = 统一的策略价格条件建议；
 evidence = 可追溯、可审计的标准化证据。
 ```
 
@@ -934,7 +939,52 @@ strategy_score
 
 不同策略的 prediction_horizon 必须使用同一格式和同一语义体系。若某个策略天然只适合短期限判断，应通过 prediction_horizon、strength、confidence 和证据表达，而不是要求 DecisionSnapshot 识别策略类型后重新解释。
 
-### 9.6 actual_input_weights
+### 9.6 trade_price_condition
+
+`trade_price_condition` 用于表达策略认为合理的交易价格区域。
+
+它可以为空。为空表示该策略只输出方向、强度、置信度和证据，不提供价格条件建议。
+
+当策略提供价格条件时，必须使用统一结构，至少说明：
+
+```text
+condition_type；
+reference_price_zone；
+acceptable_price_zone；
+support_or_resistance_refs；
+allow_chasing；
+reason_code；
+reason_summary_zh。
+```
+
+语义：
+
+```text
+reference_price_zone = 策略认为更合理的参考交易区域；
+acceptable_price_zone = 策略允许 OrderPlan 继续评估的价格区域；
+support_or_resistance_refs = 支撑、压力、区间结构或其他领域证据引用；
+allow_chasing = 策略是否允许在价格已经偏离参考区域时继续追价评估。
+```
+
+`trade_price_condition` 只回答“策略希望在什么价格区域交易”。它不得回答：
+
+```text
+使用市价单还是限价单；
+限价单具体报单价；
+订单有效期；
+timeInForce；
+订单数量；
+是否撤单；
+是否追单；
+是否拆单；
+是否提交交易所订单。
+```
+
+这些问题属于 OrderPlan、ExecutionPreparation、Execution、OrderStatusSync 或受控订单收尾流程。
+
+如果策略的价格条件来自支撑压力、区间结构或关键位，必须在证据中保存对应 DomainSignalValue 引用，不能只写自然语言。
+
+### 9.7 actual_input_weights
 
 必须记录 calculator 实际应用的领域权重。
 
@@ -949,7 +999,7 @@ Decimal 使用规范字符串；
 uses_input_weights = false 时为空。
 ```
 
-### 9.7 used_domain_signal_codes 与 used_domain_signal_value_ids
+### 9.8 used_domain_signal_codes 与 used_domain_signal_value_ids
 
 必须记录实际参与计算的领域事实。
 
@@ -957,7 +1007,7 @@ uses_input_weights = false 时为空。
 
 不得只记录 Definition 依赖而不记录实际使用值。
 
-### 9.8 aggregation_snapshot
+### 9.9 aggregation_snapshot
 
 保存策略计算的机器可读聚合摘要，至少包括：
 
@@ -974,7 +1024,7 @@ uses_input_weights = false 时为空。
 
 具体结构由算法 output schema 和算法需求文档固定。
 
-### 9.9 conflict_snapshot
+### 9.10 conflict_snapshot
 
 保存策略算法识别出的领域冲突信息。
 
@@ -1079,6 +1129,7 @@ strength；
 confidence；
 confidence_semantics；
 prediction_horizon；
+trade_price_condition；
 used_domain_signal_value_refs；
 actual_input_weights；
 aggregation_snapshot；
@@ -1095,6 +1146,9 @@ blocked；
 unknown；
 allows_strategy_signal_quality；
 target_position_ratio；
+order_type；
+limit_price；
+time_in_force；
 订单动作或订单对象。
 ```
 
@@ -1245,7 +1299,8 @@ uses_input_weights；
 strength 公式和归一化；
 confidence 公式和统计语义；
 prediction_horizon；
-如何把策略内部指标标准化为统一 direction / strength / confidence / prediction_horizon；
+trade_price_condition 的生成规则、允许为空规则和证据来源；
+如何把策略内部指标标准化为统一 direction / strength / confidence / prediction_horizon / trade_price_condition；
 该算法输出与统一 StrategySignal 语义合同的兼容性证明；
 中性区间；
 冲突处理；
@@ -1261,7 +1316,9 @@ golden test；
 
 参数组合变化由 params、params_hash 和 definition_hash 表达；计算行为未变化时不得滥增算法版本。
 
-本需求不创建任何具体 StrategySignal 算法需求文件，也不创建任何具体 StrategySignal implementation 实现记录。
+本需求只定义 StrategySignal 的通用业务合同、输出语义和 service 边界。
+
+具体 StrategySignal 算法需求由 `docs/requirements/strategy_signals/*.md` 定义；implementation 实现记录只在实际编码或复杂内部逻辑需要说明时创建。
 
 ## 15. 策略验证与正式发布
 
@@ -1746,14 +1803,14 @@ confirm-write 如提供，只控制是否落库，不得改变策略、算法、
 73. StrategySignal 不生成目标仓位。
 74. StrategySignal 不读取账户、持仓或 PriceSnapshot。
 75. StrategySignal 不请求 Binance。
-76. StrategySignal 不调用 DeepSeekGateway。
+76. StrategySignal 不调用大模型。
 77. StrategySignal 不保存或查询编排 ID。
 78. adapter 显式映射业务结果。
 79. 全部业务时间使用 UTC。
 80. 新增或停用策略不修改 StrategySignalService 主流程。
 81. 后台研究服务复用 calculator 合同，但不写正式 StrategySignal。
 82. 正式服务不存在 allow_candidate、ignore_approval 或 use_latest 等绕过参数。
-83. 不同策略 calculator 的 direction / strength / confidence / prediction_horizon 具备统一业务语义。
+83. 不同策略 calculator 的 direction / strength / confidence / prediction_horizon / trade_price_condition 具备统一业务语义。
 84. 未标准化策略内部指标不得写入 StrategySignal 标准字段。
 85. 无法标准化输出语义的策略算法不得进入正式 StrategyAnalysisRelease。
 ```
@@ -1840,7 +1897,7 @@ StrategySignal 禁止：
 把 MarketRegime 再次用于方向、权重、strength 或 confidence；
 同时加权 DomainSignalValue 和其底层 AtomicSignalValue；
 使用策略历史表现在线调整权重；
-使用 AIReview 参与实时策略判断；
+使用复盘结果参与实时策略判断；
 缺失精确 calculator 时自动回退；
 自动选择策略的其他版本；
 把 confidence 解释为盈利概率；
@@ -1872,7 +1929,7 @@ StrategySignalService 与 calculator 职责明确分离；
 使用公共 CalculatorRegistry 和稳定 DTO；
 calculator 不接收 ORM、存储、网络或编排对象；
 所有策略输出字段具备跨策略统一解释；
-direction、strength、confidence 和 prediction_horizon 语义明确；
+direction、strength、confidence、prediction_horizon 和 trade_price_condition 语义明确；
 confidence 未校准时不是盈利概率；
 normal neutral 与 blocked / failed 明确分离；
 每个算法版本有独立算法需求文档和 implementation 实现记录；

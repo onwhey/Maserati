@@ -79,7 +79,7 @@ AuditRecord
 RuntimeTradingConfig
 ```
 
-这些对象只覆盖底座最小事实，不包含行情、策略、账户、订单、成交、编排、巡检、后台或 AI 复盘业务表。
+这些对象只覆盖底座最小事实，不包含行情、策略、账户、订单、成交、编排、巡检、后台或系统内大模型复盘业务表。
 
 ## 5. 配置读取
 
@@ -176,9 +176,7 @@ PipelineOrchestrator；
 RuntimeGuard；
 Notifications 投递 worker；
 OpsConsole；
-PerformanceMetrics；
-DeepSeekGateway；
-AIReview。
+ReviewDataset。
 ```
 
 ## 9. 已知实现说明

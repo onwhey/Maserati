@@ -39,7 +39,7 @@ MarketSnapshot 生成模块；
 风控模块；
 执行模块；
 通知投递模块；
-大模型复盘模块。
+复盘分析模块。
 ```
 
 一句话：
@@ -201,8 +201,7 @@ ExecutionPreparation；
 Execution；
 OrderStatusSync；
 FillSync；
-PerformanceMetrics；
-AIReview。
+ReviewDataset。
 ```
 
 说明：
@@ -946,7 +945,7 @@ OrderStatusSync；
 FillSync；
 Notifications；
 OpsConsole；
-AIReview；
+ReviewDataset；
 大模型；
 人工后台直接改表。
 ```

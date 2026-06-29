@@ -1,2 +1,0 @@
-"""AIReview migrations."""
-

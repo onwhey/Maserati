@@ -115,6 +115,7 @@ FillSyncResult.order_submission_attempt_id
 TradeFill.order_submission_attempt_id
 TradeFill.terminal_order_status_sync_record_id
 OrderFillSummary.order_submission_attempt_id
+OrderCancelAttempt.order_submission_attempt_id
 ```
 
 这些外键证明业务对象为什么相关，是业务事实来源。
@@ -224,6 +225,7 @@ ExecutionPreparationStepAdapter
 OrderSubmissionStepAdapter
 OrderStatusSyncStepAdapter
 FillSyncStepAdapter
+OrderCycleCloseoutStepAdapter
 ```
 
 每个 adapter 必须实现等价接口：
@@ -447,7 +449,7 @@ PipelineOrchestrator 不得包含针对具体业务状态的大型 if / elif / s
 
 ## 15. 正式步骤顺序
 
-Registry 必须定义以下主线步骤：
+Registry 必须定义以下主交易步骤：
 
 ```text
 binance_account_sync（自动四小时账户边界，起始步骤）
@@ -468,8 +470,6 @@ order_plan
 risk_check
 execution_preparation
 order_submission
-order_status_sync
-fill_sync
 ```
 
 依赖主线：
@@ -494,12 +494,44 @@ BinanceAccountSync（自动四小时账户边界，起始步骤）
 → RiskCheck
 → ExecutionPreparation
 → OrderSubmission
-→ OrderStatusSync
-→ FillSync
+→ 订单提交事实完成，主交易编排结束
 或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
 ```
 
 具体分支由对应 adapter 返回统一结果，编排层不理解分支业务原因。
+
+订单提交后的状态与成交同步不属于上述主交易链路的内嵌尾部，应定义为独立订单生命周期同步管线：
+
+```text
+order_lifecycle_sync
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
+```
+
+该同步管线用于处理已经存在的 `OrderSubmissionAttempt`。它不得生成新 OrderPlan，不得生成新 CandidateOrderIntent，不得重新提交订单，也不得阻塞下一轮主交易编排的数据与策略分析。
+
+限价单周期收尾不属于上述主交易链路的内嵌步骤，应定义为独立收尾管线：
+
+```text
+order_cycle_closeout
+→ OrderCycleCloseout service（必要时由 service 内部通过 BinanceOrderCancelGateway 撤单）
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
+```
+
+该收尾管线用于处理本周期到期后仍未终态的 LIMIT 订单。它不得生成新 OrderPlan，不得生成新 CandidateOrderIntent，不得重新提交订单，也不得替代下一轮主编排。
+
+示例调度：
+
+```text
+00:00 主编排提交 LIMIT，默认有效到 03:50 UTC；
+03:55 执行 order_cycle_closeout；
+04:05 执行下一轮主编排。
+```
+
+如果 `order_cycle_closeout` 未能在下一轮主编排前完成，下一轮仍可以执行数据和策略分析；但同一交易身份的 ActiveLock 未释放时，下一轮不得进入新的 OrderPlan 订单链路。
 
 ## 16. 条件步骤与循环限制
 
@@ -576,7 +608,7 @@ OrderPlan blocked → BLOCKED + STOP。
 sync_purpose = trade_preparation；
 使用本轮自动编排的稳定 business_request_key；
 成功结果写入 OrchestrationBusinessObjectLink；
-作为 PerformanceMetrics 的自动账户边界事实；
+作为 ReviewDataset 的自动账户边界事实；
 同步完成后 flow_action = CONTINUE，进入 DataCollection。
 ```
 
@@ -594,7 +626,7 @@ sync_purpose = trade_preparation；
 
 DecisionSnapshotStepAdapter 只返回目标仓位分支语义，不直接调用 Binance Account Sync。Connector 不得在 DecisionSnapshot 后补做第二次账户边界同步。
 
-账户同步失败、阻断或 unknown 时，必须按 Binance Account Sync 的统一结果映射停止或标记本轮，不得为了形成绩效边界伪造账户快照。
+账户同步失败、阻断或 unknown 时，必须按 Binance Account Sync 的统一结果映射停止或标记本轮，不得为了形成 ReviewDataset 边界伪造账户快照。
 
 #### 17.2.2 真实交易权限准入
 
@@ -643,15 +675,16 @@ ExecutionPreparation BLOCKED → BLOCKED + STOP；
 ExecutionPreparation FAILED → FAILED + FAIL。
 ```
 
-### 17.4 提交、状态与成交
+### 17.4 订单提交、订单生命周期同步与收尾
 
 ```text
-OrderSubmission accepted → SUCCEEDED + CONTINUE；
-OrderSubmission unknown → UNKNOWN + CONTINUE 到 OrderStatusSync；
+OrderSubmission accepted → SUCCEEDED + COMPLETE，并登记或触发订单生命周期同步管线；
+OrderSubmission unknown → UNKNOWN + COMPLETE，并登记或触发订单生命周期同步管线；
 OrderSubmission rejected → BLOCKED + STOP；
 blocked_before_submit → BLOCKED + STOP；
 failed_before_submit → FAILED + FAIL；
 
+订单生命周期同步管线：
 OrderStatusSync 正在 2 秒轮询 → UNKNOWN + WAIT；
 OrderStatusSync 找到非终态 → UNKNOWN + WAIT；
 OrderStatusSync 找到明确终态 → SUCCEEDED + CONTINUE 到 FillSync；
@@ -663,6 +696,13 @@ FillSync incomplete / unknown → UNKNOWN + COMPLETE；
 FillSync failed_before_query → FAILED + FAIL；
 FillSync blocked_before_query → BLOCKED + STOP；
 FillSync recovery_skipped_out_of_window → UNKNOWN + COMPLETE。
+
+限价单周期收尾管线：
+OrderCycleCloseout no_residual_order → NO_ACTION + COMPLETE；
+OrderCycleCloseout cancel_requested / cancel_accepted → SUCCEEDED + CONTINUE 到 OrderStatusSync；
+OrderCycleCloseout cancel_unknown → UNKNOWN + CONTINUE 到 OrderStatusSync；
+OrderCycleCloseout cancel_failed_before_send → FAILED + FAIL；
+OrderCycleCloseout blocked_before_cancel → BLOCKED + STOP。
 ```
 
 以上摘要必须由各 adapter 的版本化映射实现，不得复制进 PipelineOrchestrator 主循环。
@@ -740,6 +780,7 @@ reason_code = strategy_analysis_release_unavailable 或 strategy_analysis_releas
 ```text
 four_hour_boundary
 daily_boundary
+order_cycle_closeout
 manual_diagnostic
 ```
 
@@ -1139,9 +1180,11 @@ OrchestrationRun.status = waiting；
 不得重新执行已完成步骤。
 ```
 
-## 31. 订单状态轮询衔接
+## 31. 订单生命周期同步衔接
 
-OrderSubmission accepted 或 unknown 后进入 OrderStatusSync。
+OrderSubmission accepted 或 unknown 后，主交易编排不在同一个 run 内继续执行 OrderStatusSync / FillSync。
+
+OrderSubmissionStepAdapter 必须登记或触发独立订单生命周期同步管线，由该管线消费同一 `OrderSubmissionAttempt`。
 
 衔接器负责把 OrderStatusSync 的业务结果转换为：
 
@@ -1149,7 +1192,7 @@ OrderSubmission accepted 或 unknown 后进入 OrderStatusSync。
 开始 2 秒轮询 → WAIT；
 轮询仍在 30 秒窗口 → WAIT；
 查到明确终态 → CONTINUE 到 FillSync；
-30 秒仍 not_found / unknown / 非终态 → COMPLETE，run 最终 unknown；
+30 秒仍 not_found / unknown / 非终态 → COMPLETE，该订单生命周期同步 run 最终 unknown；
 查询合同失败 → FAIL。
 ```
 
@@ -1497,13 +1540,13 @@ ObjectLink 写入失败 → 保留 StepRun，标记 failed 并通过同一 busin
 41. OrderPlan no_order_required 完成无订单流程。
 42. RiskCheck DENY 停止执行链路。
 43. ExecutionPreparation BLOCKED 不进入订单提交。
-44. OrderSubmission accepted 进入状态同步。
-45. OrderSubmission unknown 进入状态同步而不重提。
-46. OrderStatusSync 轮询时 run 进入 waiting。
+44. OrderSubmission accepted 后主交易 run 完成，并登记或触发订单生命周期同步管线。
+45. OrderSubmission unknown 后主交易 run 完成，并登记或触发订单生命周期同步管线而不重提。
+46. OrderStatusSync 轮询时订单生命周期同步 run 进入 waiting。
 47. WAIT 不持续占用 worker。
 48. resume_token 只能消费一次。
-49. 状态终态后恢复进入 FillSync。
-50. 30 秒 unresolved 后 run 进入 unknown。
+49. 状态终态后订单生命周期同步 run 恢复进入 FillSync。
+50. 30 秒 unresolved 后订单生命周期同步 run 进入 unknown。
 51. FillSync synced 后正常完成。
 52. FillSync synced_empty 严格成立后正常完成。
 53. FillSync incomplete 后 run unknown 且锁保持阻断。

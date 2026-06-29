@@ -95,6 +95,7 @@ class StrategySignalDraft:
     used_domain_signal_codes: list[str]
     used_domain_signal_value_ids: list[int]
     actual_input_weights: dict[str, str]
+    trade_price_condition: dict[str, Any]
     aggregation_snapshot: dict[str, Any]
     conflict_snapshot: dict[str, Any]
     evidence_items: list[dict[str, Any]]
@@ -270,6 +271,7 @@ def _signal_result(signal: StrategySignal, *, trace_id: str, trigger_source: str
             "direction": signal.direction,
             "strength": signal.strength,
             "confidence": signal.confidence,
+            "trade_price_condition": signal.trade_price_condition,
             "is_usable": signal.is_usable,
             "allows_strategy_signal_quality": signal.allows_strategy_signal_quality,
             "error_code": signal.error_code,
@@ -606,6 +608,38 @@ def _validate_actual_weights(
     return normalized
 
 
+def _validate_trade_price_condition(value: Any) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if not isinstance(value, dict):
+        raise InvalidCalculatorContractError("trade_price_condition 必须是映射或为空")
+    if not value:
+        return {}
+    required = {
+        "condition_type",
+        "reference_price_zone",
+        "acceptable_price_zone",
+        "support_or_resistance_refs",
+        "allow_chasing",
+        "reason_code",
+        "reason_summary_zh",
+    }
+    missing = sorted(required - set(value))
+    if missing:
+        raise InvalidCalculatorContractError(f"trade_price_condition 缺少必要字段：{','.join(missing)}")
+    for field_name in ("condition_type", "reason_code", "reason_summary_zh"):
+        if not str(value.get(field_name, "")).strip():
+            raise InvalidCalculatorContractError(f"trade_price_condition.{field_name} 不能为空")
+    refs = value.get("support_or_resistance_refs")
+    if not isinstance(refs, list) or any(not isinstance(item, str) or not item.strip() for item in refs):
+        raise InvalidCalculatorContractError("trade_price_condition.support_or_resistance_refs 必须是非空字符串列表")
+    if not refs:
+        raise InvalidCalculatorContractError("trade_price_condition.support_or_resistance_refs 不能为空")
+    if not isinstance(value.get("allow_chasing"), bool):
+        raise InvalidCalculatorContractError("trade_price_condition.allow_chasing 必须是 bool")
+    return _json_ready(value)
+
+
 def _failed_draft(output: CalculatorOutput, *, latency_ms: int) -> StrategySignalDraft:
     error_code = _limited_text(output.error_code or "strategy_signal_calculator_failed", max_length=MAX_ERROR_CODE_LENGTH)
     error_message = _limited_text(output.error_message or "StrategySignal calculator 计算失败", max_length=MAX_ERROR_MESSAGE_LENGTH)
@@ -621,6 +655,7 @@ def _failed_draft(output: CalculatorOutput, *, latency_ms: int) -> StrategySigna
         used_domain_signal_codes=[],
         used_domain_signal_value_ids=[],
         actual_input_weights={},
+        trade_price_condition={},
         aggregation_snapshot={},
         conflict_snapshot={},
         evidence_items=[],
@@ -671,6 +706,7 @@ def _validate_output(
         context=context,
         used_codes=used_codes,
     )
+    trade_price_condition = _validate_trade_price_condition(values.get("trade_price_condition"))
     aggregation_snapshot = values.get("aggregation_snapshot")
     conflict_snapshot = values.get("conflict_snapshot")
     if not isinstance(aggregation_snapshot, dict) or not isinstance(conflict_snapshot, dict):
@@ -702,6 +738,7 @@ def _validate_output(
         used_domain_signal_codes=used_codes,
         used_domain_signal_value_ids=used_ids,
         actual_input_weights=actual_weights,
+        trade_price_condition=trade_price_condition,
         aggregation_snapshot=_json_ready(aggregation_snapshot),
         conflict_snapshot=_json_ready(conflict_snapshot),
         evidence_items=evidence_items,
@@ -746,6 +783,7 @@ def _calculate_draft(
             used_domain_signal_codes=[],
             used_domain_signal_value_ids=[],
             actual_input_weights={},
+            trade_price_condition={},
             aggregation_snapshot={},
             conflict_snapshot={},
             evidence_items=[],
@@ -770,6 +808,7 @@ def _calculate_draft(
             used_domain_signal_codes=[],
             used_domain_signal_value_ids=[],
             actual_input_weights={},
+            trade_price_condition={},
             aggregation_snapshot={},
             conflict_snapshot={},
             evidence_items=[],
@@ -833,6 +872,7 @@ def _persist_signal(
         used_domain_signal_codes=draft.used_domain_signal_codes,
         used_domain_signal_value_ids=draft.used_domain_signal_value_ids,
         actual_input_weights=draft.actual_input_weights,
+        trade_price_condition=draft.trade_price_condition,
         aggregation_snapshot=draft.aggregation_snapshot,
         conflict_snapshot=draft.conflict_snapshot,
         evidence_items=draft.evidence_items,

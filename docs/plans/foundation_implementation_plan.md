@@ -143,7 +143,7 @@ Django settings 启动时读取 .env；
 数据库配置从 .env / 环境变量读取；
 Redis 配置从 .env / 环境变量读取；
 Celery broker / result backend 从 .env / 环境变量读取；
-Binance / DeepSeek / Hermes 的密钥配置只提供占位项，不进行真实访问；
+Binance / Hermes 的密钥配置只提供占位项，不进行真实访问；当前项目不提供系统内大模型访问配置；
 真实交易硬权限默认关闭；
 缺失关键配置时给出清晰错误。
 ```
@@ -248,8 +248,7 @@ RuntimeGuard 定时巡检；
 通知投递 worker；
 订单状态轮询；
 成交同步；
-AIReview；
-PerformanceMetrics。
+ReviewDataset。
 ```
 
 这些能力留到对应阶段计划。
@@ -296,7 +295,7 @@ Celery timezone 使用 UTC；
 数据库密码；
 Redis 密码；
 Binance API key / secret；
-DeepSeek API key；
+外部大模型 API key；
 Webhook secret；
 完整 Authorization header；
 完整签名材料；
@@ -509,7 +508,7 @@ system check 不得：
 
 ```text
 调用 Binance；
-调用 DeepSeek；
+调用外部大模型；
 发送 Hermes；
 提交订单；
 修改数据库业务对象；
@@ -533,7 +532,7 @@ factory / fixture 可后续按需引入。
 
 ```text
 不访问真实 Binance；
-不访问真实 DeepSeek；
+不访问真实外部大模型；
 不发送真实 Hermes；
 不访问生产 MySQL；
 不访问生产 Redis；
@@ -770,9 +769,8 @@ PipelineOrchestrator；
 RuntimeGuard；
 Notifications 投递；
 OpsConsole 页面；
-PerformanceMetrics；
-DeepSeekGateway 真实请求；
-AIReview。
+ReviewDataset；
+项目内未授权外部大模型请求。
 ```
 
 本阶段可以为这些模块预留配置项、基础接口形状或 fake 注入机制，但不得实现真实业务逻辑。
@@ -834,7 +832,7 @@ CandidateOrderIntent；
 ApprovedOrderIntent；
 ExchangeOrder；
 TradeFill；
-AIReviewReport。
+ReviewDatasetRecord。
 ```
 
 这些表应由对应业务阶段按需求创建。
@@ -991,7 +989,7 @@ SQLite 被作为正式默认数据库；
 后台运行开关可以绕过 .env 硬权限；
 Redis 被用于保存核心业务事实；
 Celery task 中出现复杂业务逻辑；
-测试访问真实 Binance、DeepSeek 或 Hermes；
+测试访问真实 Binance、Hermes 或外部大模型；
 测试访问生产 MySQL 或生产 Redis；
 本阶段提前实现 OrderPlan、Execution 或真实下单能力；
 日志、AlertEvent 或 AuditRecord 泄露敏感信息。

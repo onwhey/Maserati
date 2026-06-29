@@ -44,6 +44,7 @@ Celery Beat / 定时调度
 发现订单链路在提交前的关键阶段长期断裂；
 发现 OrderPlanActiveLock 长时间 active；
 发现订单提交长期 submitting 或 unknown；
+发现 LIMIT 订单到期后缺少周期收尾；
 发现订单状态长期无法确认；
 发现成交同步长期不完整或无法确认；
 发现自动账户边界同步缺失、长期失败或过期；
@@ -89,7 +90,7 @@ RuntimeGuard 不得：
 根据账户余额或持仓倒推订单结果；
 把 unknown、not_found、incomplete 或超时解释为成功或失败；
 改变真实交易运行配置、运行模式、市场域或账户域；
-巡检后台人工复盘、后台一键绩效补算或普通后台页面功能；
+巡检后台人工复盘、ReviewDataset 导出或普通后台页面功能；
 调用大模型；
 直接发送 Hermes 消息。
 ```
@@ -124,6 +125,7 @@ order_chain_pre_submission_stale
 active_lock_stale
 order_submission_stale_submitting
 order_submission_unknown_unresolved
+limit_order_closeout_missing
 order_status_unresolved
 fill_sync_stale_syncing
 fill_sync_incomplete_unresolved
@@ -245,7 +247,7 @@ needs_manual_attention = true。
 
 本巡检只判断“步骤结果与业务产物绑定是否一致”，不重新计算业务结果。
 
-至少覆盖以下主链路步骤：
+至少覆盖以下自动主交易链路与订单生命周期对象：
 
 ```text
 MarketSnapshot step → MarketSnapshot；
@@ -262,6 +264,8 @@ OrderPlan step → OrderPlan 或明确 no_order_required / 真实交易权限关
 RiskCheck step → RiskCheckResult；
 ExecutionPreparation step → ExecutionPreparationResult；
 OrderSubmission step → OrderSubmissionAttempt；
+
+订单生命周期同步：
 OrderStatusSync step → OrderStatusSyncRecord；
 FillSync step → FillSyncResult。
 ```
@@ -469,6 +473,28 @@ trace_id
 ```
 
 `not_found` 不证明提交失败；查询 `unknown` 不证明订单不存在；`NEW` 和 `PARTIALLY_FILLED` 不是终态。以上状态均不得作为解锁或重新提交依据。
+
+### 11.1 LIMIT 订单到期后缺少周期收尾
+
+如果已提交 LIMIT 订单满足以下条件，必须记录：
+
+```text
+issue_type = limit_order_closeout_missing；
+severity = error；
+needs_manual_attention = true。
+```
+
+条件：
+
+```text
+PreparedOrderIntent.order_type = LIMIT；
+limit_valid_until_utc 已经过期；
+仍无明确终态和完整 FillSync 收尾；
+不存在有效 OrderCycleCloseout / OrderCancelAttempt 记录；
+ActiveLock 仍未安全释放。
+```
+
+RuntimeGuard 只记录问题，不调用 OrderCycleCloseout，不调用 BinanceOrderCancelGateway，不撤单，不查订单状态，不释放锁。
 
 ## 12. 成交同步异常
 
@@ -1005,34 +1031,36 @@ task 和 command 不得承载巡检规则或直接修改业务对象。
 27. OrderSubmissionAttempt unknown 超过 30 分钟时创建 critical issue。
 28. unknown 巡检不会重新提交、撤单或解锁。
 29. polling_timeout 持续超过 30 分钟且无终态时创建 `order_status_unresolved`。
-30. not_found 不被解释为提交失败。
-31. NEW、PARTIALLY_FILLED 和未识别状态不被解释为终态。
-32. FillSync syncing 超过 30 分钟时创建问题。
-33. FillSync incomplete 超过 30 分钟时创建问题。
-34. FillSync unknown 超过 30 分钟时创建问题。
-35. 严格成立的 synced_empty 不会单独创建问题。
-36. RuntimeGuard 不补写 TradeFill、不重算汇总、不生成或修改 BinancePositionSnapshot。
-37. trade_preparation BinanceSyncRun 超过 4 小时或过期时创建 `account_sync_stale`。
-38. ops_display 批次不能满足自动账户边界同步新鲜度。
-39. RuntimeGuard 不请求 Binance Account Sync。
-40. delivery_enabled AlertEvent 缺少 NotificationDeliveryAttempt 或 NotificationSuppression 时创建 `alert_dispatch_stale`。
-41. NotificationDeliveryAttempt pending 或 sending 超过阈值时创建 `alert_dispatch_stale`。
-42. NotificationDeliveryAttempt unknown 长期未收尾时创建 `alert_dispatch_stale`。
-43. NotificationDeliveryAttempt 连续 failed 或 abandoned 超过正式阈值时创建 `alert_dispatch_failed_excessive`。
-44. 路由配置缺失或 Hermes 通道长期不可用时创建 `alert_dispatch_failed_excessive`。
-45. RuntimeGuard 不修改 DeliveryAttempt，不创建新投递尝试，不直接调用 Hermes。
-46. 告警系统不可用时，RuntimeGuardIssue 仍然保存。
-47. 同一 issue_key 重复发现时只更新一条有效问题。
-48. 重复巡检不会每 10 分钟重复告警。
-49. 并发运行不会创建重复 RuntimeGuardRun 或 RuntimeGuardIssue。
-50. issue 状态变更记录操作人、原因、时间和 trace_id。
-51. 标记 issue resolved 不修改被巡检业务对象。
-52. 单个巡检器失败时其他巡检结果仍然保存，运行状态为 partial_failed。
-53. dry-run 不写 RuntimeGuardRun、RuntimeGuardIssue 或 AlertEvent。
-54. confirm-write 只写 RuntimeGuard 自有对象和 AlertEvent。
-55. 日志、evidence 和 AlertEvent 不包含密钥或完整外部响应。
-56. RuntimeGuard 不巡检 AIReview、PerformanceMetrics、后台一键补算或后台人工导出。
-57. RuntimeGuard 不访问 Binance Gateway、不发送 Hermes、不调用大模型。
+30. LIMIT 订单过期且缺少周期收尾记录时创建 `limit_order_closeout_missing`。
+31. `limit_order_closeout_missing` 不会触发 RuntimeGuard 撤单、查单或解锁。
+32. not_found 不被解释为提交失败。
+33. NEW、PARTIALLY_FILLED 和未识别状态不被解释为终态。
+34. FillSync syncing 超过 30 分钟时创建问题。
+35. FillSync incomplete 超过 30 分钟时创建问题。
+36. FillSync unknown 超过 30 分钟时创建问题。
+37. 严格成立的 synced_empty 不会单独创建问题。
+38. RuntimeGuard 不补写 TradeFill、不重算汇总、不生成或修改 BinancePositionSnapshot。
+39. trade_preparation BinanceSyncRun 超过 4 小时或过期时创建 `account_sync_stale`。
+40. ops_display 批次不能满足自动账户边界同步新鲜度。
+41. RuntimeGuard 不请求 Binance Account Sync。
+42. delivery_enabled AlertEvent 缺少 NotificationDeliveryAttempt 或 NotificationSuppression 时创建 `alert_dispatch_stale`。
+43. NotificationDeliveryAttempt pending 或 sending 超过阈值时创建 `alert_dispatch_stale`。
+44. NotificationDeliveryAttempt unknown 长期未收尾时创建 `alert_dispatch_stale`。
+45. NotificationDeliveryAttempt 连续 failed 或 abandoned 超过正式阈值时创建 `alert_dispatch_failed_excessive`。
+46. 路由配置缺失或 Hermes 通道长期不可用时创建 `alert_dispatch_failed_excessive`。
+47. RuntimeGuard 不修改 DeliveryAttempt，不创建新投递尝试，不直接调用 Hermes。
+48. 告警系统不可用时，RuntimeGuardIssue 仍然保存。
+49. 同一 issue_key 重复发现时只更新一条有效问题。
+50. 重复巡检不会每 10 分钟重复告警。
+51. 并发运行不会创建重复 RuntimeGuardRun 或 RuntimeGuardIssue。
+52. issue 状态变更记录操作人、原因、时间和 trace_id。
+53. 标记 issue resolved 不修改被巡检业务对象。
+54. 单个巡检器失败时其他巡检结果仍然保存，运行状态为 partial_failed。
+55. dry-run 不写 RuntimeGuardRun、RuntimeGuardIssue 或 AlertEvent。
+56. confirm-write 只写 RuntimeGuard 自有对象和 AlertEvent。
+57. 日志、evidence 和 AlertEvent 不包含密钥或完整外部响应。
+58. RuntimeGuard 不巡检 ReviewDataset、后台一键补算或后台人工导出。
+59. RuntimeGuard 不访问 Binance Gateway、不发送 Hermes、不调用大模型。
 
 ## 28. 验收标准
 
@@ -1041,7 +1069,8 @@ task 和 command 不得承载巡检规则或直接修改业务对象。
 ```text
 自动编排主链路的漏跑、卡住、产物缺失、长期不确定状态和投递异常均有明确巡检规则；
 OrchestrationRun、OrchestrationStepRun 和各交易对象使用正式名称与状态；
-MarketSnapshot、FeatureLayer、AtomicSignal、DomainSignal、MarketRegime、StrategyRouting、StrategySignal、DecisionSnapshot、AccountSync、PriceSnapshot、OrderPlan、RiskCheck、ExecutionPreparation、Execution、OrderStatusSync、FillSync 的编排产物缺失可被发现；
+MarketSnapshot、FeatureLayer、AtomicSignal、DomainSignal、MarketRegime、StrategyRouting、StrategySignal、DecisionSnapshot、AccountSync、PriceSnapshot、OrderPlan、RiskCheck、ExecutionPreparation、Execution 的主交易编排产物缺失可被发现；
+OrderStatusSync、FillSync 的订单生命周期同步产物缺失可被发现；
 订单提交前链路断裂可被发现；
 后台人工能力不纳入 RuntimeGuard 巡检范围；
 所有问题均保存为可去重、可确认、可关闭的 RuntimeGuardIssue；
@@ -1067,8 +1096,7 @@ ActiveLock 自动释放；
 账户同步；
 持仓更新；
 真实交易运行配置控制；
-AIReview 巡检；
-PerformanceMetrics 巡检；
+ReviewDataset 巡检；
 后台一键补算巡检；
 后台人工导出或后台页面巡检；
 大模型异常判断。

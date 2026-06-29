@@ -118,7 +118,7 @@ StrategySignal 才能判断靠近支撑区时是否偏多。
 ```text
 MarketRegime 可以判断当前是大级别偏多下的高位区间震荡；
 StrategyRouting 才能选择区间结构策略；
-StrategySignal 才能输出支撑做多、压力减仓或跌破退出的策略判断。
+StrategySignal 才能输出该策略在支撑、压力或跌破结构下的策略级判断。
 ```
 
 领域不得：
@@ -187,7 +187,8 @@ market_context 负责大级别背景，优先使用 1d 长窗口；
 trend 负责当前趋势方向和强度，其中 1d 是主判断周期，4h 表达完整短周期趋势状态；
 volatility 负责波动大小、压缩、扩张和异常波动状态；
 risk_state 负责异常行情对信号可靠性的风险含义，不重复表达波动大小本身；
-structure 负责支撑压力、区间边界和价格位置，不判断高位、低位或趋势中继。
+structure 负责支撑压力、区间边界和价格位置，不判断高位、低位或趋势中继；
+structure 必须保留 1d 大结构与 4h 小结构两套事实，不强行合并成一个价格带或一个最终答案。
 ```
 
 ## 6. market_context 领域
@@ -378,14 +379,14 @@ volatility 回答：
 是低波动压缩、正常波动、波动扩张、宽幅震荡，还是异常高波动？
 ```
 
-低波动本身不得被解释为退出信号。
+低波动本身不得被解释为仓位处理信号。
 
 低波动必须结合 trend 与 structure 判断：
 
 ```text
 趋势中的低波动可能只是整理；
-无趋势下的低波动可能只是等待；
-趋势破坏后的低波动可能只是观望。
+无趋势下的低波动可能只是无方向压缩状态；
+趋势破坏后的低波动可能只是结构未明状态。
 ```
 
 ### 9.2 候选 AtomicSignal 类型
@@ -438,11 +439,20 @@ structure 回答：
 
 structure 是支撑压力、区间结构和价格位置的领域事实。
 
+structure 第一版必须区分：
+
+```text
+major_structure = 1d 大结构，用于表达大级别支撑压力和主要区间；
+minor_structure = 4h 小结构，用于表达大区间内部的精细位置。
+```
+
+一份 structure DomainSignalValue 可以同时承载 major_structure 与 minor_structure，但不得把它们强行合并成一个支撑压力答案。
+
 structure 只描述结构事实，不描述大级别高位、低位或趋势中继。
 
 如果需要判断“高位宽幅震荡”“低位筑底”“趋势中继整理”，应由 MarketRegime 综合 market_context、trend、volatility 与 structure 后形成。
 
-structure 不负责决定支撑做多、压力减仓或跌破退出。
+structure 不负责决定如何处理支撑、压力或跌破结构。
 
 这些动作属于 StrategySignal。
 
@@ -477,10 +487,10 @@ structure 不负责决定支撑做多、压力减仓或跌破退出。
 近 N 根 4h 低点区域；
 近 N 根 1d 高点区域；
 近 N 根 1d 低点区域；
-支撑区上沿；
-支撑区下沿；
-压力区上沿；
-压力区下沿；
+1d 大结构支撑区上沿 / 下沿；
+1d 大结构压力区上沿 / 下沿；
+4h 小结构支撑区上沿 / 下沿；
+4h 小结构压力区上沿 / 下沿；
 当前价格距离支撑区百分比；
 当前价格距离压力区百分比；
 区间宽度百分比；
@@ -518,14 +528,26 @@ structure 的 DomainSignalValue 需要能够承载结构化 payload，例如：
 
 ```json
 {
-  "support_zone": {"lower": "58000", "upper": "60000"},
-  "resistance_zone": {"lower": "68000", "upper": "70000"},
-  "current_zone_position": "near_support",
-  "range_position_ratio": "0.18"
+  "major_structure": {
+    "timeframe": "1d",
+    "support_zone": {"lower": "58000", "upper": "60000"},
+    "resistance_zone": {"lower": "68000", "upper": "70000"},
+    "current_zone_position": "near_support",
+    "range_position_ratio": "0.18"
+  },
+  "minor_structure": {
+    "timeframe": "4h",
+    "support_zone": {"lower": "63200", "upper": "63600"},
+    "resistance_zone": {"lower": "65500", "upper": "66000"},
+    "current_zone_position": "range_middle",
+    "range_position_ratio": "0.51"
+  }
 }
 ```
 
 payload 只保存结构事实，不保存交易动作。
+
+structure 的具体第一版领域聚合规则以 `docs/requirements/domain_signals/structure_domain_signals_v1.md` 为准。
 
 ## 11. risk_state 领域
 
@@ -534,7 +556,7 @@ payload 只保存结构事实，不保存交易动作。
 risk_state 回答：
 
 ```text
-当前行情是否存在不适合交易或需要显著降权的异常风险？
+当前行情是否存在会影响信号可靠性、方向暴露或追单风险的异常市场状态？
 ```
 
 risk_state 不是账户风控。
@@ -547,10 +569,12 @@ risk_state 不重复表达波动大小本身。
 
 ```text
 volatility 说明市场波动状态；
-risk_state 说明异常行情是否让信号可靠性下降。
+risk_state 说明异常行情是否构成信号可靠性风险、方向暴露风险、追多追空风险或市场扰动风险。
 ```
 
 如果 risk_state 使用 K 线振幅、ATR 分位、影线比例等特征作为证据，输出也必须落在“风险状态”语义上，而不是再次输出“高波动”“低波动”。
+
+risk_state 不得表达“风险高所以不操作”。如果系统已经有仓位，不操作本身也可能是风险暴露；risk_state 只表达条件性市场风险。StrategySignal 只生成策略级方向、强度、置信评分和证据；具体目标仓位属于 DecisionSnapshot；订单计划和交易动作属于 OrderPlan 及后续订单链路。
 
 ### 11.2 候选 AtomicSignal 类型
 
@@ -566,6 +590,8 @@ risk_state 说明异常行情是否让信号可靠性下降。
 接近压力但追涨风险高；
 接近支撑但下跌动量未止。
 ```
+
+risk_state 的具体第一版领域聚合规则以 `docs/requirements/domain_signals/risk_state_domain_signals_v1.md` 为准。
 
 ### 11.3 候选 Feature 类型
 
@@ -658,7 +684,7 @@ trend = 偏多但推进减弱；
 momentum = 减弱；
 volatility = 宽幅震荡；
 structure = 区间有效，当前靠近支撑；
-risk_state = 无异常风险。
+risk_state = risk_clear。
 ```
 
 MarketRegime 可以据此判断：
@@ -685,13 +711,13 @@ StrategyRouting 消费 MarketRegime 的结果选择打法。
 示例：
 
 ```text
-大级别偏多 + 向上突破 → long_trend_following_breakout；
-大级别偏多 + 回调或高位区间靠近支撑 → long_bullish_pullback_range；
-大级别偏空 + 向下跌破 → short_trend_following_breakdown；
-大级别偏空 + 中级别反弹靠近压力或反弹失败 → short_bearish_rebound_rejection；
-大级别偏多 + 区间中部 → no_strategy；
-大级别偏空 + 反弹中部 → no_strategy；
-异常高波动 → no_strategy。
+大级别偏多 + 趋势延续或向上突破 → long_trend_following_v1；
+大级别偏多 + 回调或高位区间靠近支撑 → long_pullback_support_v1；
+大级别偏空 + 趋势延续或向下跌破 → short_trend_following_v1；
+大级别偏空 + 中级别反弹靠近压力或低位区间靠近压力 → short_rebound_pressure_v1；
+大级别偏多 + 区间中部 → 由 StrategyRouting 判断是否选择策略；
+大级别偏空 + 反弹中部 → 由 StrategyRouting 判断是否选择策略；
+高风险环境或不明确环境 → 由 StrategyRouting 判断是否选择策略。
 ```
 
 StrategyRouting 不得重新读取领域事实替代 MarketRegime，也不得执行策略算法。
@@ -727,16 +753,15 @@ StrategySignal 只消费路由选中策略允许使用的 DomainSignalValue。
 
 本设计服务于以下候选策略方向。
 
-### 16.1 long_trend_following_breakout
+### 16.1 long_trend_following_v1
 
 适用：
 
 ```text
 大级别偏多；
-中短期趋势明确；
-向上突破结构位；
-动量配合；
-波动不过热。
+中短期趋势明确，或向上突破结构位；
+趋势和动量配合；
+波动和 risk_state 不显示信号不可用。
 ```
 
 主要依赖领域：
@@ -753,13 +778,14 @@ risk_state
 策略判断：
 
 ```text
+趋势延续 + 大背景与动量支持 → 偏多；
 有效向上突破 + 趋势与动量支持 → 偏多；
-突破但动量不跟随 → 不交易；
-异常高波动 → 不交易或降低信号质量；
-突破失败 → 风险退出或不交易。
+突破但动量不跟随 → 信号质量偏弱；
+高风险环境 → 信号可靠性下降；
+突破失败 → 假突破风险上升。
 ```
 
-### 16.2 long_bullish_pullback_range
+### 16.2 long_pullback_support_v1
 
 适用：
 
@@ -783,23 +809,22 @@ risk_state
 策略判断：
 
 ```text
-靠近支撑 + 支撑未破 + 风险可接受 → 偏多；
-区间中部 → 不交易或不改变目标；
-靠近压力 + 未突破 → 减仓倾向；
-向上突破压力 → 可切换或路由到趋势突破策略；
-向下跌破支撑 → 风险退出。
+靠近支撑 + 支撑未破 + risk_state 为 risk_clear 或 risk_elevated_classifiable → 偏多；
+区间中部 → 方向优势不足；
+靠近压力 + 未突破 → 上方空间受限；
+向上突破压力 → 趋势突破策略输入条件可能成立；
+向下跌破支撑 → 原支撑结构失效风险上升。
 ```
 
-### 16.3 short_trend_following_breakdown
+### 16.3 short_trend_following_v1
 
 适用：
 
 ```text
 大级别偏空；
-中短期下跌趋势明确；
-向下跌破结构位；
-下跌动量配合；
-波动不过热。
+中短期下跌趋势明确，或向下跌破结构位；
+下跌趋势和动量配合；
+波动和 risk_state 不显示信号不可用。
 ```
 
 主要依赖领域：
@@ -816,13 +841,14 @@ risk_state
 策略判断：
 
 ```text
+空头趋势延续 + 大背景与动量支持 → 偏空；
 有效向下跌破 + 趋势与动量支持 → 偏空；
-跌破但动量不跟随 → 不交易；
-异常高波动 → 不交易或降低信号质量；
-跌破后快速收回 → 不交易或风险退出。
+跌破但动量不跟随 → 信号质量偏弱；
+高风险环境 → 信号可靠性下降；
+跌破后快速收回 → 假跌破风险上升。
 ```
 
-### 16.4 short_bearish_rebound_rejection
+### 16.4 short_rebound_pressure_v1
 
 适用：
 
@@ -848,10 +874,10 @@ risk_state
 策略判断：
 
 ```text
-反弹靠近压力 + 压力未破 + 风险可接受 → 偏空；
-反弹中部 → 不交易或不改变目标；
-反弹突破压力并改变下跌结构 → 不交易或退出空头打法；
-反弹失败重新转弱 → 可进入空头趋势或反弹压制打法。
+反弹靠近压力 + 压力未破 + risk_state 为 risk_clear 或 risk_elevated_classifiable → 偏空；
+反弹中部 → 方向优势不足；
+反弹突破压力并改变下跌结构 → 原空头反弹结构失效；
+低位区间靠近压力且压力仍有效 → 偏空条件可能成立。
 ```
 
 ## 17. 进入正式链路的要求
@@ -914,10 +940,10 @@ docs/requirements/domain_signals/volatility_domain_signals_v1.md
 docs/requirements/domain_signals/structure_domain_signals_v1.md
 docs/requirements/domain_signals/risk_state_domain_signals_v1.md
 docs/requirements/market_regime/context_structure_regime_v1.md
-docs/requirements/strategy_signals/long_trend_following_breakout_v1.md
-docs/requirements/strategy_signals/long_bullish_pullback_range_v1.md
-docs/requirements/strategy_signals/short_trend_following_breakdown_v1.md
-docs/requirements/strategy_signals/short_bearish_rebound_rejection_v1.md
+docs/requirements/strategy_signals/long_trend_following_v1.md
+docs/requirements/strategy_signals/long_pullback_support_v1.md
+docs/requirements/strategy_signals/short_trend_following_v1.md
+docs/requirements/strategy_signals/short_rebound_pressure_v1.md
 docs/requirements/decision_snapshot/position_policy_v1.md
 ```
 

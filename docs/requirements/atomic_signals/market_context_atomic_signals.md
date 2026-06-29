@@ -168,7 +168,7 @@ confidence = null
 
 `neutral` 表示该条件只表达位置、回撤、反弹或状态，不直接给出方向。
 
-这些方向不是交易动作，不得解释为买入、卖出、开仓、加仓、减仓或清仓。
+这些方向不是交易动作，不得解释为方向性交易处理、交易进入动作、仓位调整或仓位退出。
 
 ## 5. 证据输出要求
 
@@ -286,7 +286,7 @@ evidence_text_zh。
 | `market_context_in_365d_high_zone` | 当前是否位于最近 365 日区间高位 | neutral | `range_position_pct_1d_365` | `range_position_pct_1d_365 >= 0.75` |
 | `market_context_in_365d_low_zone` | 当前是否位于最近 365 日区间低位 | neutral | `range_position_pct_1d_365` | `range_position_pct_1d_365 <= 0.25` |
 
-高位和低位是长期位置状态，不是做多、做空、减仓或清仓建议。
+高位和低位是长期位置状态，不是方向性交易处理、仓位调整或仓位退出建议。
 
 ### 7.4 从长期高点回撤
 

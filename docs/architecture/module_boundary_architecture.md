@@ -62,8 +62,7 @@ PipelineOrchestrator
 RuntimeGuard
 Notifications
 OpsConsole
-PerformanceMetrics
-AIReview
+ReviewDataset
 ```
 
 任何模块不得因为实现方便而直接跳过上游或调用下游内部逻辑。
@@ -113,7 +112,6 @@ data_collection.md
 | 文件 | 服务对象 | 边界 |
 |---|---|---|
 | `binance_gateway.md` | 所有 Binance REST 请求 | 只提供受限接口，不拥有业务状态 |
-| `deepseek_gateway.md` | `ai_review.md` | 只提供 DeepSeek 受控请求，不生成复盘结论 |
 | `strategy_calculator.md` | 策略分析相关模块 | 只定义纯计算通用规则，不直接参与编排 |
 | `strategy_analysis_release.md` | 策略分析正式运行版本选择 | 冻结正式版本组合，不执行算法 |
 | `notifications.md` | AlertEvent 外部投递 | 不触发交易 |
@@ -123,9 +121,8 @@ data_collection.md
 
 | 文件 | 直接依赖 | 边界 |
 |---|---|---|
-| `performance_metrics.md` | 已落库交易事实、自动边界账户快照、OrchestrationRun | 后台补算，不属于自动主链路 |
 | `ops_console.md` | 后端 service、只读查询、受控操作入口 | 不直接访问数据库，不直接调用 Gateway |
-| `ai_review.md` | 已落库事实、AIReviewPackage、DeepSeekGateway | 离线复盘，不参与实时交易 |
+| `review_dataset.md` | 已落库业务事实、OrchestrationRun、业务外键 | 只生成和导出复盘数据集，不调用大模型，不属于自动主链路 |
 
 ## 4. 模块直接关系表
 
@@ -143,7 +140,7 @@ data_collection.md
 | StrategySignal / `strategy_signals.md` | StrategyRouteDecision、StrategyDefinition、允许使用的 DomainSignalValue | StrategySignalQuality | 不直接聚合原子信号，不生成目标仓位，不读取账户 |
 | StrategySignalQuality / `strategy_signal_quality.md` | StrategySignal | DecisionSnapshot | 不改变策略方向，不调整目标仓位，不生成订单参数 |
 | DecisionSnapshot / `decision_snapshot.md` | StrategySignalQualityResult、StrategySignal、DecisionPolicy | OrderPlan | 不读取账户、持仓或 BinanceSyncRun，不生成订单动作 |
-| Binance Account Sync / `binance_account_sync.md` | BinanceGateway 账户只读和公共规则接口 | OrderPlan、RiskCheck、ExecutionPreparation、PerformanceMetrics | 不提交订单，不修改杠杆，不推导策略 |
+| Binance Account Sync / `binance_account_sync.md` | BinanceGateway 账户只读和公共规则接口 | OrderPlan、RiskCheck、ExecutionPreparation、ReviewDataset | 不提交订单，不修改杠杆，不推导策略 |
 | PriceSnapshot / `price_snapshot.md` | BinanceGateway mark price 接口 | OrderPlan、RiskCheck、ExecutionPreparation | 不从账户持仓快照取价格，不代表最终成交价，不判断是否交易 |
 | OrderPlan / `order_plan.md` | DecisionSnapshot、trade_preparation BinanceSyncRun、PriceSnapshot、真实交易权限已通过 | CandidateOrderIntent、OrderPlanActiveLock | 不访问 Binance，不做最终风控，不生成 ApprovedOrderIntent，不下单 |
 | RiskCheck / `risk_check.md` | CandidateOrderIntent、OrderPlan、账户事实、PriceSnapshot、symbol rule | ApprovedOrderIntent 或阻断结果 | 不消费 DecisionSnapshot，不生成新 CandidateOrderIntent，不任意改数量，不下单 |
@@ -215,10 +212,8 @@ AlertEvent。
 修改业务对象；
 释放锁；
 调用 Binance；
-调用 DeepSeek；
 直接发送 Hermes；
-巡检 AIReview；
-巡检 PerformanceMetrics；
+巡检 ReviewDataset；
 巡检后台人工补算或普通后台页面功能。
 ```
 
@@ -258,10 +253,8 @@ NotificationSuppression；
 查看订单链路；
 查看 RuntimeGuardIssue；
 查看 AlertEvent；
-查看 PerformanceMetrics；
+创建和下载 ReviewDataset；
 操作真实交易运行开关；
-创建 AIReview 请求；
-查看 AIReview 报告；
 查看审计日志。
 ```
 
@@ -270,7 +263,7 @@ NotificationSuppression；
 ```text
 直接访问数据库；
 直接调用 BinanceGateway；
-直接调用 DeepSeekGateway；
+直接调用外部大模型；
 直接提交订单；
 直接释放 ActiveLock；
 直接写业务表；
@@ -279,68 +272,34 @@ NotificationSuppression；
 热切 active market domain。
 ```
 
-### 5.5 PerformanceMetrics
+### 5.5 ReviewDataset
 
 直接读取：
 
 ```text
 已落库业务事实；
 自动边界 trade_preparation 账户快照；
-相邻 OrchestrationRun。
+OrchestrationRun；
+业务外键关联的订单、成交、告警、巡检和审计事实。
 ```
 
 输出：
 
 ```text
-OrchestrationRunPerformance。
+ReviewDatasetRecord；
+ReviewDatasetExport。
 ```
 
 禁止：
 
 ```text
 请求 Binance；
-读取 ops_display；
+调用外部大模型；
 影响交易主流程；
 生成交易信号；
 调整策略；
 自动暂停或恢复交易；
 被 RuntimeGuard 当作主链路异常巡检对象。
-```
-
-### 5.6 AIReview
-
-直接读取：
-
-```text
-已落库业务事实；
-AIReviewRequest；
-AIReviewPackage。
-```
-
-调用：
-
-```text
-DeepSeekGateway。
-```
-
-输出：
-
-```text
-AIReviewAttempt；
-AIReviewReport；
-AIReviewFinding；
-AIReviewSuggestion。
-```
-
-禁止：
-
-```text
-参与实时交易；
-生成交易指令；
-自动修改策略；
-自动修改真实交易运行配置；
-自动下单；
-直接绕过 DeepSeekGateway。
 ```
 
 ## 6. 底层能力边界
@@ -380,27 +339,7 @@ Gateway 代替业务模块写业务 AlertEvent；
 订单提交自动重试。
 ```
 
-### 6.2 DeepSeekGateway
-
-允许调用方：
-
-```text
-AIReview。
-```
-
-禁止：
-
-```text
-OpsConsole 直接调用；
-策略链路调用；
-风控链路调用；
-订单链路调用；
-实时交易链路调用。
-```
-
-DeepSeekGateway 只返回技术调用结果，不保存业务复盘结论。
-
-### 6.3 StrategyCalculator
+### 6.2 StrategyCalculator
 
 允许调用方：
 
@@ -421,7 +360,7 @@ DecisionPolicy service；
 编排层直接调用；
 calculator 之间直接调用；
 调用 BinanceGateway；
-调用 DeepSeekGateway；
+调用外部大模型；
 调用 Celery；
 生成订单对象；
 读取账户或持仓；
@@ -511,10 +450,9 @@ OrderStatusSync → FillSync 成交生成之外的订单修改
 FillSync → Execution 订单提交
 RuntimeGuard → ActiveLock 直接释放
 OpsConsole → BinanceGateway
-OpsConsole → DeepSeekGateway
+OpsConsole → 外部大模型
 Notifications → 交易链路
-AIReview → 交易链路
-PerformanceMetrics → 交易链路
+ReviewDataset → 交易链路
 ```
 
 ## 10. 未定义关系处理规则

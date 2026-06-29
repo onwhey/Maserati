@@ -595,7 +595,27 @@ class OrderSubmissionStepAdapter(ServiceStepAdapter):
     def execute(self, context: StepContext) -> OrchestrationStepResult:
         if context.latest_object_id("PreparedOrderIntent") is None:
             return missing_input_result(context=context, module_code=self.module_code, adapter_code=self.adapter_code, adapter_version=self.adapter_version, missing_object_type="PreparedOrderIntent")
-        return super().execute(context)
+        try:
+            result = self.call_service(context)
+        except Exception as exc:  # noqa: BLE001 - 编排层必须把适配器异常收口成步骤失败事实。
+            return failed_step_result(
+                step_code=context.step_code,
+                module_code=self.module_code,
+                adapter_code=self.adapter_code,
+                adapter_version=self.adapter_version,
+                reason_code="orchestration_adapter_exception",
+                message_zh=f"编排业务衔接器执行异常：{type(exc).__name__}",
+                raw_result_summary={"error_type": type(exc).__name__},
+            )
+        return step_result_from_service_result(
+            step_code=context.step_code,
+            module_code=self.module_code,
+            adapter_code=self.adapter_code,
+            adapter_version=self.adapter_version,
+            service_result=self._map_main_run_flow(result),
+            object_mapping=self.object_mapping,
+            primary_key=self.primary_key,
+        )
 
     def call_service(self, context: StepContext) -> ServiceResult:
         from apps.execution.services.submission import submit_prepared_order
@@ -607,53 +627,28 @@ class OrderSubmissionStepAdapter(ServiceStepAdapter):
             trigger_source=context.trigger_source,
         )
 
-
-class OrderStatusSyncStepAdapter(ServiceStepAdapter):
-    adapter_code = "OrderStatusSyncStepAdapter"
-    module_code = "order_status_sync"
-    object_mapping = {"order_status_sync_record_id": "OrderStatusSyncRecord"}
-    primary_key = "order_status_sync_record_id"
-
-    def execute(self, context: StepContext) -> OrchestrationStepResult:
-        if context.latest_object_id("OrderSubmissionAttempt") is None:
-            return missing_input_result(context=context, module_code=self.module_code, adapter_code=self.adapter_code, adapter_version=self.adapter_version, missing_object_type="OrderSubmissionAttempt")
-        return super().execute(context)
-
-    def call_service(self, context: StepContext) -> ServiceResult:
-        from apps.order_status_sync.services.status_sync import poll_order_status
-
-        poll_sequence = int(context.metadata.get("poll_sequence", 1))
-        return poll_order_status(
-            order_submission_attempt_id=context.latest_object_id("OrderSubmissionAttempt") or 0,
-            business_request_key=context.business_request_key,
-            poll_sequence=poll_sequence,
-            trace_id=context.trace_id,
-            trigger_source=context.trigger_source,
-        )
-
-
-class FillSyncStepAdapter(ServiceStepAdapter):
-    adapter_code = "FillSyncStepAdapter"
-    module_code = "fill_sync"
-    object_mapping = {"fill_sync_result_id": "FillSyncResult", "order_fill_summary_id": "OrderFillSummary", "trade_fill_ids": "TradeFill"}
-    primary_key = "fill_sync_result_id"
-
-    def execute(self, context: StepContext) -> OrchestrationStepResult:
-        for object_type in ("OrderSubmissionAttempt", "OrderStatusSyncRecord"):
-            if context.latest_object_id(object_type) is None:
-                return missing_input_result(context=context, module_code=self.module_code, adapter_code=self.adapter_code, adapter_version=self.adapter_version, missing_object_type=object_type)
-        return super().execute(context)
-
-    def call_service(self, context: StepContext) -> ServiceResult:
-        from apps.fill_sync.services.sync import sync_order_fills
-
-        return sync_order_fills(
-            order_submission_attempt_id=context.latest_object_id("OrderSubmissionAttempt") or 0,
-            terminal_order_status_sync_record_id=context.latest_object_id("OrderStatusSyncRecord") or 0,
-            business_request_key=context.business_request_key,
-            trace_id=context.trace_id,
-            trigger_source=context.trigger_source,
-        )
+    @staticmethod
+    def _map_main_run_flow(result: ServiceResult) -> ServiceResult:
+        order_submission_status = str(result.data.get("order_submission_status", ""))
+        if order_submission_status in {"accepted", "unknown"}:
+            return ServiceResult(
+                result.status,
+                result.reason_code,
+                result.message,
+                result.trace_id,
+                result.trigger_source,
+                {**result.data, "flow_action": "COMPLETE"},
+            )
+        if order_submission_status == "submitting":
+            return ServiceResult(
+                result.status,
+                result.reason_code,
+                result.message,
+                result.trace_id,
+                result.trigger_source,
+                {**result.data, "flow_action": "STOP"},
+            )
+        return result
 
 
 def _quality_lookback(timeframe: str) -> int:

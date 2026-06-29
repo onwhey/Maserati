@@ -16,6 +16,7 @@ env/
 db.sqlite3
 media/
 staticfiles/
+review_exports/
 
 # Node / Next.js
 node_modules/

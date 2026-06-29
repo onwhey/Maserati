@@ -12,7 +12,7 @@ README.md
 docs/
 ```
 
-本文档集用于指导后续开发，但不表示对应代码已经实现。
+本文档集用于指导后续开发。当前仓库已经按阶段实现了部分后端、前端和业务骨架，实际实现状态以代码、测试和 `docs/implementation/` 记录为准。
 
 ## 2. 当前阶段
 
@@ -20,9 +20,9 @@ docs/
 
 ```text
 需求和架构已经确定；
-实施路线和八份阶段计划已经形成；
-正在完成最终一致性复核与查漏补缺；
-尚未依据当前文档开始分阶段编码。
+实施路线和阶段计划已经形成；
+代码按阶段持续实现和复核；
+策略分析的具体算法文档仍在逐步补齐。
 ```
 
 编码必须按照 `implementation_roadmap`、`coding_execution_plan` 和对应阶段实施计划推进。计划没有确定的业务规则、具体算法或长期架构选择，仍不得根据目录自行猜测。
@@ -50,14 +50,31 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 → RiskCheck / ApprovedOrderIntent
 → ExecutionPreparation / PreparedOrderIntent
 → Execution / OrderSubmissionAttempt
+→ 订单提交事实完成，主交易编排结束
+或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+```
+
+订单提交后的状态与成交同步属于独立订单生命周期分支，不内嵌在主交易编排尾部：
+
+```text
+OrderSubmissionAttempt
 → OrderStatusSync
 → FillSync
-或 NO_TARGET_CHANGE / NO_TRADE：正常结束，不进入 PriceSnapshot 或订单链路
+→ ActiveLock 安全收尾判断
+```
+
+LIMIT 订单到期仍未终态时，走独立周期收尾分支：
+
+```text
+OrderCycleCloseout / OrderCancelAttempt
+→ OrderStatusSync
+→ FillSync
+→ ActiveLock 安全收尾判断
 ```
 
 `PipelineOrchestrator` 负责按照业务顺序推进流程，但不替代业务模块做判断。
 
-`RuntimeGuard`、`PerformanceMetrics`、`OpsConsole` 和 `AIReview` 是运行巡检、后台与复盘能力，不是实时策略决策模块。
+`RuntimeGuard`、`ReviewDataset` 和 `OpsConsole` 是运行巡检、后台与复盘数据能力，不是实时策略决策模块。
 
 ## 4. 当前业务范围摘要
 
@@ -71,7 +88,7 @@ Binance Account Sync（自动四小时账户边界，编排起始步骤）
 正式主链路只运行一个冻结且正式批准的 StrategyAnalysisRelease；
 DecisionSnapshot 只表达目标仓位，不生成订单动作；
 真实订单只能由 Execution 提交；
-大模型只用于离线复盘，不参与实时交易判断。
+项目内不调用大模型；离线复盘可由项目外 Codex skill 或人工工具读取 ReviewDataset 导出数据完成，不参与实时交易判断。
 ```
 
 完整范围以 [`project_scope.md`](./docs/requirements/project_scope.md) 为准。

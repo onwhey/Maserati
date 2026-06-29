@@ -6,7 +6,7 @@ import { SimpleTable } from "@/components/ops/simple-table";
 import { StatusBadge } from "@/components/ops/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { opsFetch } from "@/lib/api/client";
-import { asRecord, asRows, nestedRecord, nestedRows } from "@/lib/ops-data";
+import { asRecord, nestedRecord, nestedRows } from "@/lib/ops-data";
 import { formatUtc } from "@/lib/utils";
 
 type PageProps = {

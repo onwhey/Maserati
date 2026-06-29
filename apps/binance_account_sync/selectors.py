@@ -68,7 +68,7 @@ def load_trade_preparation_context(
     trace_id: str,
     trigger_source: str,
 ) -> ServiceResult:
-    """加载 OrderPlan/PerformanceMetrics 可消费的自动交易账户边界。"""
+    """加载 OrderPlan/ReviewDataset 可消费的自动交易账户边界。"""
 
     try:
         sync_run = get_sync_run(sync_run_id)

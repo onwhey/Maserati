@@ -50,6 +50,7 @@ class FakeStrategySignalCalculator:
         failure_code: str = "test_strategy_calculation_failed",
         failure_message: str = "测试策略计算失败",
         evidence_text_zh: str = "测试策略基于已允许的领域事实形成标准化判断。",
+        trade_price_condition: dict[str, Any] | None = None,
     ) -> None:
         self.direction = direction
         self.failed = failed
@@ -58,6 +59,7 @@ class FakeStrategySignalCalculator:
         self.failure_code = failure_code
         self.failure_message = failure_message
         self.evidence_text_zh = evidence_text_zh
+        self.trade_price_condition = trade_price_condition
         self.calls = 0
         self.last_input: CalculatorInput | None = None
 
@@ -82,29 +84,32 @@ class FakeStrategySignalCalculator:
             for value in domain_values
         ]
         weights: dict[str, str] = {"trend": "1"} if self.invalid_weights else {}
+        output_values: dict[str, Any] = {
+            "direction": self.direction,
+            "strength": "0.7",
+            "confidence": "0.6",
+            "confidence_semantics": "strategy_score",
+            "prediction_horizon": "4h",
+            "used_domain_signal_value_refs": refs,
+            "actual_input_weights": weights,
+            "aggregation_snapshot": {
+                "input_domain_codes": [value["domain_code"] for value in domain_values],
+                "final_direction": self.direction,
+                "final_strength": "0.7",
+                "final_confidence": "0.6",
+            },
+            "conflict_snapshot": {
+                "has_conflict": self.direction == StrategySignalDirection.NEUTRAL,
+                "conflicting_domain_codes": [],
+                "effect": "none",
+            },
+            "evidence_text_zh": self.evidence_text_zh,
+        }
+        if self.trade_price_condition is not None:
+            output_values["trade_price_condition"] = self.trade_price_condition
         return CalculatorOutput.succeeded(
             output_schema_version="1.0",
-            values={
-                "direction": self.direction,
-                "strength": "0.7",
-                "confidence": "0.6",
-                "confidence_semantics": "strategy_score",
-                "prediction_horizon": "4h",
-                "used_domain_signal_value_refs": refs,
-                "actual_input_weights": weights,
-                "aggregation_snapshot": {
-                    "input_domain_codes": [value["domain_code"] for value in domain_values],
-                    "final_direction": self.direction,
-                    "final_strength": "0.7",
-                    "final_confidence": "0.6",
-                },
-                "conflict_snapshot": {
-                    "has_conflict": self.direction == StrategySignalDirection.NEUTRAL,
-                    "conflicting_domain_codes": [],
-                    "effect": "none",
-                },
-                "evidence_text_zh": self.evidence_text_zh,
-            },
+            values=output_values,
             evidence_items=(
                 {
                     "type": "test_strategy_evidence",
@@ -169,6 +174,7 @@ def test_strategy_signal_executes_only_selected_strategy_and_persists_standard_o
     assert str(signal.confidence) == "0.600000000000000000"
     assert signal.confidence_semantics == "strategy_score"
     assert signal.prediction_horizon == "4h"
+    assert signal.trade_price_condition == {}
     assert signal.status == AnalysisObjectStatus.CREATED
     assert signal.is_usable is True
     assert signal.allows_strategy_signal_quality is True
@@ -410,6 +416,42 @@ def test_hidden_weights_are_rejected_when_definition_disables_weights() -> None:
     assert result.status == "failed"
     assert signal.error_code == "strategy_signal_output_invalid"
     assert signal.actual_input_weights == {}
+
+
+@pytest.mark.django_db
+def test_strategy_signal_persists_standard_trade_price_condition() -> None:
+    condition = {
+        "condition_type": "near_support_only",
+        "reference_price_zone": "支撑区附近",
+        "acceptable_price_zone": {"lower": "49000", "upper": "50000"},
+        "support_or_resistance_refs": ["structure.support.primary"],
+        "allow_chasing": False,
+        "reason_code": "long_pullback_support_entry",
+        "reason_summary_zh": "只在支撑区附近考虑执行。",
+    }
+    fixture = selected_fixture()
+    registry, _calculator = signal_registry(FakeStrategySignalCalculator(trade_price_condition=condition))
+
+    result = run_signal(fixture, registry=registry)
+
+    signal = StrategySignal.objects.get()
+    assert result.status == "succeeded"
+    assert signal.trade_price_condition == condition
+
+
+@pytest.mark.django_db
+def test_invalid_trade_price_condition_is_failed_signal() -> None:
+    fixture = selected_fixture()
+    registry, _calculator = signal_registry(
+        FakeStrategySignalCalculator(trade_price_condition={"condition_type": "near_support_only"})
+    )
+
+    result = run_signal(fixture, registry=registry)
+
+    signal = StrategySignal.objects.get()
+    assert result.status == "failed"
+    assert signal.error_code == "strategy_signal_output_invalid"
+    assert signal.trade_price_condition == {}
 
 
 @pytest.mark.django_db

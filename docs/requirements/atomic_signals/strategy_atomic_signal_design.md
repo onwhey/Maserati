@@ -324,6 +324,15 @@ structure 用于判断价格在支撑压力和区间结构中的位置。
 
 structure 原子信号只表达结构事实，不表达交易动作。
 
+structure 原子信号必须区分：
+
+```text
+major_structure = 1d 大结构；
+minor_structure = 4h 小结构。
+```
+
+同一轮中，4h 小结构可以显示更精细的位置变化，但不得在原子层推翻 1d 大结构，也不得把两套结构强行合并成一个判断。
+
 ### 9.2 P0 候选原子信号
 
 | 原子信号业务类型 | 业务含义 | 候选方向 / 状态 | 需要的 Feature 类型 |
@@ -362,9 +371,9 @@ structure 原子信号只表达结构事实，不表达交易动作。
 结构类原子信号不得输出：
 
 ```text
-做多；
-减仓；
-清仓；
+方向性交易处理；
+仓位调整处理；
+仓位退出处理；
 止损；
 止盈；
 目标仓位；
@@ -379,6 +388,8 @@ structure 原子信号只表达结构事实，不表达交易动作。
 靠近支撑区所以目标仓位 30% = DecisionSnapshot 之后的目标仓位语义。
 ```
 
+structure 的具体 P0 原子信号清单以 `docs/requirements/atomic_signals/structure_atomic_signals.md` 为准。
+
 ## 10. risk_state 原子信号
 
 ### 10.1 领域问题
@@ -388,7 +399,7 @@ risk_state 用于判断市场状态风险。
 它回答：
 
 ```text
-当前行情是否存在不适合交易或需要降低信号可信度的异常状态。
+当前行情是否存在会影响信号可靠性、方向暴露或追单风险的异常状态。
 ```
 
 risk_state 不是账户风控，也不是订单风控。
@@ -399,20 +410,24 @@ risk_state 不重复表达波动大小本身。
 
 ```text
 volatility 说明市场波动状态；
-risk_state 说明异常行情是否让信号可靠性下降。
+risk_state 说明异常行情是否构成信号可靠性风险、方向暴露风险、追多追空风险或市场扰动风险。
 ```
+
+risk_state 不得输出“风险高所以不操作”。如果系统已经有仓位，不操作本身也可能是风险暴露；AtomicSignal 只能输出条件性市场风险事实，不能读取账户判断真实持仓。
 
 ### 10.2 P0 候选原子信号
 
 | 原子信号业务类型 | 业务含义 | 候选方向 / 状态 | 需要的 Feature 类型 |
 |---|---|---|---|
-| 连续大阴线风险 | 市场短期急跌，做多风险升高 | bearish / state | 连续下跌、振幅、实体比例 |
-| 连续大阳线追高风险 | 市场短期急涨，追多风险升高 | state | 连续上涨、振幅、实体比例 |
+| 连续大阴线风险 | 市场短期急跌，多头方向风险升高 | bearish / state | 连续下跌、振幅、实体比例 |
+| 连续大阳线追高风险 | 市场短期急涨，上行追价风险升高 | state | 连续上涨、振幅、实体比例 |
 | 异常波动环境下信号可靠性下降 | 异常波动下突破或跌破信号更容易失真 | state | ATR 分位、单根振幅、突破 / 跌破幅度 |
 | 突破后快速失败 | 突破信号被快速否定 | state | 突破后回落幅度、收盘位置 |
 | 结构跌破后尚未稳定 | 跌破支撑后尚未形成新稳定结构 | state | 跌破幅度、反抽失败、波动 |
 | 接近支撑但下跌动量未止 | 支撑附近仍存在急跌风险 | state | 支撑距离、短周期收益率变化、连续下跌 |
 | 接近压力但追涨风险高 | 压力附近继续追涨风险高 | state | 压力距离、振幅、动量过热 |
+
+risk_state 的具体 P0 原子信号清单以 `docs/requirements/atomic_signals/risk_state_atomic_signals.md` 为准。
 
 ### 10.3 P1 / P2 研究原子信号
 
@@ -432,14 +447,14 @@ risk_state 说明异常行情是否让信号可靠性下降。
 ### 11.1 策略动作
 
 ```text
-支撑做多；
-压力减仓；
-跌破清仓；
-突破加仓；
-反手做空；
+支撑位置下的交易处理；
+压力位置下的仓位处理；
+跌破结构后的仓位处理；
+突破结构后的仓位处理；
+方向反转后的交易处理；
 止盈；
 止损；
-开仓；
+交易进入动作；
 平仓。
 ```
 
@@ -463,7 +478,7 @@ AtomicSignal 不输出目标仓位。
 ```text
 大级别偏多下的高位区间震荡；
 上涨趋势中的宽幅震荡；
-趋势破坏后观望；
+趋势破坏后的交易处理；
 震荡偏空；
 牛市回调。
 ```
@@ -546,10 +561,10 @@ AtomicSignal 只能提供形成这些判断的最小证据。
 建议第一版至少支持两类策略研究：
 
 ```text
-long_trend_following_breakout；
-long_bullish_pullback_range；
-short_trend_following_breakdown；
-short_bearish_rebound_rejection。
+long_trend_following_v1；
+long_pullback_support_v1；
+short_trend_following_v1；
+short_rebound_pressure_v1。
 ```
 
 对应原子信号应优先支撑：
@@ -625,7 +640,7 @@ docs/requirements/atomic_signals/risk_state_atomic_signals.md
 禁止：
 
 ```text
-把支撑做多、压力减仓、跌破清仓写成 AtomicSignal；
+把支撑、压力或跌破结构下的交易处理写成 AtomicSignal；
 让 AtomicSignal 自动推导或创建 Feature；
 让 AtomicSignal 读取 Kline；
 让 AtomicSignal 读取其他 AtomicSignal；
