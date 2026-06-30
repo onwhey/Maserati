@@ -24,6 +24,21 @@ from apps.review_dataset.services import (
     preview_review_dataset,
 )
 from apps.runtime_guard.services.guard import update_runtime_guard_issue_status
+from apps.strategy_analysis.services.release import (
+    activate_release,
+    approve_release,
+    copy_release_to_draft,
+    create_draft_release,
+    create_validation_evidence,
+    freeze_release_for_validation,
+    invalidate_release,
+    prevalidate_release,
+    reject_release,
+    remove_release_item,
+    rollback_to_release,
+    update_draft_release_metadata,
+    upsert_release_item,
+)
 
 from .permissions import has_ops_permission, require_ops_permission
 from .responses import error_response, ok_response
@@ -43,7 +58,11 @@ from .selectors import (
     list_review_dataset_records,
     list_runtime_guard_issues,
     list_runs,
+    list_strategy_release_components,
+    list_strategy_releases,
     real_trading_status,
+    get_current_strategy_release,
+    get_strategy_release_detail,
 )
 
 
@@ -181,6 +200,10 @@ def _int_body_value(body: dict[str, Any], name: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _trace_id(body: dict[str, Any], request: HttpRequest, operation: str) -> str:
+    return str(body.get("trace_id", "")).strip() or f"ops-{operation}-{request.user.id}"
 
 
 @require_ops_permission("view_ops_console")
@@ -369,6 +392,315 @@ def real_trading_view(_request: HttpRequest) -> JsonResponse:
 @require_ops_permission("view_ops_console")
 def audit_log_view(request: HttpRequest) -> JsonResponse:
     return _handle_selector(list_audit_log, request.GET)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_releases_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_strategy_releases, request.GET)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_release_current_view(_request: HttpRequest) -> JsonResponse:
+    return _handle_selector(get_current_strategy_release)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_release_detail_view(_request: HttpRequest, release_id: int) -> JsonResponse:
+    return _handle_selector(get_strategy_release_detail, release_id)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_release_components_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_strategy_release_components, request.GET)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_create_draft_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="创建策略版本包草稿会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="创建策略版本包草稿需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = create_draft_release(
+        release_code=str(body.get("release_code", "")).strip(),
+        display_name=str(body.get("display_name", "")).strip(),
+        description=str(body.get("description", "")).strip(),
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-create-draft"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_copy_draft_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="复制策略版本包会写入新草稿，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="复制策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = copy_release_to_draft(
+        source_release_id=release_id,
+        release_code=str(body.get("release_code", "")).strip(),
+        display_name=str(body.get("display_name", "")).strip(),
+        description=str(body.get("description", "")).strip(),
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-copy-draft"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_update_draft_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="更新策略版本包草稿会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="更新策略版本包草稿需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = update_draft_release_metadata(
+        release_id=release_id,
+        display_name=str(body.get("display_name", "")).strip(),
+        description=str(body.get("description", "")).strip(),
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-update-draft"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_item_upsert_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="写入策略版本包组件会修改草稿，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="写入策略版本包组件需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    component_object_id = _int_body_value(body, "component_object_id")
+    if component_object_id is None:
+        return error_response(
+            reason_code="component_object_id_required",
+            message_zh="必须选择明确的组件对象 ID。",
+            status=400,
+        )
+    result = upsert_release_item(
+        release_id=release_id,
+        component_type=str(body.get("component_type", "")).strip(),
+        component_object_id=component_object_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-item-upsert"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_item_remove_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="移除策略版本包组件会修改草稿，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="移除策略版本包组件需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    item_id = _int_body_value(body, "item_id")
+    if item_id is None:
+        return error_response(reason_code="release_item_id_required", message_zh="必须指定明确的 ReleaseItem ID。", status=400)
+    result = remove_release_item(
+        release_id=release_id,
+        item_id=item_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-item-remove"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("view_strategy_release", methods=("POST",))
+def strategy_release_prevalidate_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    result = prevalidate_release(
+        release_id=release_id,
+        trace_id=_trace_id(body, request, "strategy-release-prevalidate"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_freeze_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="冻结后版本包组件不可原地修改，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="冻结策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = freeze_release_for_validation(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-freeze"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_validation_evidence_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="登记验证证据会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="登记验证证据需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = create_validation_evidence(
+        release_id=release_id,
+        evidence_type=str(body.get("evidence_type", "")).strip(),
+        evidence_ref=str(body.get("evidence_ref", "")).strip(),
+        summary=str(body.get("summary", "")).strip(),
+        created_by=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-evidence"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("approve_strategy_release", methods=("POST",))
+def strategy_release_approve_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="批准策略版本包会允许后续启用，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="批准策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = approve_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-approve"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("approve_strategy_release", methods=("POST",))
+def strategy_release_reject_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="拒绝策略版本包会结束本次验证流程，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="拒绝策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = reject_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-reject"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("approve_strategy_release", methods=("POST",))
+def strategy_release_invalidate_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="失效策略版本包会阻止后续继续使用，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="失效策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = invalidate_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-invalidate"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("activate_strategy_release", methods=("POST",))
+def strategy_release_activate_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="启用策略版本包会影响后续新编排，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="启用策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = activate_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-activate"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("activate_strategy_release", methods=("POST",))
+def strategy_release_rollback_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="回滚策略版本包会影响后续新编排，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="回滚策略版本包需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = rollback_to_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-release-rollback"),
+        trigger_source="ops_console_strategy_release",
+    )
+    return _service_response(result)
 
 
 @require_ops_permission("view_ops_console")

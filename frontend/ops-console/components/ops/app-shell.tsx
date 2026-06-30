@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Database,
   FileText,
+  GitBranch,
   History,
   ListChecks,
   LogOut,
@@ -19,16 +20,17 @@ import {
 import { cn } from "@/lib/utils";
 
 const navigation = [
-  { href: "/", label: "Dashboard", icon: Activity },
-  { href: "/runs", label: "Runs", icon: ListChecks },
-  { href: "/orders", label: "Orders", icon: ClipboardList },
-  { href: "/account", label: "Account", icon: Database },
-  { href: "/review-datasets", label: "Review Dataset", icon: Database },
-  { href: "/runtime-guard", label: "Runtime Guard", icon: AlertTriangle },
-  { href: "/alerts", label: "Alerts", icon: FileText },
-  { href: "/real-trading", label: "Real Trading", icon: ShieldCheck },
-  { href: "/ops-actions", label: "Ops Actions", icon: Wrench },
-  { href: "/audit-log", label: "Audit Log", icon: History }
+  { href: "/", label: "仪表盘", icon: Activity },
+  { href: "/runs", label: "编排运行", icon: ListChecks },
+  { href: "/orders", label: "订单", icon: ClipboardList },
+  { href: "/account", label: "账户", icon: Database },
+  { href: "/strategy-releases", label: "策略发布", icon: GitBranch },
+  { href: "/review-datasets", label: "复盘数据集", icon: Database },
+  { href: "/runtime-guard", label: "运行巡检", icon: AlertTriangle },
+  { href: "/alerts", label: "告警", icon: FileText },
+  { href: "/real-trading", label: "真实交易", icon: ShieldCheck },
+  { href: "/ops-actions", label: "运维操作", icon: Wrench },
+  { href: "/audit-log", label: "审计日志", icon: History }
 ];
 
 export function AppShell({
@@ -49,7 +51,7 @@ export function AppShell({
       <aside className="fixed inset-y-0 left-0 hidden w-64 flex-col border-r bg-card/80 p-4 backdrop-blur lg:flex">
         <div className="mb-6 rounded-xl border bg-muted/60 p-4 text-foreground">
           <div className="text-lg font-semibold">OpsConsole</div>
-          <div className="mt-1 text-xs text-muted-foreground">只读事实后台 · UTC</div>
+          <div className="mt-1 text-xs text-muted-foreground">受控运维后台 · UTC</div>
         </div>
         <nav className="space-y-1">
           {navigation.map((item) => {
@@ -76,7 +78,7 @@ export function AppShell({
             className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <LogOut className="h-4 w-4" />
-            Logout
+            退出登录
           </button>
         </form>
       </aside>
@@ -90,7 +92,7 @@ export function AppShell({
                 className="inline-flex items-center gap-2 rounded-md border px-3 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               >
                 <LogOut className="h-4 w-4" />
-                Logout
+                退出登录
               </button>
             </form>
           </div>

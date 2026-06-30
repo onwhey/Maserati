@@ -65,6 +65,7 @@ OrchestrationRun 列表页；
 OrchestrationRun 详情页；
 Order 订单详情页；
 Account Overview 账户总览页；
+Strategy Release 策略版本包管理页；
 Review Dataset 复盘数据导出页；
 RuntimeGuardIssue 巡检问题页；
 AlertEvent 告警记录页；
@@ -77,6 +78,7 @@ Ops Actions 受控人工操作入口。
 ```text
 复杂策略注册表管理；
 特征、原子信号、策略定义的后台编辑器；
+在线编辑算法公式；
 任意流程编排器；
 复杂报表系统；
 自动策略优化；
@@ -90,6 +92,8 @@ Ops Actions 受控人工操作入口。
 
 策略、特征、原子信号等定义管理可以作为后续后台扩展能力单独设计。
 
+Strategy Release 策略版本包管理页只允许选择已经登记入库的定义和版本，组装、冻结、批准和启用完整版本包；它不是算法定义编辑器。
+
 ## 4. 负责事项
 
 OpsConsole 负责：
@@ -99,6 +103,12 @@ OpsConsole 负责：
 展示自动编排列表和详情；
 展示交易链路对象；
 展示账户总览；
+展示策略分析版本包；
+组装 StrategyAnalysisRelease draft；
+执行 StrategyAnalysisRelease 依赖闭包预校验；
+冻结 StrategyAnalysisRelease；
+登记 StrategyAnalysisRelease 验证证据；
+批准、拒绝、失效和启用 StrategyAnalysisRelease；
 展示复盘数据导出入口与导出历史；
 展示订单、状态和成交详情；
 展示 RuntimeGuardIssue；
@@ -119,6 +129,9 @@ OpsConsole 不负责：
 
 ```text
 采集行情；
+编辑算法代码；
+在线修改 calculator；
+在线创建特征、原子、领域、市场环境、路由、策略或目标仓位算法定义；
 生成特征、原子信号或策略信号；
 生成 DecisionSnapshot；
 生成 BinanceSyncRun 的 trade_preparation 批次；
@@ -190,6 +203,7 @@ Dashboard
 Runs
 Orders
 Account Overview
+Strategy Release
 Review Dataset
 Runtime Guard
 Alerts
@@ -753,7 +767,118 @@ signature；
 
 ReviewDataset 只提供事实数据。复盘结论由本地人工、脚本或 Codex skill 离线生成，不得自动影响实时策略、风控或执行。
 
-## 18. Ops Actions 受控人工入口
+## 18. Strategy Release 策略版本包管理
+
+Strategy Release 页面用于管理正式策略分析版本包。
+
+本页面只管理 StrategyAnalysisRelease 及其组件选择、验证、批准和启用流程，不编辑算法定义本身。
+
+页面至少支持：
+
+```text
+查看版本包列表；
+查看当前已启用版本包；
+查看版本包详情；
+查看版本包 ReleaseItem 清单；
+创建 draft 版本包；
+从历史版本包复制生成新的 draft；
+编辑 draft 的展示名称和说明；
+向 draft 加入可选组件；
+从 draft 移除组件；
+替换 draft 中的组件版本；
+执行依赖闭包预校验；
+冻结 draft 并进入 validating；
+登记验证证据；
+批准 validating 版本包；
+拒绝 validating 版本包；
+失效 approved 或 active 版本包；
+启用 approved 版本包；
+回滚到历史 approved 且未失效的版本包；
+查看版本包相关 AlertEvent 与 AuditRecord。
+```
+
+页面必须展示可选组件库：
+
+```text
+FeatureDefinition；
+AtomicSignalDefinition；
+DomainSignalDefinition；
+MarketRegimeDefinition；
+StrategyRoutePolicy；
+StrategyRouteRule；
+StrategyDefinition；
+StrategySignalQualityRuleSet；
+DecisionPolicyDefinition。
+```
+
+可选组件展示规则：
+
+```text
+只展示可被正式版本包选择的组件；
+展示组件代码、版本、算法名称、算法版本、定义指纹、参数指纹和依赖摘要；
+展示组件是否 enabled、是否 active、calculator 是否可解析；
+不可用组件不得默认进入可选列表；
+如提供“显示不可用组件”筛选，必须清楚标记不可用原因，且不可加入正式版本包。
+```
+
+draft 编辑规则：
+
+```text
+只有 draft 可以增删或替换 ReleaseItem；
+validating、approved、active、invalidated 均不得原地修改 ReleaseItem；
+修改历史版本包必须先复制为新 draft；
+复制历史版本包后，新 draft 必须重新冻结、验证、批准和启用；
+页面不得提供直接修改 release_hash 的入口。
+```
+
+依赖闭包预校验至少展示：
+
+```text
+缺失的上游组件；
+重复归属的原子信号；
+缺失的六个正式领域；
+MarketRegime 需要但未选择的领域；
+RouteRule 指向但未选择的 StrategyDefinition；
+StrategyDefinition 需要但未选择的领域；
+缺失的唯一 StrategySignalQualityRuleSet；
+缺失的唯一 DecisionPolicyDefinition；
+calculator 不可解析的组件；
+指纹与真实定义不一致的组件。
+```
+
+冻结、批准和启用规则：
+
+```text
+冻结必须二次确认；
+冻结后计算 release_hash；
+验证证据必须绑定 release_hash；
+批准必须引用验证证据；
+批准不会自动启用；
+启用必须二次确认；
+启用只影响新开始的编排；
+回滚只能整包回滚，不允许局部回滚；
+失效 active 版本包后不得自动切换到其他版本包。
+```
+
+页面禁止：
+
+```text
+编辑算法代码；
+编辑 calculator；
+绕过 StrategyAnalysisRelease service；
+把回测成功自动变成批准；
+把批准自动变成启用；
+绕过验证证据；
+绕过二次确认；
+绕过权限；
+直接写 Release、ReleaseItem、Approval、Activation 或 ValidationEvidence 表；
+通过 management command 替代后台组装流程；
+让未批准版本包进入正式主链路。
+```
+
+Strategy Release 页面不属于实时交易执行入口。它决定后续新编排使用哪套策略分析定义，但不生成 FeatureSet、AtomicSignalSet、DomainSignalSet、StrategySignal、DecisionSnapshot、OrderPlan 或订单。
+
+## 19. Ops Actions 受控人工入口
 
 Ops Actions 页面集中展示允许的人工操作。
 
@@ -790,7 +915,7 @@ Ops Actions 不得提供：
 直接改 BinanceSyncRun 的 sync_purpose。
 ```
 
-## 19. 订单状态受控补查入口
+## 20. 订单状态受控补查入口
 
 订单状态补查必须调用 OrderStatusSync 的受控恢复或对账入口。
 
@@ -821,7 +946,7 @@ Ops Actions 不得提供：
 
 订单提交在任何后台入口都不得重试。
 
-## 20. 成交受控补同步入口
+## 21. 成交受控补同步入口
 
 成交补同步必须调用 FillSync 的受控恢复或人工对账入口。
 
@@ -849,7 +974,7 @@ Ops Actions 不得提供：
 
 ActiveLock 是否可以收尾，必须由 ActiveLockService 根据正式事实判断。
 
-## 21. ActiveLock 人工收尾入口
+## 22. ActiveLock 人工收尾入口
 
 ActiveLock 人工收尾必须调用 OrderPlan 所属的 ActiveLockService。
 
@@ -885,7 +1010,7 @@ locked_by_order_submission_attempt_id；
 
 页面不得直接把锁状态写成 released、failed 或其他状态。
 
-## 22. 危险操作二次确认
+## 23. 危险操作二次确认
 
 以下操作必须二次确认：
 
@@ -897,6 +1022,12 @@ ActiveLock 人工收尾；
 RuntimeGuardIssue ignore；
 ReviewDataset 导出；
 ReviewDataset 大范围导出请求。
+StrategyAnalysisRelease 冻结；
+StrategyAnalysisRelease 批准；
+StrategyAnalysisRelease 拒绝；
+StrategyAnalysisRelease 失效；
+StrategyAnalysisRelease 启用；
+StrategyAnalysisRelease 回滚。
 ```
 
 二次确认必须明确显示：
@@ -916,7 +1047,7 @@ ReviewDataset 大范围导出请求。
 
 用户确认只代表授权后端 service 执行对应受控操作，不代表允许绕过业务规则。
 
-## 23. 操作审计
+## 24. 操作审计
 
 所有人工操作必须写审计记录。
 
@@ -941,7 +1072,7 @@ created_at_utc。
 
 审计记录不得包含密钥、签名、认证 header 或完整未脱敏外部响应。
 
-## 24. 登录与权限
+## 25. 登录与权限
 
 OpsConsole 不允许匿名访问。
 
@@ -951,6 +1082,10 @@ OpsConsole 不允许匿名访问。
 readonly；
 ops_operator；
 review_exporter；
+strategy_release_viewer；
+strategy_release_editor；
+strategy_release_approver；
+strategy_release_activator；
 admin。
 ```
 
@@ -960,15 +1095,21 @@ admin。
 readonly 只能查看；
 ops_operator 可以执行受控运维操作；
 review_exporter 可以创建和查看离线复盘数据导出请求、下载复盘数据包；
+strategy_release_viewer 可以查看策略版本包和验证证据；
+strategy_release_editor 可以创建和编辑 draft 版本包；
+strategy_release_approver 可以批准、拒绝或失效版本包；
+strategy_release_activator 可以启用、停用或回滚版本包；
 admin 可以管理用户和权限；
 查看权限不自动包含操作权限；
 复盘权限不自动包含订单补查权限；
 运维操作权限不自动包含用户管理权限。
+策略版本包编辑权限不自动包含批准权限；
+策略版本包批准权限不自动包含启用权限。
 ```
 
 所有后端 API 都必须执行权限校验，不能只依赖前端隐藏按钮。
 
-## 25. API 安全
+## 26. API 安全
 
 OpsConsole API 不得返回：
 
@@ -1000,7 +1141,7 @@ trace_id；
 
 API 不得允许前端传入任意模型名、表名或 SQL 条件进行通用查询。
 
-## 26. 与 PipelineOrchestrator 的关系
+## 27. 与 PipelineOrchestrator 的关系
 
 OpsConsole 展示编排事实，但不拥有编排事实。
 
@@ -1029,7 +1170,7 @@ OpsConsole 展示编排事实，但不拥有编排事实。
 
 受控编排恢复如需要开放给后台，必须由 PipelineOrchestrator 提供专门 service，并记录操作人、原因、证据和 trace_id。
 
-## 27. 与 Binance Account Sync 的关系
+## 28. 与 Binance Account Sync 的关系
 
 OpsConsole 账户展示只调用 `ops_display` 入口。
 
@@ -1046,7 +1187,7 @@ Account Overview 只展示 ops_display 批次；
 
 OpsConsole 不直接调用 Binance Gateway。
 
-## 28. 与订单状态和成交同步的关系
+## 29. 与订单状态和成交同步的关系
 
 OpsConsole 可以触发受控补查和受控补同步，但只能调用对应模块 service。
 
@@ -1061,7 +1202,7 @@ OpsConsole 只负责展示、确认、授权和审计；
 任何路径都不得重试订单提交。
 ```
 
-## 29. 与 ReviewDataset 的关系
+## 30. 与 ReviewDataset 的关系
 
 OpsConsole 使用 ReviewDataset service 导出复盘数据。
 
@@ -1084,7 +1225,7 @@ ReviewDataset 相关规则：
 不自动暂停或开启真实交易。
 ```
 
-## 30. 与 RuntimeGuard 的关系
+## 31. 与 RuntimeGuard 的关系
 
 OpsConsole 展示 RuntimeGuardIssue，并提供 issue 状态管理入口。
 
@@ -1103,7 +1244,7 @@ OpsConsole 不替 RuntimeGuard 创建问题。
 
 OpsConsole 不借 RuntimeGuard 页面修复业务事实。
 
-## 31. 数据库、Redis 与外部服务
+## 32. 数据库、Redis 与外部服务
 
 ```text
 读 MySQL：通过后端 service/API 读取。
@@ -1117,7 +1258,7 @@ OpsConsole 不借 RuntimeGuard 页面修复业务事实。
 允许真实交易：否。
 ```
 
-## 32. 时间展示
+## 33. 时间展示
 
 所有业务时间默认展示 UTC，并明确标注 UTC。
 
@@ -1134,7 +1275,7 @@ run 查询；
 
 如果界面提供本地时间辅助展示，必须只作为人类阅读辅助，不得参与业务筛选的实际边界计算。
 
-## 33. 异常处理
+## 34. 异常处理
 
 页面异常处理规则：
 
@@ -1151,7 +1292,7 @@ run 查询；
 
 OpsConsole 不得因为页面展示失败而变更业务状态。
 
-## 34. 测试要求
+## 35. 测试要求
 
 至少覆盖：
 
@@ -1187,7 +1328,7 @@ OpsConsole 不得因为页面展示失败而变更业务状态。
 29. 所有业务时间以 UTC 查询和展示。
 ```
 
-## 35. 验收标准
+## 36. 验收标准
 
 满足以下条件才算通过：
 
@@ -1213,7 +1354,7 @@ OpsConsole 不调用大模型；
 敏感信息不会通过 API、页面、导出或审计泄露。
 ```
 
-## 36. 最终结论
+## 37. 最终结论
 
 OpsConsole 的最终定位是：
 

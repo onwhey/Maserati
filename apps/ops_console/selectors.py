@@ -39,6 +39,24 @@ from apps.review_dataset.selectors import (
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueStatus
+from apps.strategy_analysis.models import (
+    AtomicSignalDefinition,
+    DecisionPolicyDefinition,
+    DefinitionLifecycleStatus,
+    DomainSignalDefinition,
+    FeatureDefinition,
+    MarketRegimeDefinition,
+    ReleaseItemComponentType,
+    StrategyAnalysisRelease,
+    StrategyAnalysisReleaseActivation,
+    StrategyAnalysisReleaseApproval,
+    StrategyAnalysisReleaseItem,
+    StrategyAnalysisReleaseValidationEvidence,
+    StrategyDefinition,
+    StrategyRoutePolicy,
+    StrategyRouteRule,
+    StrategySignalQualityRuleSet,
+)
 
 
 DEFAULT_LIMIT = 20
@@ -666,3 +684,160 @@ def list_audit_log(params: Mapping[str, Any]) -> dict[str, Any]:
         "pagination": pagination,
     }
 
+
+def _release_row(release: StrategyAnalysisRelease | None) -> dict[str, Any] | None:
+    return _model_summary(
+        release,
+        (
+            "id",
+            "release_code",
+            "display_name",
+            "description",
+            "release_hash",
+            "approval_status",
+            "is_active",
+            "active_slot",
+            "validation_evidence_count",
+            "created_by",
+            "approved_by",
+            "activated_by",
+            "approved_at_utc",
+            "activated_at_utc",
+            "deactivated_at_utc",
+            "created_at_utc",
+            "updated_at_utc",
+        ),
+    )
+
+
+def _release_item_row(item: StrategyAnalysisReleaseItem) -> dict[str, Any]:
+    return _model_summary(
+        item,
+        (
+            "id",
+            "component_type",
+            "component_object_id",
+            "component_code",
+            "definition_hash",
+            "algorithm_name",
+            "algorithm_version",
+            "params_hash",
+            "dependency_hash",
+            "expected_definition_set_hash",
+            "sort_order",
+            "payload_summary",
+            "created_at_utc",
+        ),
+    ) or {}
+
+
+def list_strategy_releases(params: Mapping[str, Any]) -> dict[str, Any]:
+    queryset = StrategyAnalysisRelease.objects.order_by("-updated_at_utc", "-id")
+    for field in ("approval_status", "release_code"):
+        if value := params.get(field):
+            queryset = queryset.filter(**{field: value})
+    if params.get("is_active") in {"1", "true", "True"}:
+        queryset = queryset.filter(is_active=True)
+    rows, pagination = _paginated(queryset, params)
+    return {"items": [_release_row(release) for release in rows], "pagination": pagination}
+
+
+def get_current_strategy_release() -> dict[str, Any]:
+    release = StrategyAnalysisRelease.objects.filter(is_active=True, active_slot=1).order_by("-activated_at_utc", "-id").first()
+    return {"release": _release_row(release)}
+
+
+def get_strategy_release_detail(release_id: int) -> dict[str, Any]:
+    try:
+        release = StrategyAnalysisRelease.objects.prefetch_related("items").get(id=release_id)
+    except ObjectDoesNotExist as exc:
+        raise OpsConsoleObjectNotFound(f"StrategyAnalysisRelease {release_id} not found") from exc
+    evidence = StrategyAnalysisReleaseValidationEvidence.objects.filter(release=release).order_by("-created_at_utc", "-id")
+    approvals = StrategyAnalysisReleaseApproval.objects.filter(release=release).order_by("-operated_at_utc", "-id")
+    activations = StrategyAnalysisReleaseActivation.objects.filter(release=release).order_by("-operated_at_utc", "-id")
+    return {
+        "release": _release_row(release),
+        "items": [_release_item_row(item) for item in release.items.order_by("component_type", "sort_order", "component_code", "id")],
+        "validation_evidence": [
+            _model_summary(item, ("id", "release_hash", "evidence_type", "evidence_ref", "summary", "created_by", "created_at_utc"))
+            for item in evidence[:50]
+        ],
+        "approvals": [
+            _model_summary(
+                item,
+                ("id", "release_hash", "action", "validation_evidence_refs", "reason", "operator_id", "operated_at_utc", "trace_id"),
+            )
+            for item in approvals[:50]
+        ],
+        "activations": [
+            _model_summary(item, ("id", "release_hash", "action", "previous_release_id", "operator_id", "reason", "operated_at_utc", "trace_id"))
+            for item in activations[:50]
+        ],
+        "related_alerts": [
+            _alert_row(alert)
+            for alert in AlertEvent.objects.filter(
+                related_object_type="StrategyAnalysisRelease",
+                related_object_id=str(release.id),
+            ).order_by("-event_time_utc", "-id")[:20]
+        ],
+    }
+
+
+def _definition_enabled_filter(model: type[Any]) -> QuerySet[Any]:
+    queryset = model.objects.all()
+    if model is FeatureDefinition:
+        return queryset.filter(is_enabled=True)
+    if hasattr(model, "status") and hasattr(model, "enabled"):
+        return queryset.filter(status=DefinitionLifecycleStatus.ACTIVE, enabled=True)
+    return queryset
+
+
+def _component_row(component_type: str, component: Any) -> dict[str, Any]:
+    code_fields = {
+        ReleaseItemComponentType.FEATURE_DEFINITION: ("feature_code", "definition_version", "definition_hash"),
+        ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: ("signal_code", "", "definition_hash"),
+        ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION: ("domain_code", "", "definition_hash"),
+        ReleaseItemComponentType.MARKET_REGIME_DEFINITION: ("definition_code", "", "definition_hash"),
+        ReleaseItemComponentType.STRATEGY_ROUTE_POLICY: ("policy_code", "policy_version", "definition_hash"),
+        ReleaseItemComponentType.STRATEGY_ROUTE_RULE: ("rule_code", "", "rule_hash"),
+        ReleaseItemComponentType.STRATEGY_DEFINITION: ("strategy_code", "strategy_version", "definition_hash"),
+        ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET: ("rule_set_code", "rule_set_version", "rule_set_hash"),
+        ReleaseItemComponentType.DECISION_POLICY_DEFINITION: ("policy_code", "policy_version", "definition_hash"),
+    }
+    code_field, version_field, hash_field = code_fields[component_type]
+    return {
+        "component_type": component_type,
+        "component_object_id": component.id,
+        "component_code": getattr(component, code_field),
+        "version": getattr(component, version_field, "") if version_field else "",
+        "display_name": getattr(component, "display_name", ""),
+        "description": getattr(component, "description", ""),
+        "definition_hash": getattr(component, hash_field),
+        "algorithm_name": getattr(component, "algorithm_name", ""),
+        "algorithm_version": getattr(component, "algorithm_version", ""),
+        "params_hash": getattr(component, "params_hash", ""),
+        "enabled": getattr(component, "enabled", getattr(component, "is_enabled", True)),
+        "status": getattr(component, "status", "enabled"),
+    }
+
+
+def list_strategy_release_components(params: Mapping[str, Any]) -> dict[str, Any]:
+    component_models: dict[str, type[Any]] = {
+        ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
+        ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: AtomicSignalDefinition,
+        ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION: DomainSignalDefinition,
+        ReleaseItemComponentType.MARKET_REGIME_DEFINITION: MarketRegimeDefinition,
+        ReleaseItemComponentType.STRATEGY_ROUTE_POLICY: StrategyRoutePolicy,
+        ReleaseItemComponentType.STRATEGY_ROUTE_RULE: StrategyRouteRule,
+        ReleaseItemComponentType.STRATEGY_DEFINITION: StrategyDefinition,
+        ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET: StrategySignalQualityRuleSet,
+        ReleaseItemComponentType.DECISION_POLICY_DEFINITION: DecisionPolicyDefinition,
+    }
+    requested_type = params.get("component_type")
+    rows: list[dict[str, Any]] = []
+    for component_type, model in component_models.items():
+        if requested_type and requested_type != component_type:
+            continue
+        queryset = _definition_enabled_filter(model).order_by("id")[:200]
+        rows.extend(_component_row(component_type, component) for component in queryset)
+    return {"items": rows, "pagination": {"limit": len(rows), "offset": 0, "total": len(rows)}}

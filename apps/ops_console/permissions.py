@@ -13,7 +13,18 @@ from django.views.decorators.http import require_http_methods
 from .responses import error_response
 
 
-VIEW_GROUPS = frozenset({"readonly", "ops_operator", "review_exporter", "admin"})
+VIEW_GROUPS = frozenset(
+    {
+        "readonly",
+        "ops_operator",
+        "review_exporter",
+        "strategy_release_viewer",
+        "strategy_release_editor",
+        "strategy_release_approver",
+        "strategy_release_activator",
+        "admin",
+    }
+)
 
 ACTION_GROUPS: dict[str, frozenset[str]] = {
     "view_ops_console": VIEW_GROUPS,
@@ -23,6 +34,19 @@ ACTION_GROUPS: dict[str, frozenset[str]] = {
     "manual_active_lock_closeout": frozenset({"ops_operator", "admin"}),
     "manage_runtime_guard_issue": frozenset({"ops_operator", "admin"}),
     "manage_review_dataset": frozenset({"ops_operator", "review_exporter", "admin"}),
+    "view_strategy_release": frozenset(
+        {
+            "readonly",
+            "strategy_release_viewer",
+            "strategy_release_editor",
+            "strategy_release_approver",
+            "strategy_release_activator",
+            "admin",
+        }
+    ),
+    "edit_strategy_release": frozenset({"strategy_release_editor", "admin"}),
+    "approve_strategy_release": frozenset({"strategy_release_approver", "admin"}),
+    "activate_strategy_release": frozenset({"strategy_release_activator", "admin"}),
 }
 
 

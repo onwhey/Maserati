@@ -40,6 +40,8 @@ from apps.order_status_sync.models import OrderStatusSyncRecord
 from apps.review_dataset.models import ReviewDatasetExport, ReviewDatasetRecord
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueSeverity, RuntimeGuardIssueStatus
+from apps.strategy_analysis.models import FeatureDefinition, ReleaseItemComponentType, StrategyAnalysisReleaseItem
+from apps.strategy_calculator.utils import stable_hash
 from tests.test_execution_order_submission_stage5 import _prepared, _submit
 from apps.binance_gateway.order_submission import FakeBinanceOrderSubmissionGateway
 from apps.binance_gateway.types import MARKET_TYPE_USDS_M
@@ -749,3 +751,104 @@ def test_ops_runtime_guard_issue_resolve_records_operator() -> None:
     assert issue.resolved_at_utc is not None
     assert issue.acknowledged_by == "user-ops_operator"
     assert AuditRecord.objects.filter(operation_type="runtime_guard_issue_status_update", target_object_id=str(issue.id)).exists()
+
+
+def test_strategy_release_viewer_can_list_releases_and_components() -> None:
+    feature = FeatureDefinition.objects.create(
+        feature_code="ops_feature_view",
+        definition_version="1.0.0",
+        display_name="Ops Feature View",
+        definition_hash=stable_hash({"feature": "ops_feature_view"}),
+        algorithm_name="kline_price_features",
+        algorithm_version="1.0.0",
+        params={},
+        params_hash=stable_hash({}),
+        value_type="decimal",
+        input_timeframes=["4h"],
+        output_schema_version="1.0",
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    releases_response = client.get(reverse("ops_console:strategy_releases"))
+    components_response = client.get(
+        reverse("ops_console:strategy_release_components"),
+        {"component_type": ReleaseItemComponentType.FEATURE_DEFINITION},
+    )
+
+    assert releases_response.status_code == 200
+    assert components_response.status_code == 200
+    assert any(item["component_object_id"] == feature.id for item in components_response.json()["data"]["items"])
+
+
+def test_strategy_release_editor_creates_draft_and_adds_real_component() -> None:
+    feature = FeatureDefinition.objects.create(
+        feature_code="ops_feature_release",
+        definition_version="1.0.0",
+        display_name="Ops Feature Release",
+        definition_hash=stable_hash({"feature": "ops_feature_release"}),
+        algorithm_name="kline_price_features",
+        algorithm_version="1.0.0",
+        params={},
+        params_hash=stable_hash({}),
+        value_type="decimal",
+        input_timeframes=["4h"],
+        output_schema_version="1.0",
+    )
+    client = _client_with_group("strategy_release_editor")
+
+    create_response = client.post(
+        reverse("ops_console:strategy_release_create_draft"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "release_code": "ops-release-draft",
+                "display_name": "Ops Release Draft",
+                "description": "created from ops console",
+                "reason": "assemble release in ops console",
+            }
+        ),
+        content_type="application/json",
+    )
+    release_id = create_response.json()["data"]["release_id"]
+    upsert_response = client.post(
+        reverse("ops_console:strategy_release_item_upsert", kwargs={"release_id": release_id}),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "component_type": ReleaseItemComponentType.FEATURE_DEFINITION,
+                "component_object_id": feature.id,
+                "reason": "add feature definition",
+            }
+        ),
+        content_type="application/json",
+    )
+    detail_response = client.get(reverse("ops_console:strategy_release_detail", kwargs={"release_id": release_id}))
+
+    assert create_response.status_code == 200
+    assert upsert_response.status_code == 200
+    assert detail_response.status_code == 200
+    item = StrategyAnalysisReleaseItem.objects.get(release_id=release_id)
+    assert item.component_type == ReleaseItemComponentType.FEATURE_DEFINITION
+    assert item.component_object_id == feature.id
+    assert item.component_code == feature.feature_code
+    assert item.definition_hash == feature.definition_hash
+    assert AuditRecord.objects.filter(operation_type="strategy_release_create_draft", target_object_id=str(release_id)).exists()
+    assert AuditRecord.objects.filter(operation_type="strategy_release_upsert_item", target_object_id=str(release_id)).exists()
+
+
+def test_strategy_release_readonly_cannot_create_draft() -> None:
+    client = _client_with_group("readonly")
+
+    response = client.post(
+        reverse("ops_console:strategy_release_create_draft"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "release_code": "readonly-draft",
+                "reason": "should be denied",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 403

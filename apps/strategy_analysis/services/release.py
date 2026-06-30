@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.alerts.models import AlertSeverity
 from apps.alerts.services import record_alert_event
+from apps.audit.services import record_audit
 from apps.foundation.idempotency import build_idempotency_key
 from apps.foundation.results import ResultStatus, ServiceResult
 from apps.strategy_calculator.contracts import CalculatorType
@@ -91,6 +93,478 @@ class FrozenReleaseSlice:
     definition_set_hash: str
 
 
+COMPONENT_MODEL_BY_TYPE = {
+    ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
+    ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: AtomicSignalDefinition,
+    ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION: DomainSignalDefinition,
+    ReleaseItemComponentType.MARKET_REGIME_DEFINITION: MarketRegimeDefinition,
+    ReleaseItemComponentType.STRATEGY_ROUTE_POLICY: StrategyRoutePolicy,
+    ReleaseItemComponentType.STRATEGY_ROUTE_RULE: StrategyRouteRule,
+    ReleaseItemComponentType.STRATEGY_DEFINITION: StrategyDefinition,
+    ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET: StrategySignalQualityRuleSet,
+    ReleaseItemComponentType.DECISION_POLICY_DEFINITION: DecisionPolicyDefinition,
+}
+
+
+def _release_summary(release: StrategyAnalysisRelease) -> dict[str, Any]:
+    return {
+        "release_id": release.id,
+        "release_code": release.release_code,
+        "display_name": release.display_name,
+        "description": release.description,
+        "approval_status": release.approval_status,
+        "is_active": release.is_active,
+        "active_slot": release.active_slot,
+        "release_hash": release.release_hash,
+        "validation_evidence_count": release.validation_evidence_count,
+    }
+
+
+def _record_release_audit(
+    *,
+    operation_type: str,
+    release: StrategyAnalysisRelease,
+    operator_id: str,
+    reason: str,
+    before_state: dict[str, Any],
+    after_state: dict[str, Any],
+    evidence: dict[str, Any],
+    result: str,
+    trace_id: str,
+    trigger_source: str,
+) -> None:
+    if not operator_id:
+        return
+    record_audit(
+        operator_id=operator_id,
+        operation_type=operation_type,
+        target_object_type="StrategyAnalysisRelease",
+        target_object_id=str(release.id),
+        before_state_summary=before_state,
+        after_state_summary=after_state,
+        reason=reason,
+        evidence=evidence,
+        result=result,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+
+
+def _require_draft_release(release: StrategyAnalysisRelease, *, trace_id: str, trigger_source: str) -> ServiceResult | None:
+    if release.approval_status == ReleaseApprovalStatus.DRAFT:
+        return None
+    return ServiceResult(
+        ResultStatus.BLOCKED,
+        "release_not_draft",
+        "只有 draft 版本包可以编辑组件或说明",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "approval_status": release.approval_status},
+    )
+
+
+def _validate_component_type(component_type: str) -> ReleaseItemComponentType:
+    return ReleaseItemComponentType(component_type)
+
+
+def _component_model(component_type: ReleaseItemComponentType):
+    return COMPONENT_MODEL_BY_TYPE[component_type]
+
+
+def _component_code(component_type: ReleaseItemComponentType, component: Any) -> str:
+    if component_type == ReleaseItemComponentType.FEATURE_DEFINITION:
+        return component.feature_code
+    if component_type == ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION:
+        return component.signal_code
+    if component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION:
+        return component.domain_code
+    if component_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION:
+        return component.definition_code
+    if component_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY:
+        return component.policy_code
+    if component_type == ReleaseItemComponentType.STRATEGY_ROUTE_RULE:
+        return component.rule_code
+    if component_type == ReleaseItemComponentType.STRATEGY_DEFINITION:
+        return component.strategy_code
+    if component_type == ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET:
+        return component.rule_set_code
+    if component_type == ReleaseItemComponentType.DECISION_POLICY_DEFINITION:
+        return component.policy_code
+    raise ValueError("不支持的组件类型")
+
+
+def _component_definition_hash(component_type: ReleaseItemComponentType, component: Any) -> str:
+    if component_type == ReleaseItemComponentType.STRATEGY_ROUTE_RULE:
+        return component.rule_hash
+    if component_type == ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET:
+        return component.rule_set_hash
+    return component.definition_hash
+
+
+def _component_payload_and_dependency(
+    component_type: ReleaseItemComponentType,
+    component: Any,
+) -> tuple[dict[str, Any], str]:
+    if component_type == ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION:
+        codes = list(normalize_feature_codes(component.depends_on_feature_codes))
+        payload = {"depends_on_feature_codes": codes}
+        return payload, atomic_signal_dependency_hash(codes)
+    if component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION:
+        payload = {
+            "allowed_atomic_signal_codes": list(normalize_atomic_signal_codes(component.allowed_atomic_signal_codes)),
+            "required_atomic_signal_codes": list(
+                normalize_atomic_signal_codes(component.required_atomic_signal_codes, allow_empty=True)
+            ),
+        }
+        return payload, domain_atomic_membership_hash(payload)
+    if component_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION:
+        payload = {
+            "allowed_domain_codes": list(normalize_domain_codes(component.allowed_domain_codes)),
+            "required_domain_codes": list(normalize_domain_codes(component.required_domain_codes, allow_empty=True)),
+            "allowed_regime_codes": list(normalize_regime_codes(component.allowed_regime_codes)),
+        }
+        return payload, market_regime_domain_membership_hash(payload)
+    if component_type == ReleaseItemComponentType.STRATEGY_DEFINITION:
+        payload = {
+            "allowed_domain_codes": list(normalize_domain_codes(component.allowed_domain_codes)),
+            "required_domain_codes": list(normalize_domain_codes(component.required_domain_codes, allow_empty=True)),
+        }
+        return payload, strategy_definition_dependency_hash(payload)
+    if component_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY:
+        payload = {
+            "policy_version": component.policy_version,
+            "fallback_policy": component.fallback_policy,
+            "fallback_strategy_definition_id": component.fallback_strategy_definition_id,
+            "rule_set_hash": component.rule_set_hash,
+        }
+        return payload, component.rule_set_hash
+    if component_type == ReleaseItemComponentType.STRATEGY_ROUTE_RULE:
+        payload = {
+            "strategy_route_policy_id": component.strategy_route_policy_id,
+            "priority": component.priority,
+            "action": component.action,
+            "match_conditions": component.match_conditions,
+            "selected_strategy_definition_id": component.selected_strategy_definition_id,
+            "valid_from_utc": component.valid_from_utc.isoformat() if component.valid_from_utc else None,
+            "valid_to_utc": component.valid_to_utc.isoformat() if component.valid_to_utc else None,
+        }
+        return payload, ""
+    if component_type == ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET:
+        payload = {
+            "rule_set_version": component.rule_set_version,
+            "quality_schema_version": component.quality_schema_version,
+        }
+        return payload, ""
+    if component_type == ReleaseItemComponentType.DECISION_POLICY_DEFINITION:
+        payload = {
+            "policy_version": component.policy_version,
+            "input_schema_version": component.input_schema_version,
+            "output_schema_version": component.output_schema_version,
+            "target_schema_version": component.target_schema_version,
+        }
+        return payload, ""
+    return {}, ""
+
+
+def _build_release_item_fields(
+    *,
+    release: StrategyAnalysisRelease,
+    component_type: ReleaseItemComponentType,
+    component_object_id: int,
+    sort_order: int,
+) -> dict[str, Any]:
+    component = _component_model(component_type).objects.get(id=component_object_id)
+    payload, dependency_hash = _component_payload_and_dependency(component_type, component)
+    return {
+        "release": release,
+        "component_type": component_type,
+        "component_object_id": component.id,
+        "component_code": _component_code(component_type, component),
+        "definition_hash": _component_definition_hash(component_type, component),
+        "algorithm_name": getattr(component, "algorithm_name", ""),
+        "algorithm_version": getattr(component, "algorithm_version", ""),
+        "params_hash": getattr(component, "params_hash", ""),
+        "dependency_hash": dependency_hash,
+        "sort_order": sort_order,
+        "payload_summary": payload,
+    }
+
+
+def create_draft_release(
+    *,
+    release_code: str,
+    display_name: str,
+    description: str,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    if not release_code.strip():
+        return ServiceResult(ResultStatus.BLOCKED, "release_code_required", "必须填写版本包代码", trace_id, trigger_source)
+    release = StrategyAnalysisRelease.objects.create(
+        release_code=release_code.strip(),
+        display_name=display_name.strip(),
+        description=description.strip(),
+        created_by=operator_id,
+    )
+    _record_release_audit(
+        operation_type="strategy_release_create_draft",
+        release=release,
+        operator_id=operator_id,
+        reason=reason,
+        before_state={},
+        after_state=_release_summary(release),
+        evidence={},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_draft_created",
+        "策略分析版本包草稿已创建",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id},
+    )
+
+
+def update_draft_release_metadata(
+    *,
+    release_id: int,
+    display_name: str,
+    description: str,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+        if blocked := _require_draft_release(release, trace_id=trace_id, trigger_source=trigger_source):
+            return blocked
+        before = _release_summary(release)
+        release.display_name = display_name.strip()
+        release.description = description.strip()
+        release.save(update_fields=["display_name", "description", "updated_at_utc"])
+        after = _release_summary(release)
+    _record_release_audit(
+        operation_type="strategy_release_update_draft",
+        release=release,
+        operator_id=operator_id,
+        reason=reason,
+        before_state=before,
+        after_state=after,
+        evidence={},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_draft_updated",
+        "策略分析版本包草稿已更新",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id},
+    )
+
+
+def copy_release_to_draft(
+    *,
+    source_release_id: int,
+    release_code: str,
+    display_name: str,
+    description: str,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    if not release_code.strip():
+        return ServiceResult(ResultStatus.BLOCKED, "release_code_required", "必须填写新草稿版本包代码", trace_id, trigger_source)
+    with transaction.atomic():
+        source = StrategyAnalysisRelease.objects.prefetch_related("items").get(id=source_release_id)
+        draft = StrategyAnalysisRelease.objects.create(
+            release_code=release_code.strip(),
+            display_name=display_name.strip() or f"{source.display_name or source.release_code} copy",
+            description=description.strip(),
+            created_by=operator_id,
+        )
+        for item in source.items.order_by("component_type", "sort_order", "component_code", "id"):
+            item.pk = None
+            item.id = None
+            item.release = draft
+            item.created_at_utc = None
+            item.save()
+    _record_release_audit(
+        operation_type="strategy_release_copy_to_draft",
+        release=draft,
+        operator_id=operator_id,
+        reason=reason,
+        before_state={"source_release_id": source.id, "source_release_hash": source.release_hash},
+        after_state=_release_summary(draft),
+        evidence={},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_draft_copied",
+        "已从历史版本包复制生成新草稿",
+        trace_id,
+        trigger_source,
+        {"source_release_id": source.id, "release_id": draft.id},
+    )
+
+
+def upsert_release_item(
+    *,
+    release_id: int,
+    component_type: str,
+    component_object_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    try:
+        normalized_type = _validate_component_type(component_type)
+    except ValueError:
+        return ServiceResult(ResultStatus.BLOCKED, "invalid_component_type", "组件类型不受支持", trace_id, trigger_source)
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+        if blocked := _require_draft_release(release, trace_id=trace_id, trigger_source=trigger_source):
+            return blocked
+        before = _release_summary(release)
+        max_sort_order = release.items.filter(component_type=normalized_type).order_by("-sort_order").values_list(
+            "sort_order",
+            flat=True,
+        ).first()
+        try:
+            fields = _build_release_item_fields(
+                release=release,
+                component_type=normalized_type,
+                component_object_id=component_object_id,
+                sort_order=(max_sort_order or 0) + 10,
+            )
+        except ObjectDoesNotExist:
+            return ServiceResult(
+                ResultStatus.BLOCKED,
+                "release_component_not_found",
+                "选择的组件定义不存在",
+                trace_id,
+                trigger_source,
+                {"component_type": normalized_type, "component_object_id": component_object_id},
+            )
+        except ValueError as exc:
+            return ServiceResult(
+                ResultStatus.BLOCKED,
+                "release_component_invalid",
+                f"选择的组件定义不合法：{exc}",
+                trace_id,
+                trigger_source,
+                {"component_type": normalized_type, "component_object_id": component_object_id},
+            )
+        StrategyAnalysisReleaseItem.objects.filter(
+            release=release,
+            component_type=normalized_type,
+            component_code=fields["component_code"],
+        ).delete()
+        item = StrategyAnalysisReleaseItem.objects.create(**fields)
+        release.release_hash = ""
+        release.save(update_fields=["release_hash", "updated_at_utc"])
+        after = {**_release_summary(release), "item_id": item.id, "component_code": item.component_code}
+    _record_release_audit(
+        operation_type="strategy_release_upsert_item",
+        release=release,
+        operator_id=operator_id,
+        reason=reason,
+        before_state=before,
+        after_state=after,
+        evidence={"component_type": normalized_type, "component_object_id": component_object_id},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_item_upserted",
+        "版本包组件已写入草稿",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "item_id": item.id, "component_code": item.component_code},
+    )
+
+
+def remove_release_item(
+    *,
+    release_id: int,
+    item_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+        if blocked := _require_draft_release(release, trace_id=trace_id, trigger_source=trigger_source):
+            return blocked
+        before = _release_summary(release)
+        item = StrategyAnalysisReleaseItem.objects.get(release=release, id=item_id)
+        item_summary = {
+            "item_id": item.id,
+            "component_type": item.component_type,
+            "component_code": item.component_code,
+            "component_object_id": item.component_object_id,
+        }
+        item.delete()
+        release.release_hash = ""
+        release.save(update_fields=["release_hash", "updated_at_utc"])
+        after = {**_release_summary(release), "removed_item": item_summary}
+    _record_release_audit(
+        operation_type="strategy_release_remove_item",
+        release=release,
+        operator_id=operator_id,
+        reason=reason,
+        before_state=before,
+        after_state=after,
+        evidence=item_summary,
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_item_removed",
+        "版本包组件已从草稿移除",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "removed_item_id": item_id},
+    )
+
+
+def prevalidate_release(
+    *,
+    release_id: int,
+    trace_id: str,
+    trigger_source: str,
+    registry: CalculatorRegistry = default_registry,
+) -> ServiceResult:
+    release = StrategyAnalysisRelease.objects.get(id=release_id)
+    errors = validate_release_integrity(release, registry=registry)
+    return ServiceResult(
+        ResultStatus.SUCCEEDED if not errors else ResultStatus.BLOCKED,
+        "strategy_release_prevalidation_passed" if not errors else "strategy_release_prevalidation_failed",
+        "版本包依赖闭包预校验通过" if not errors else "版本包依赖闭包预校验未通过",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "error_count": len(errors), "errors": errors},
+    )
+
+
 def release_manifest(release: StrategyAnalysisRelease) -> list[dict[str, object]]:
     items = release.items.order_by("component_type", "sort_order", "component_code", "id")
     return [
@@ -137,14 +611,18 @@ def freeze_release_for_validation(
     release_id: int,
     trace_id: str,
     trigger_source: str,
+    operator_id: str = "",
+    reason: str = "",
 ) -> ServiceResult:
     with transaction.atomic():
         release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
         if release.approval_status != ReleaseApprovalStatus.DRAFT:
             return ServiceResult(ResultStatus.BLOCKED, "release_not_draft", "只有 draft 版本包可以冻结验证", trace_id, trigger_source)
+        before = _release_summary(release)
         release.release_hash = calculate_release_hash(release)
         release.approval_status = ReleaseApprovalStatus.VALIDATING
         release.save(update_fields=["release_hash", "approval_status", "updated_at_utc"])
+        after = _release_summary(release)
         record_alert_event(
             event_key=build_idempotency_key("strategy_release_validating", release.id, release.release_hash),
             source_module="StrategyAnalysisRelease",
@@ -159,6 +637,18 @@ def freeze_release_for_validation(
             related_object_id=str(release.id),
             business_status=release.approval_status,
             payload_summary={"release_hash": release.release_hash},
+        )
+        _record_release_audit(
+            operation_type="strategy_release_freeze",
+            release=release,
+            operator_id=operator_id,
+            reason=reason,
+            before_state=before,
+            after_state=after,
+            evidence={"release_hash": release.release_hash},
+            result="succeeded",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
         )
     return ServiceResult(
         ResultStatus.SUCCEEDED,
@@ -179,6 +669,7 @@ def create_validation_evidence(
     created_by: str,
     trace_id: str,
     trigger_source: str,
+    reason: str = "",
 ) -> ServiceResult:
     release = StrategyAnalysisRelease.objects.get(id=release_id)
     if release.approval_status != ReleaseApprovalStatus.VALIDATING or not release.release_hash:
@@ -202,6 +693,19 @@ def create_validation_evidence(
             release_id=release_id,
             release_hash=release.release_hash,
         ).count()
+    )
+    release.refresh_from_db()
+    _record_release_audit(
+        operation_type="strategy_release_validation_evidence_create",
+        release=release,
+        operator_id=created_by,
+        reason=reason or summary or "record validation evidence",
+        before_state={"validation_evidence_count": max(release.validation_evidence_count - 1, 0)},
+        after_state={"validation_evidence_count": release.validation_evidence_count, "evidence_id": evidence.id},
+        evidence={"evidence_type": evidence_type, "evidence_ref": evidence_ref},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
     )
     return ServiceResult(
         ResultStatus.SUCCEEDED,
@@ -756,6 +1260,7 @@ def approve_release(
         release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
         if release.approval_status != ReleaseApprovalStatus.VALIDATING:
             return ServiceResult(ResultStatus.BLOCKED, "release_not_validating", "只有 validating 版本包可以批准", trace_id, trigger_source)
+        before = _release_summary(release)
         current_hash = calculate_release_hash(release)
         if release.release_hash != current_hash:
             return ServiceResult(ResultStatus.BLOCKED, "release_hash_mismatch", "版本包指纹已失配", trace_id, trigger_source)
@@ -816,6 +1321,18 @@ def approve_release(
             business_status=release.approval_status,
             payload_summary={"release_hash": release.release_hash, "approval_id": approval.id},
         )
+        _record_release_audit(
+            operation_type="strategy_release_approve",
+            release=release,
+            operator_id=operator_id,
+            reason=reason,
+            before_state=before,
+            after_state={**_release_summary(release), "approval_id": approval.id},
+            evidence={"validation_evidence_refs": evidence_refs},
+            result="succeeded",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
     return ServiceResult(
         ResultStatus.SUCCEEDED,
         "release_approved",
@@ -823,6 +1340,164 @@ def approve_release(
         trace_id,
         trigger_source,
         {"release_id": release.id, "release_hash": release.release_hash, "approval_id": approval.id},
+    )
+
+
+def reject_release(
+    *,
+    release_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+        if release.approval_status != ReleaseApprovalStatus.VALIDATING:
+            return ServiceResult(ResultStatus.BLOCKED, "release_not_validating", "只有 validating 版本包可以拒绝", trace_id, trigger_source)
+        before = _release_summary(release)
+        release.approval_status = ReleaseApprovalStatus.REJECTED
+        release.save(update_fields=["approval_status", "updated_at_utc"])
+        approval = StrategyAnalysisReleaseApproval.objects.create(
+            release=release,
+            release_hash=release.release_hash,
+            action=ReleaseAction.REJECT,
+            validation_evidence_refs=list(
+                StrategyAnalysisReleaseValidationEvidence.objects.filter(
+                    release=release,
+                    release_hash=release.release_hash,
+                ).values_list("id", flat=True)
+            ),
+            reason=reason,
+            operator_id=operator_id,
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+        record_alert_event(
+            event_key=build_idempotency_key("strategy_release_rejected", release.id, release.release_hash),
+            source_module="StrategyAnalysisRelease",
+            event_type="strategy_analysis_release_rejected",
+            event_category="strategy_analysis_release",
+            severity=AlertSeverity.INFO,
+            title_zh="策略分析版本包已拒绝",
+            message_zh=f"版本包 {release.release_code} 已被拒绝。",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            related_object_type="StrategyAnalysisRelease",
+            related_object_id=str(release.id),
+            business_status=release.approval_status,
+            payload_summary={"release_hash": release.release_hash, "approval_id": approval.id},
+        )
+        _record_release_audit(
+            operation_type="strategy_release_reject",
+            release=release,
+            operator_id=operator_id,
+            reason=reason,
+            before_state=before,
+            after_state={**_release_summary(release), "approval_id": approval.id},
+            evidence={},
+            result="succeeded",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "release_rejected",
+        "版本包已拒绝",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "approval_id": approval.id},
+    )
+
+
+def invalidate_release(
+    *,
+    release_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+        if release.approval_status != ReleaseApprovalStatus.APPROVED:
+            return ServiceResult(
+                ResultStatus.BLOCKED,
+                "release_not_invalidation_candidate",
+                "只有 approved 版本包可以失效",
+                trace_id,
+                trigger_source,
+            )
+        before = _release_summary(release)
+        was_active = release.is_active
+        release.approval_status = ReleaseApprovalStatus.INVALIDATED
+        if was_active:
+            release.is_active = False
+            release.active_slot = None
+            release.deactivated_at_utc = timezone.now()
+        release.save(
+            update_fields=[
+                "approval_status",
+                "is_active",
+                "active_slot",
+                "deactivated_at_utc",
+                "updated_at_utc",
+            ]
+        )
+        approval = StrategyAnalysisReleaseApproval.objects.create(
+            release=release,
+            release_hash=release.release_hash,
+            action=ReleaseAction.INVALIDATE,
+            validation_evidence_refs=[],
+            reason=reason,
+            operator_id=operator_id,
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+        if was_active:
+            StrategyAnalysisReleaseActivation.objects.create(
+                release=release,
+                release_hash=release.release_hash,
+                action=ReleaseAction.DEACTIVATE,
+                operator_id=operator_id,
+                reason=reason,
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+            )
+        record_alert_event(
+            event_key=build_idempotency_key("strategy_release_invalidated", release.id, release.release_hash),
+            source_module="StrategyAnalysisRelease",
+            event_type="strategy_analysis_release_invalidated",
+            event_category="strategy_analysis_release",
+            severity=AlertSeverity.WARNING,
+            title_zh="策略分析版本包已失效",
+            message_zh=f"版本包 {release.release_code} 已失效。",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            related_object_type="StrategyAnalysisRelease",
+            related_object_id=str(release.id),
+            business_status=release.approval_status,
+            payload_summary={"release_hash": release.release_hash, "approval_id": approval.id, "was_active": was_active},
+        )
+        _record_release_audit(
+            operation_type="strategy_release_invalidate",
+            release=release,
+            operator_id=operator_id,
+            reason=reason,
+            before_state=before,
+            after_state={**_release_summary(release), "approval_id": approval.id},
+            evidence={"was_active": was_active},
+            result="succeeded",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "release_invalidated",
+        "版本包已失效",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "approval_id": approval.id, "was_active": was_active},
     )
 
 
@@ -841,6 +1516,7 @@ def activate_release(
             release = StrategyAnalysisRelease.objects.get(id=release_id)
             if release.approval_status != ReleaseApprovalStatus.APPROVED:
                 return ServiceResult(ResultStatus.BLOCKED, "release_not_approved", "只有 approved 版本包可以启用", trace_id, trigger_source)
+            before = _release_summary(release)
             if release.release_hash != calculate_release_hash(release):
                 return ServiceResult(ResultStatus.BLOCKED, "release_hash_mismatch", "版本包指纹已失配", trace_id, trigger_source)
             if not StrategyAnalysisReleaseApproval.objects.filter(
@@ -904,6 +1580,18 @@ def activate_release(
                 business_status=release.approval_status,
                 payload_summary={"release_hash": release.release_hash, "activation_id": activation.id},
             )
+            _record_release_audit(
+                operation_type="strategy_release_activate",
+                release=release,
+                operator_id=operator_id,
+                reason=reason,
+                before_state=before,
+                after_state={**_release_summary(release), "activation_id": activation.id},
+                evidence={"previous_release_id": previous.id if previous else None},
+                result="succeeded",
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+            )
     except IntegrityError:
         return ServiceResult(
             ResultStatus.BLOCKED,
@@ -919,6 +1607,66 @@ def activate_release(
         trace_id,
         trigger_source,
         {"release_id": release.id, "release_hash": release.release_hash, "activation_id": activation.id},
+    )
+
+
+def rollback_to_release(
+    *,
+    release_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+    registry: CalculatorRegistry = default_registry,
+) -> ServiceResult:
+    result = activate_release(
+        release_id=release_id,
+        operator_id=operator_id,
+        reason=reason,
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+        registry=registry,
+    )
+    if result.status != ResultStatus.SUCCEEDED:
+        return result
+    activation_id = result.data.get("activation_id")
+    if activation_id:
+        StrategyAnalysisReleaseActivation.objects.filter(id=activation_id).update(action=ReleaseAction.ROLLBACK)
+        release = StrategyAnalysisRelease.objects.get(id=release_id)
+        _record_release_audit(
+            operation_type="strategy_release_rollback",
+            release=release,
+            operator_id=operator_id,
+            reason=reason,
+            before_state={"requested_release_id": release_id},
+            after_state={**_release_summary(release), "activation_id": activation_id},
+            evidence={"activation_id": activation_id},
+            result="succeeded",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+        )
+        record_alert_event(
+            event_key=build_idempotency_key("strategy_release_rollback", activation_id),
+            source_module="StrategyAnalysisRelease",
+            event_type="strategy_analysis_release_rollback",
+            event_category="strategy_analysis_release",
+            severity=AlertSeverity.WARNING,
+            title_zh="策略分析版本包已回滚",
+            message_zh=f"已回滚到版本包 ID {release_id}，新编排将使用该版本包。",
+            trace_id=trace_id,
+            trigger_source=trigger_source,
+            related_object_type="StrategyAnalysisRelease",
+            related_object_id=str(release_id),
+            business_status=ReleaseApprovalStatus.APPROVED,
+            payload_summary={"activation_id": activation_id},
+        )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "release_rollback_activated",
+        "已回滚到指定策略分析版本包",
+        trace_id,
+        trigger_source,
+        result.data,
     )
 
 
