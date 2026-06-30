@@ -8,7 +8,6 @@ import { SimpleTable } from "@/components/ops/simple-table";
 import { StatusBadge } from "@/components/ops/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { opsFetch } from "@/lib/api/client";
-import type { Paginated } from "@/lib/api/types";
 import { asRecord, asRows } from "@/lib/ops-data";
 import { displayValue, formatUtc } from "@/lib/utils";
 
@@ -21,12 +20,8 @@ type PageProps = {
 export default async function StrategyReleaseDetailPage({ params }: PageProps) {
   const { id } = await params;
   const detailResult = await opsFetch<Record<string, unknown>>(`/api/ops/strategy-releases/${id}/`);
-  const componentsResult = await opsFetch<Paginated<Record<string, unknown>>>("/api/ops/strategy-releases/components/");
   if (!detailResult.ok) {
     return <ApiError reason={detailResult.reason_code} message={detailResult.message_zh} />;
-  }
-  if (!componentsResult.ok) {
-    return <ApiError reason={componentsResult.reason_code} message={componentsResult.message_zh} />;
   }
 
   const release = asRecord(detailResult.data.release);
@@ -70,7 +65,7 @@ export default async function StrategyReleaseDetailPage({ params }: PageProps) {
 
       {isDraft ? (
         <div className="mt-6">
-          <DraftEditForms release={release} components={componentsResult.data.items} />
+          <DraftEditForms release={release} />
         </div>
       ) : null}
 
@@ -106,7 +101,7 @@ export default async function StrategyReleaseDetailPage({ params }: PageProps) {
               ]}
             />
           ) : (
-            <EmptyState title="暂无组件" description="draft 状态下可以从组件库加入定义版本。" />
+            <EmptyState title="暂无组件" description="请从策略组件页配置后生成新的草稿。" />
           )}
         </CardContent>
       </Card>

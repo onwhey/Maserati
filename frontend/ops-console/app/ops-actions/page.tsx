@@ -46,7 +46,7 @@ export default function OpsActionsPage() {
               <CardDescription>{action.description}</CardDescription>
             </CardHeader>
             <CardContent>
-              <code className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-700">{action.endpoint}</code>
+              <code className="rounded bg-muted px-2 py-1 text-xs text-muted-foreground">{action.endpoint}</code>
             </CardContent>
           </Card>
         ))}

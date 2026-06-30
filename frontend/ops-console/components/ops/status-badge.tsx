@@ -1,5 +1,19 @@
 import { Badge } from "@/components/ui/badge";
 
+const statusLabelMap: Record<string, string> = {
+  draft: "草稿",
+  validating: "验证中",
+  approved: "已批准",
+  rejected: "已拒绝",
+  invalidated: "已失效",
+  active: "可用",
+  deprecated: "已弃用",
+  retired: "已退役",
+  disabled: "已禁用",
+  true: "是",
+  false: "否"
+};
+
 function toneFor(value: unknown) {
   const text = String(value ?? "").toLowerCase();
   if (["succeeded", "completed", "allow", "allowed", "calculated", "sent", "filled", "true", "ok"].some((item) => text.includes(item))) {
@@ -15,5 +29,7 @@ function toneFor(value: unknown) {
 }
 
 export function StatusBadge({ value }: { value: unknown }) {
-  return <Badge tone={toneFor(value)}>{String(value ?? "—")}</Badge>;
+  const rawValue = String(value ?? "");
+  const displayValue = (statusLabelMap[rawValue.toLowerCase()] ?? rawValue) || "—";
+  return <Badge tone={toneFor(value)}>{displayValue}</Badge>;
 }

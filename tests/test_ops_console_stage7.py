@@ -40,7 +40,15 @@ from apps.order_status_sync.models import OrderStatusSyncRecord
 from apps.review_dataset.models import ReviewDatasetExport, ReviewDatasetRecord
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueSeverity, RuntimeGuardIssueStatus
-from apps.strategy_analysis.models import FeatureDefinition, ReleaseItemComponentType, StrategyAnalysisReleaseItem
+from apps.strategy_analysis.models import (
+    AtomicSignalDefinition,
+    AtomicSignalDirection,
+    AtomicSignalOutputType,
+    DefinitionLifecycleStatus,
+    FeatureDefinition,
+    ReleaseItemComponentType,
+    StrategyAnalysisReleaseItem,
+)
 from apps.strategy_calculator.utils import stable_hash
 from tests.test_execution_order_submission_stage5 import _prepared, _submit
 from apps.binance_gateway.order_submission import FakeBinanceOrderSubmissionGateway
@@ -834,6 +842,97 @@ def test_strategy_release_editor_creates_draft_and_adds_real_component() -> None
     assert item.definition_hash == feature.definition_hash
     assert AuditRecord.objects.filter(operation_type="strategy_release_create_draft", target_object_id=str(release_id)).exists()
     assert AuditRecord.objects.filter(operation_type="strategy_release_upsert_item", target_object_id=str(release_id)).exists()
+
+
+def test_strategy_workspace_editor_selects_components_and_generates_release() -> None:
+    feature = FeatureDefinition.objects.create(
+        feature_code="ops_feature_workspace",
+        definition_version="1.0.0",
+        display_name="Ops Feature Workspace",
+        definition_hash=stable_hash({"feature": "ops_feature_workspace"}),
+        algorithm_name="fake_feature",
+        algorithm_version="1.0.0",
+        params={},
+        params_hash=stable_hash({}),
+        value_type="decimal",
+        input_timeframes=["4h"],
+        output_schema_version="1.0",
+    )
+    atomic = AtomicSignalDefinition.objects.create(
+        signal_code="ops_atomic_workspace",
+        display_name="Ops Atomic Workspace",
+        category="test",
+        default_direction=AtomicSignalDirection.BULLISH,
+        algorithm_name="fake_atomic",
+        algorithm_version="1.0.0",
+        params={},
+        params_hash=stable_hash({}),
+        definition_hash=stable_hash({"atomic": "ops_atomic_workspace"}),
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+        is_required=False,
+        depends_on_feature_codes=["ops_feature_workspace"],
+        output_type=AtomicSignalOutputType.BOOLEAN,
+    )
+    client = _client_with_group("strategy_release_editor")
+
+    feature_response = client.post(
+        reverse("ops_console:strategy_workspace_item_upsert"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "component_type": ReleaseItemComponentType.FEATURE_DEFINITION,
+                "component_object_id": feature.id,
+                "is_included": True,
+                "reason": "select feature version",
+            }
+        ),
+        content_type="application/json",
+    )
+    atomic_response = client.post(
+        reverse("ops_console:strategy_workspace_item_upsert"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "component_type": ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION,
+                "component_object_id": atomic.id,
+                "is_included": True,
+                "reason": "include atomic",
+            }
+        ),
+        content_type="application/json",
+    )
+    components_response = client.get(reverse("ops_console:strategy_workspace_components"))
+    generate_response = client.post(
+        reverse("ops_console:strategy_workspace_generate_release"),
+        data=json.dumps(
+            {
+                "confirm_write": True,
+                "release_code": "ops-workspace-release",
+                "display_name": "Ops Workspace Release",
+                "description": "generated from strategy workspace",
+                "reason": "generate from current workspace",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert feature_response.status_code == 200
+    assert atomic_response.status_code == 200
+    assert components_response.status_code == 200
+    assert generate_response.status_code == 200
+    release_id = generate_response.json()["data"]["release_id"]
+    release_items = StrategyAnalysisReleaseItem.objects.filter(release_id=release_id).order_by("sort_order")
+    assert [(item.component_type, item.component_code) for item in release_items] == [
+        (ReleaseItemComponentType.FEATURE_DEFINITION, feature.feature_code),
+        (ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION, atomic.signal_code),
+    ]
+    assert any(
+        item["component_object_id"] == atomic.id and item["workspace_is_selected_version"]
+        for item in components_response.json()["data"]["items"]
+    )
+    assert AuditRecord.objects.filter(operation_type="strategy_workspace_item_upsert").count() == 2
+    assert AuditRecord.objects.filter(operation_type="strategy_release_generate_draft_from_workspace").exists()
 
 
 def test_strategy_release_readonly_cannot_create_draft() -> None:

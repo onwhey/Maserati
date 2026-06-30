@@ -10,6 +10,7 @@ import json
 
 from django.core.management.base import BaseCommand
 
+from apps.strategy_analysis.models import StrategyRouteDecision
 from apps.strategy_analysis.services.strategy_signal import generate_strategy_signal
 
 
@@ -20,18 +21,26 @@ class Command(BaseCommand):
         parser.add_argument("--strategy-route-decision-id", type=int, required=True)
         parser.add_argument("--strategy-analysis-release-id", type=int, required=True)
         parser.add_argument("--strategy-analysis-release-hash", required=True)
-        parser.add_argument("--expected-strategy-definition-hash", required=True)
+        parser.add_argument("--expected-strategy-definition-hash", default="")
         parser.add_argument("--business-request-key", required=True)
         parser.add_argument("--trace-id", required=True)
         parser.add_argument("--trigger-source", default="management_command")
         parser.add_argument("--dry-run", action="store_true")
 
     def handle(self, *args, **options):
+        expected_strategy_definition_hash = options["expected_strategy_definition_hash"]
+        if not expected_strategy_definition_hash:
+            decision = StrategyRouteDecision.objects.select_related("selected_strategy_definition").get(
+                id=options["strategy_route_decision_id"]
+            )
+            expected_strategy_definition_hash = (
+                decision.selected_strategy_definition.definition_hash if decision.selected_strategy_definition else ""
+            )
         result = generate_strategy_signal(
             strategy_route_decision_id=options["strategy_route_decision_id"],
             strategy_analysis_release_id=options["strategy_analysis_release_id"],
             strategy_analysis_release_hash=options["strategy_analysis_release_hash"],
-            expected_strategy_definition_hash=options["expected_strategy_definition_hash"],
+            expected_strategy_definition_hash=expected_strategy_definition_hash,
             business_request_key=options["business_request_key"],
             trace_id=options["trace_id"],
             trigger_source=options["trigger_source"],

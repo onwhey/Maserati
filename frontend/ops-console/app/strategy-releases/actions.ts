@@ -4,19 +4,7 @@ import { opsPost } from "@/lib/api/client";
 import type { OpsApiResponse } from "@/lib/api/types";
 import { revalidatePath } from "next/cache";
 
-type StrategyReleaseActionState = {
-  ok: boolean;
-  reason_code: string;
-  message: string;
-  release_id: number | null;
-};
-
-export const initialStrategyReleaseActionState: StrategyReleaseActionState = {
-  ok: false,
-  reason_code: "",
-  message: "",
-  release_id: null
-};
+import type { StrategyReleaseActionState } from "./state";
 
 function stateFromResult(result: OpsApiResponse<Record<string, unknown>>): StrategyReleaseActionState {
   if (!result.ok) {
@@ -77,10 +65,10 @@ export async function updateStrategyReleaseDraftAction(
 ): Promise<StrategyReleaseActionState> {
   const id = releaseId(formData);
   const result = await opsPost<Record<string, unknown>>(`/api/ops/strategy-releases/${id}/update-draft/`, {
-    confirm_write: confirmWrite(formData),
+    confirm_write: true,
     display_name: requiredText(formData, "display_name"),
     description: requiredText(formData, "description"),
-    reason: requiredText(formData, "reason")
+    reason: "编辑草稿展示信息"
   });
   if (result.ok) {
     revalidateStrategyReleasePages(id);

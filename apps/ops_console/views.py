@@ -39,6 +39,11 @@ from apps.strategy_analysis.services.release import (
     update_draft_release_metadata,
     upsert_release_item,
 )
+from apps.strategy_analysis.services.workspace import (
+    generate_release_from_workspace,
+    remove_workspace_item,
+    upsert_workspace_item,
+)
 
 from .permissions import has_ops_permission, require_ops_permission
 from .responses import error_response, ok_response
@@ -58,8 +63,10 @@ from .selectors import (
     list_review_dataset_records,
     list_runtime_guard_issues,
     list_runs,
+    get_strategy_workspace,
     list_strategy_release_components,
     list_strategy_releases,
+    list_strategy_workspace_components,
     real_trading_status,
     get_current_strategy_release,
     get_strategy_release_detail,
@@ -412,6 +419,97 @@ def strategy_release_detail_view(_request: HttpRequest, release_id: int) -> Json
 @require_ops_permission("view_strategy_release")
 def strategy_release_components_view(request: HttpRequest) -> JsonResponse:
     return _handle_selector(list_strategy_release_components, request.GET)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_workspace_view(_request: HttpRequest) -> JsonResponse:
+    return _handle_selector(get_strategy_workspace)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_workspace_components_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_strategy_workspace_components, request.GET)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_workspace_item_upsert_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="更新当前策略配置会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="更新当前策略配置需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    component_object_id = _int_body_value(body, "component_object_id")
+    if component_object_id is None:
+        return error_response(
+            reason_code="component_object_id_required",
+            message_zh="必须选择明确的组件对象 ID。",
+            status=400,
+        )
+    result = upsert_workspace_item(
+        component_type=str(body.get("component_type", "")).strip(),
+        component_object_id=component_object_id,
+        is_included=body.get("is_included") is True,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-workspace-item-upsert"),
+        trigger_source="ops_console_strategy_workspace",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_workspace_item_remove_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="移除当前策略配置项会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="移除当前策略配置项需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    item_id = _int_body_value(body, "item_id")
+    if item_id is None:
+        return error_response(
+            reason_code="workspace_item_id_required",
+            message_zh="必须选择明确的工作区配置项 ID。",
+            status=400,
+        )
+    result = remove_workspace_item(
+        item_id=item_id,
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-workspace-item-remove"),
+        trigger_source="ops_console_strategy_workspace",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_workspace_generate_release_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="从当前配置生成策略版本包草稿会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    reason, reason_error = _reason_or_error(body, message_zh="生成策略版本包草稿需要填写原因。")
+    if reason_error is not None:
+        return reason_error
+    result = generate_release_from_workspace(
+        release_code=str(body.get("release_code", "")).strip(),
+        display_name=str(body.get("display_name", "")).strip(),
+        description=str(body.get("description", "")).strip(),
+        operator_id=_operator_id(request),
+        reason=reason,
+        trace_id=_trace_id(body, request, "strategy-workspace-generate-release"),
+        trigger_source="ops_console_strategy_workspace",
+    )
+    return _service_response(result)
 
 
 @require_ops_permission("edit_strategy_release", methods=("POST",))

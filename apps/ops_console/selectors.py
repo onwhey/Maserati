@@ -52,6 +52,8 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
     StrategyAnalysisReleaseValidationEvidence,
+    StrategyAnalysisWorkspace,
+    StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
     StrategyRoutePolicy,
     StrategyRouteRule,
@@ -61,6 +63,18 @@ from apps.strategy_analysis.models import (
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+
+STRATEGY_COMPONENT_MODELS: dict[str, type[Any]] = {
+    ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
+    ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: AtomicSignalDefinition,
+    ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION: DomainSignalDefinition,
+    ReleaseItemComponentType.MARKET_REGIME_DEFINITION: MarketRegimeDefinition,
+    ReleaseItemComponentType.STRATEGY_ROUTE_POLICY: StrategyRoutePolicy,
+    ReleaseItemComponentType.STRATEGY_ROUTE_RULE: StrategyRouteRule,
+    ReleaseItemComponentType.STRATEGY_DEFINITION: StrategyDefinition,
+    ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET: StrategySignalQualityRuleSet,
+    ReleaseItemComponentType.DECISION_POLICY_DEFINITION: DecisionPolicyDefinition,
+}
 
 
 class OpsConsoleObjectNotFound(LookupError):
@@ -822,22 +836,101 @@ def _component_row(component_type: str, component: Any) -> dict[str, Any]:
 
 
 def list_strategy_release_components(params: Mapping[str, Any]) -> dict[str, Any]:
-    component_models: dict[str, type[Any]] = {
-        ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
-        ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: AtomicSignalDefinition,
-        ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION: DomainSignalDefinition,
-        ReleaseItemComponentType.MARKET_REGIME_DEFINITION: MarketRegimeDefinition,
-        ReleaseItemComponentType.STRATEGY_ROUTE_POLICY: StrategyRoutePolicy,
-        ReleaseItemComponentType.STRATEGY_ROUTE_RULE: StrategyRouteRule,
-        ReleaseItemComponentType.STRATEGY_DEFINITION: StrategyDefinition,
-        ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET: StrategySignalQualityRuleSet,
-        ReleaseItemComponentType.DECISION_POLICY_DEFINITION: DecisionPolicyDefinition,
-    }
     requested_type = params.get("component_type")
     rows: list[dict[str, Any]] = []
-    for component_type, model in component_models.items():
+    for component_type, model in STRATEGY_COMPONENT_MODELS.items():
         if requested_type and requested_type != component_type:
             continue
         queryset = _definition_enabled_filter(model).order_by("id")[:200]
         rows.extend(_component_row(component_type, component) for component in queryset)
     return {"items": rows, "pagination": {"limit": len(rows), "offset": 0, "total": len(rows)}}
+
+
+def _strategy_workspace_row(workspace: StrategyAnalysisWorkspace | None) -> dict[str, Any] | None:
+    if workspace is None:
+        return None
+    return _model_summary(
+        workspace,
+        (
+            "id",
+            "workspace_code",
+            "display_name",
+            "description",
+            "status",
+            "default_slot",
+            "created_by",
+            "updated_by",
+            "created_at_utc",
+            "updated_at_utc",
+        ),
+    )
+
+
+def _strategy_workspace_item_row(item: StrategyAnalysisWorkspaceItem) -> dict[str, Any]:
+    return _model_summary(
+        item,
+        (
+            "id",
+            "component_type",
+            "component_object_id",
+            "component_code",
+            "component_version",
+            "definition_hash",
+            "inclusion_managed",
+            "is_included",
+            "selection_reason",
+            "updated_by",
+            "updated_at_utc",
+        ),
+    )
+
+
+def get_strategy_workspace() -> dict[str, Any]:
+    workspace = StrategyAnalysisWorkspace.objects.filter(default_slot=1).order_by("-id").first()
+    items = []
+    if workspace is not None:
+        items = [
+            _strategy_workspace_item_row(item)
+            for item in workspace.items.order_by("component_type", "component_code", "id")
+        ]
+    return {"workspace": _strategy_workspace_row(workspace), "items": items}
+
+
+def list_strategy_workspace_components(params: Mapping[str, Any]) -> dict[str, Any]:
+    workspace = StrategyAnalysisWorkspace.objects.filter(default_slot=1).order_by("-id").first()
+    workspace_items: dict[tuple[str, str], StrategyAnalysisWorkspaceItem] = {}
+    if workspace is not None:
+        workspace_items = {
+            (item.component_type, item.component_code): item
+            for item in workspace.items.order_by("component_type", "component_code", "id")
+        }
+
+    requested_type = params.get("component_type")
+    rows: list[dict[str, Any]] = []
+    for component_type, model in STRATEGY_COMPONENT_MODELS.items():
+        if requested_type and requested_type != component_type:
+            continue
+        queryset = _definition_enabled_filter(model).order_by("id")[:300]
+        for component in queryset:
+            row = _component_row(component_type, component)
+            workspace_item = workspace_items.get((component_type, row["component_code"]))
+            row.update(
+                {
+                    "workspace_item_id": workspace_item.id if workspace_item else None,
+                    "workspace_selected_component_object_id": workspace_item.component_object_id if workspace_item else None,
+                    "workspace_selected_version": workspace_item.component_version if workspace_item else "",
+                    "workspace_is_selected_version": bool(
+                        workspace_item and workspace_item.component_object_id == row["component_object_id"]
+                    ),
+                    "workspace_inclusion_managed": workspace_item.inclusion_managed if workspace_item else component_type != ReleaseItemComponentType.FEATURE_DEFINITION,
+                    "workspace_is_included": workspace_item.is_included if workspace_item else False,
+                    "workspace_selection_reason": workspace_item.selection_reason if workspace_item else "",
+                }
+            )
+            rows.append(row)
+
+    return {
+        "workspace": _strategy_workspace_row(workspace),
+        "items": rows,
+        "pagination": {"limit": len(rows), "offset": 0, "total": len(rows)},
+    }

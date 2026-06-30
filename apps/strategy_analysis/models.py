@@ -35,6 +35,11 @@ class ReleaseItemComponentType(models.TextChoices):
     DECISION_POLICY_DEFINITION = "decision_policy_definition", "目标仓位决策定义"
 
 
+class StrategyAnalysisWorkspaceStatus(models.TextChoices):
+    ACTIVE = "active", "可用"
+    ARCHIVED = "archived", "已归档"
+
+
 class AnalysisObjectStatus(models.TextChoices):
     CREATED = "created", "已创建"
     BLOCKED = "blocked", "阻断"
@@ -241,6 +246,59 @@ class StrategyAnalysisReleaseActivation(models.Model):
     operated_at_utc = models.DateTimeField("操作 UTC 时间", default=timezone.now)
     trace_id = models.CharField("追踪 ID", max_length=80)
     trigger_source = models.CharField("触发来源", max_length=80)
+
+
+class StrategyAnalysisWorkspace(models.Model):
+    workspace_code = models.CharField("配置工作区代码", max_length=120, unique=True)
+    display_name = models.CharField("展示名称", max_length=200, blank=True)
+    description = models.TextField("说明", blank=True)
+    status = models.CharField(
+        "状态",
+        max_length=40,
+        choices=StrategyAnalysisWorkspaceStatus.choices,
+        default=StrategyAnalysisWorkspaceStatus.ACTIVE,
+    )
+    default_slot = models.PositiveSmallIntegerField("默认工作区槽位", null=True, blank=True, unique=True)
+    created_by = models.CharField("创建人", max_length=120, blank=True)
+    updated_by = models.CharField("最后更新人", max_length=120, blank=True)
+    created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
+    updated_at_utc = models.DateTimeField("更新 UTC 时间", auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["workspace_code", "status"]),
+            models.Index(fields=["default_slot", "status"]),
+        ]
+
+
+class StrategyAnalysisWorkspaceItem(models.Model):
+    workspace = models.ForeignKey(StrategyAnalysisWorkspace, on_delete=models.CASCADE, related_name="items")
+    component_type = models.CharField("组件类型", max_length=80, choices=ReleaseItemComponentType.choices)
+    component_object_id = models.PositiveIntegerField("组件对象 ID")
+    component_code = models.CharField("组件代码", max_length=160)
+    component_version = models.CharField("组件版本", max_length=80, blank=True)
+    definition_hash = models.CharField("定义指纹", max_length=80)
+    inclusion_managed = models.BooleanField("是否支持纳入状态", default=True)
+    is_included = models.BooleanField("是否纳入当前组合", default=True)
+    selection_reason = models.CharField("选择原因", max_length=500, blank=True)
+    updated_by = models.CharField("最后更新人", max_length=120, blank=True)
+    trace_id = models.CharField("追踪 ID", max_length=80, blank=True)
+    trigger_source = models.CharField("触发来源", max_length=80, blank=True)
+    created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
+    updated_at_utc = models.DateTimeField("更新 UTC 时间", auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace", "component_type", "component_code"],
+                name="uniq_strategy_workspace_item_code",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["workspace", "component_type", "is_included"]),
+            models.Index(fields=["component_type", "component_code"]),
+            models.Index(fields=["definition_hash"]),
+        ]
 
 
 class FeatureDefinition(models.Model):

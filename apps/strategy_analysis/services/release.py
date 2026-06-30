@@ -93,6 +93,13 @@ class FrozenReleaseSlice:
     definition_set_hash: str
 
 
+@dataclass(frozen=True)
+class ReleaseComponentSelection:
+    component_type: ReleaseItemComponentType
+    component_object_id: int
+    sort_order: int
+
+
 COMPONENT_MODEL_BY_TYPE = {
     ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
     ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION: AtomicSignalDefinition,
@@ -156,7 +163,7 @@ def _require_draft_release(release: StrategyAnalysisRelease, *, trace_id: str, t
     return ServiceResult(
         ResultStatus.BLOCKED,
         "release_not_draft",
-        "只有 draft 版本包可以编辑组件或说明",
+        "只有草稿版本包可以编辑组件或说明",
         trace_id,
         trigger_source,
         {"release_id": release.id, "approval_status": release.approval_status},
@@ -327,6 +334,101 @@ def create_draft_release(
         trace_id,
         trigger_source,
         {"release_id": release.id},
+    )
+
+
+def create_draft_release_from_component_selections(
+    *,
+    release_code: str,
+    display_name: str,
+    description: str,
+    selections: Iterable[ReleaseComponentSelection],
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    if not release_code.strip():
+        return ServiceResult(ResultStatus.BLOCKED, "release_code_required", "必须填写版本包代码", trace_id, trigger_source)
+
+    normalized_selections = tuple(selections)
+    if not normalized_selections:
+        return ServiceResult(
+            ResultStatus.BLOCKED,
+            "release_components_required",
+            "当前配置没有可生成版本包的组件",
+            trace_id,
+            trigger_source,
+        )
+
+    with transaction.atomic():
+        release = StrategyAnalysisRelease.objects.create(
+            release_code=release_code.strip(),
+            display_name=display_name.strip(),
+            description=description.strip(),
+            created_by=operator_id,
+        )
+        created_items: list[StrategyAnalysisReleaseItem] = []
+        for selection in normalized_selections:
+            try:
+                fields = _build_release_item_fields(
+                    release=release,
+                    component_type=selection.component_type,
+                    component_object_id=selection.component_object_id,
+                    sort_order=selection.sort_order,
+                )
+                created_items.append(StrategyAnalysisReleaseItem.objects.create(**fields))
+            except ObjectDoesNotExist:
+                transaction.set_rollback(True)
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "release_component_not_found",
+                    "当前配置引用的组件定义不存在",
+                    trace_id,
+                    trigger_source,
+                    {
+                        "component_type": selection.component_type,
+                        "component_object_id": selection.component_object_id,
+                    },
+                )
+            except (IntegrityError, ValueError) as exc:
+                transaction.set_rollback(True)
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "release_component_invalid",
+                    f"当前配置引用的组件定义不合法：{exc}",
+                    trace_id,
+                    trigger_source,
+                    {
+                        "component_type": selection.component_type,
+                        "component_object_id": selection.component_object_id,
+                    },
+                )
+        after = {
+            **_release_summary(release),
+            "item_count": len(created_items),
+            "component_codes": [item.component_code for item in created_items],
+        }
+
+    _record_release_audit(
+        operation_type="strategy_release_generate_draft_from_workspace",
+        release=release,
+        operator_id=operator_id,
+        reason=reason,
+        before_state={},
+        after_state=after,
+        evidence={"item_count": len(created_items)},
+        result="succeeded",
+        trace_id=trace_id,
+        trigger_source=trigger_source,
+    )
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_draft_generated_from_workspace",
+        "已根据当前策略配置生成版本包草稿",
+        trace_id,
+        trigger_source,
+        {"release_id": release.id, "item_count": len(created_items)},
     )
 
 
@@ -617,7 +719,7 @@ def freeze_release_for_validation(
     with transaction.atomic():
         release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
         if release.approval_status != ReleaseApprovalStatus.DRAFT:
-            return ServiceResult(ResultStatus.BLOCKED, "release_not_draft", "只有 draft 版本包可以冻结验证", trace_id, trigger_source)
+            return ServiceResult(ResultStatus.BLOCKED, "release_not_draft", "只有草稿版本包可以冻结验证", trace_id, trigger_source)
         before = _release_summary(release)
         release.release_hash = calculate_release_hash(release)
         release.approval_status = ReleaseApprovalStatus.VALIDATING

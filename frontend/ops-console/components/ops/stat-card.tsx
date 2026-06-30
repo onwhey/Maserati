@@ -22,7 +22,7 @@ export function StatCard({
           {helper ? <div className="mt-1 text-xs text-muted-foreground">{helper}</div> : null}
         </div>
         {Icon ? (
-          <div className="rounded-lg bg-slate-100 p-2 text-slate-700">
+          <div className="rounded-lg bg-muted p-2 text-muted-foreground">
             <Icon className="h-5 w-5" />
           </div>
         ) : null}

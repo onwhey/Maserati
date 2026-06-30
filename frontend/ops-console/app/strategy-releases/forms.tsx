@@ -6,8 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select } from "@/components/ui/select";
-import { asRows } from "@/lib/ops-data";
 
 import {
   activateStrategyReleaseAction,
@@ -16,15 +14,14 @@ import {
   copyStrategyReleaseDraftAction,
   createStrategyReleaseDraftAction,
   freezeStrategyReleaseAction,
-  initialStrategyReleaseActionState,
   invalidateStrategyReleaseAction,
   prevalidateStrategyReleaseAction,
   rejectStrategyReleaseAction,
   removeStrategyReleaseItemAction,
   rollbackStrategyReleaseAction,
-  updateStrategyReleaseDraftAction,
-  upsertStrategyReleaseItemAction
+  updateStrategyReleaseDraftAction
 } from "./actions";
+import { initialStrategyReleaseActionState } from "./state";
 
 function ActionResult({ state }: { state: typeof initialStrategyReleaseActionState }) {
   if (!state.reason_code) {
@@ -38,12 +35,7 @@ function ActionResult({ state }: { state: typeof initialStrategyReleaseActionSta
 }
 
 function ConfirmWrite() {
-  return (
-    <label className="flex items-start gap-2 text-sm text-muted-foreground">
-      <input className="mt-1" type="checkbox" name="confirm_write" />
-      <span>我确认这是受控后台写入操作，会写审计记录，不会触发交易执行。</span>
-    </label>
-  );
+  return <input type="hidden" name="confirm_write" value="on" />;
 }
 
 export function CreateDraftForm() {
@@ -51,7 +43,7 @@ export function CreateDraftForm() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>创建 draft 版本包</CardTitle>
+        <CardTitle>创建草稿版本包</CardTitle>
         <CardDescription>只创建可编辑草稿，不会进入正式主链路。</CardDescription>
       </CardHeader>
       <CardContent>
@@ -84,84 +76,36 @@ export function CreateDraftForm() {
 }
 
 export function DraftEditForms({
-  release,
-  components
+  release
 }: {
   release: Record<string, unknown>;
-  components: unknown;
 }) {
   const releaseId = Number(release.id ?? 0);
-  const componentRows = asRows(components);
   const [updateState, updateAction, updatePending] = useActionState(updateStrategyReleaseDraftAction, initialStrategyReleaseActionState);
-  const [upsertState, upsertAction, upsertPending] = useActionState(upsertStrategyReleaseItemAction, initialStrategyReleaseActionState);
   return (
-    <div className="grid gap-6 xl:grid-cols-2">
-      <Card>
-        <CardHeader>
-          <CardTitle>编辑 draft 说明</CardTitle>
-          <CardDescription>只有 draft 状态允许原地修改展示信息。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={updateAction} className="space-y-4">
-            <input type="hidden" name="release_id" value={releaseId} />
-            <div className="space-y-2">
-              <Label htmlFor="display_name">展示名称</Label>
-              <Input id="display_name" name="display_name" defaultValue={String(release.display_name ?? "")} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="description">说明</Label>
-              <Input id="description" name="description" defaultValue={String(release.description ?? "")} />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reason">原因</Label>
-              <Input id="reason" name="reason" placeholder="例如：补充版本包说明" />
-            </div>
-            <ConfirmWrite />
-            <Button type="submit" disabled={updatePending}>
-              {updatePending ? "保存中..." : "保存草稿说明"}
-            </Button>
-            <ActionResult state={updateState} />
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>加入或替换组件</CardTitle>
-          <CardDescription>同一组件代码只能保留一个版本；再次选择会替换草稿中的旧版本。</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={upsertAction} className="space-y-4">
-            <input type="hidden" name="release_id" value={releaseId} />
-            <div className="space-y-2">
-              <Label htmlFor="component_selection">组件</Label>
-              <Select id="component_selection" name="component_selection" defaultValue="">
-                <option value="" disabled>
-                  选择已登记组件
-                </option>
-                {componentRows.map((component) => (
-                  <option
-                    key={`${component.component_type}|${component.component_object_id}`}
-                    value={`${component.component_type}|${component.component_object_id}`}
-                  >
-                    {String(component.component_type)} / {String(component.component_code)} / {String(component.version ?? "")}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="reason">原因</Label>
-              <Input id="reason" name="reason" placeholder="例如：加入趋势领域 v1 定义" />
-            </div>
-            <ConfirmWrite />
-            <Button type="submit" disabled={upsertPending}>
-              {upsertPending ? "写入中..." : "写入组件"}
-            </Button>
-            <ActionResult state={upsertState} />
-          </form>
-        </CardContent>
-      </Card>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>编辑草稿说明</CardTitle>
+        <CardDescription>只有草稿状态允许原地修改展示信息；组件内容应从策略组件页生成。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form action={updateAction} className="space-y-4">
+          <input type="hidden" name="release_id" value={releaseId} />
+          <div className="space-y-2">
+            <Label htmlFor="display_name">展示名称</Label>
+            <Input id="display_name" name="display_name" defaultValue={String(release.display_name ?? "")} />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="description">说明</Label>
+            <Input id="description" name="description" defaultValue={String(release.description ?? "")} />
+          </div>
+          <Button type="submit" disabled={updatePending}>
+            {updatePending ? "保存中..." : "保存草稿说明"}
+          </Button>
+          <ActionResult state={updateState} />
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -171,7 +115,7 @@ export function CopyDraftForm({ release }: { release: Record<string, unknown> })
   return (
     <Card>
       <CardHeader>
-        <CardTitle>复制为新 draft</CardTitle>
+        <CardTitle>复制为新草稿</CardTitle>
         <CardDescription>修改已冻结或已批准版本包时，必须复制成新草稿重新走完整流程。</CardDescription>
       </CardHeader>
       <CardContent>
@@ -195,7 +139,7 @@ export function CopyDraftForm({ release }: { release: Record<string, unknown> })
           </div>
           <ConfirmWrite />
           <Button type="submit" variant="outline" disabled={pending}>
-            {pending ? "复制中..." : "复制为 draft"}
+            {pending ? "复制中..." : "复制为草稿"}
           </Button>
           <ActionResult state={state} />
         </form>
@@ -210,7 +154,7 @@ export function RemoveItemForm({ releaseId, itemId }: { releaseId: number; itemI
     <form action={formAction} className="flex min-w-52 items-center gap-2">
       <input type="hidden" name="release_id" value={releaseId} />
       <input type="hidden" name="item_id" value={itemId} />
-      <input type="hidden" name="reason" value="从 draft 移除组件" />
+      <input type="hidden" name="reason" value="从草稿移除组件" />
       <input type="hidden" name="confirm_write" value="on" />
       <Button type="submit" variant="outline" disabled={pending}>
         移除

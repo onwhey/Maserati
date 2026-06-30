@@ -196,6 +196,54 @@ status = active 且 enabled = true 只表示可供版本包选择；
 
 正式版本包选择、批准、启用、切换、回滚和后台研究隔离统一遵守 [StrategyAnalysisRelease](strategy_analysis_release.md)。
 
+### 5.1.1 P0 默认质量规则集
+
+系统必须提供一个可登记入库、可被 StrategyAnalysisRelease 选择的 P0 默认 StrategySignalQualityRuleSet。
+
+P0 默认质量规则集的业务定位：
+
+```text
+只判断 StrategySignal 是否具备进入 DecisionSnapshot 的基础消费条件；
+不重新执行策略；
+不修改 StrategySignal；
+不生成目标仓位；
+不生成订单意图；
+不访问账户、价格、订单、成交、Binance 或 DeepSeek；
+不参与真实交易执行。
+```
+
+P0 默认质量规则集至少覆盖：
+
+```text
+StrategySignal 主字段结构是否完整；
+StrategySignal 与 StrategyDefinition、StrategyRouteDecision、DomainSignalSet、MarketRegimeSnapshot 的版本包身份是否一致；
+实际使用的领域输入是否存在、可用且属于当前领域信号集合；
+聚合快照是否与 StrategySignal 主字段自洽；
+trade_price_condition 是否为合法结构；
+evidence_items 是否覆盖实际使用的领域输入；
+analysis_close_time_utc 是否超过规则集允许的最大时效。
+```
+
+P0 默认质量规则集的放行口径：
+
+```text
+硬合同错误必须阻断进入 DecisionSnapshot；
+时效过旧先作为 warning；
+warning 默认不阻断 DecisionSnapshot；
+是否阻断 warning、是否写 warning 告警、最大时效和连续失败阈值必须进入 RuleSet 指纹；
+改变上述规则必须创建新的 RuleSet 版本，并重新形成 StrategyAnalysisRelease。
+```
+
+P0 默认质量规则集必须通过 management command 幂等登记到 `StrategySignalQualityRuleSet` 表。
+
+建议命令：
+
+```bash
+python manage.py seed_strategy_signal_quality_rule_sets
+```
+
+该命令只负责登记规则定义，不执行质量检查，不生成 StrategySignalQualityResult。
+
 ### 5.2 StrategySignalQualityResult
 
 StrategySignalQualityResult 是 StrategySignal 质量检查的不可变结果。

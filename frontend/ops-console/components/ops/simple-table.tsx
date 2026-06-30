@@ -11,7 +11,7 @@ export function SimpleTable<T extends Record<string, unknown>>({
   columns: Array<{ key: keyof T | string; label: string; render?: (row: T) => ReactNode }>;
 }) {
   return (
-    <div className="overflow-x-auto rounded-xl border bg-white">
+    <div className="overflow-x-auto rounded-xl border bg-card text-card-foreground">
       <Table>
         <TableHeader>
           <TableRow>

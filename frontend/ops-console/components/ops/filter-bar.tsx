@@ -11,7 +11,7 @@ export function FilterBar({
   >;
 }) {
   return (
-    <form className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-white p-4">
+    <form className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border bg-card p-4 text-card-foreground">
       {fields.map((field) => (
         <label key={field.name} className="grid gap-1 text-xs text-muted-foreground">
           {field.label}
