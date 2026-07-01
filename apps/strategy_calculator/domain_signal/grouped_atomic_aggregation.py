@@ -315,9 +315,9 @@ class GroupedAtomicAggregationCalculator:
         major_conflict = self._structure_conflict(active, prefix="major")
         minor_conflict = self._structure_conflict(active, prefix="minor")
         if major_conflict:
-            return {"error_code": "structure_major_state_conflict", "error_message": "大结构互斥状态同时成立"}
+            major_state = "conflicted"
         if minor_conflict:
-            return {"error_code": "structure_minor_state_conflict", "error_message": "小结构互斥状态同时成立"}
+            minor_state = "conflicted"
         direction = "bullish" if major_state == "breakout_up" else "bearish" if major_state == "breakdown_down" else "neutral"
         state_code = self._structure_state_code(major_state=major_state, minor_state=minor_state)
         strength = self._structure_strength(major_state=major_state, minor_state=minor_state, params=params)
@@ -332,9 +332,25 @@ class GroupedAtomicAggregationCalculator:
             "state_code": state_code,
             "strength": strength,
             "agreement_ratio": agreement,
-            "counts": {"major_active": self._count_prefix(active, "structure_major_"), "minor_active": self._count_prefix(active, "structure_minor_")},
-            "state_tags": [f"structure_major_{major_state}", f"structure_minor_{minor_state}"],
-            "summary": {"major_structure": major_state, "minor_structure": minor_state, **zone_summary},
+            "counts": {
+                "major_active": self._count_prefix(active, "structure_major_"),
+                "minor_active": self._count_prefix(active, "structure_minor_"),
+                "major_conflict": major_conflict,
+                "minor_conflict": minor_conflict,
+            },
+            "state_tags": self._structure_state_tags(
+                major_state=major_state,
+                minor_state=minor_state,
+                major_conflict=major_conflict,
+                minor_conflict=minor_conflict,
+            ),
+            "summary": {
+                "major_structure": major_state,
+                "minor_structure": minor_state,
+                "major_conflict": major_conflict,
+                "minor_conflict": minor_conflict,
+                **zone_summary,
+            },
             "evidence_text_zh": (
                 f"structure 领域聚合完成：1d 大结构为 {major_state}，4h 小结构为 {minor_state}，"
                 f"组合状态为 {state_code}。该结论只描述价格结构位置，不输出订单动作。"
@@ -555,6 +571,12 @@ class GroupedAtomicAggregationCalculator:
 
     @staticmethod
     def _structure_state_code(*, major_state: str, minor_state: str) -> str:
+        if major_state == "conflicted" and minor_state == "conflicted":
+            return "structure_conflicted"
+        if major_state == "conflicted":
+            return "structure_major_conflicted"
+        if minor_state == "conflicted":
+            return f"structure_major_{major_state}_minor_conflicted"
         if major_state in {"breakout_up", "breakdown_down"}:
             return f"structure_major_{major_state}"
         if major_state == "near_support" and minor_state == "near_support":
@@ -576,13 +598,15 @@ class GroupedAtomicAggregationCalculator:
         return f"structure_major_{major_state}_minor_{minor_state}"
 
     def _structure_strength(self, *, major_state: str, minor_state: str, params: Mapping[str, Any]) -> Decimal:
-        if major_state in {"breakout_up", "breakdown_down"}:
+        if major_state == "conflicted":
+            strength = Decimal(str(params.get("unclear_strength", "0")))
+        elif major_state in {"breakout_up", "breakdown_down"}:
             strength = Decimal("0.90")
         elif major_state in {"near_support", "near_resistance"}:
             strength = Decimal(str(params.get("clear_state_strength", "0.80")))
         elif major_state in {"range_middle", "lower_half", "upper_half", "range_observed"}:
             strength = Decimal("0.55")
-        elif minor_state not in {"unclear", "range_observed"}:
+        elif minor_state not in {"unclear", "range_observed", "conflicted"}:
             strength = Decimal(str(params.get("minor_only_strength_cap", "0.50")))
         else:
             strength = Decimal(str(params.get("unclear_strength", "0")))
@@ -710,6 +734,8 @@ class GroupedAtomicAggregationCalculator:
 
     @staticmethod
     def _structure_current_zone_position(*, major_state: str, minor_state: str) -> str:
+        if major_state == "conflicted" or minor_state == "conflicted":
+            return "conflicted"
         if major_state in {"near_support", "near_resistance", "breakout_up", "breakdown_down"}:
             return major_state
         if minor_state in {"near_support", "near_resistance", "breakout_up", "breakdown_down"}:
@@ -718,7 +744,7 @@ class GroupedAtomicAggregationCalculator:
 
     @staticmethod
     def _structure_aligned(*, major_state: str, minor_state: str) -> bool:
-        if major_state == minor_state and major_state not in {"unclear", "range_observed"}:
+        if major_state == minor_state and major_state not in {"unclear", "range_observed", "conflicted"}:
             return True
         return (major_state, minor_state) in {
             ("near_support", "lower_half"),
@@ -727,3 +753,18 @@ class GroupedAtomicAggregationCalculator:
             ("breakout_up", "breakout_up"),
             ("breakdown_down", "breakdown_down"),
         }
+
+    @staticmethod
+    def _structure_state_tags(
+        *,
+        major_state: str,
+        minor_state: str,
+        major_conflict: bool,
+        minor_conflict: bool,
+    ) -> list[str]:
+        tags = [f"structure_major_{major_state}", f"structure_minor_{minor_state}"]
+        if major_conflict:
+            tags.append("structure_major_state_conflict_detected")
+        if minor_conflict:
+            tags.append("structure_minor_state_conflict_detected")
+        return tags

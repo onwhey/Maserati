@@ -452,7 +452,7 @@ def test_account_overview_reads_only_ops_display_snapshot(settings) -> None:
     data = response.json()["data"]
     assert data["sync_run"]["id"] == sync_run.id
     assert data["sync_run"]["sync_purpose"] == BinanceSyncPurpose.OPS_DISPLAY
-    assert data["account_snapshot"]["available_balance"] == "900.000000000000000000"
+    assert data["account_snapshot"]["available_balance"] == "900"
     assert data["positions"][0]["symbol"] == settings.ACTIVE_SYMBOL
 
 

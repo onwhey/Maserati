@@ -137,6 +137,80 @@ def test_grouped_atomic_structure_carries_support_and_resistance_zones_in_summar
     assert summary["current_zone_position"] == "near_support"
 
 
+def test_grouped_atomic_structure_records_minor_conflict_as_market_fact() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_lower_half",
+            "structure_minor_near_support",
+            "structure_minor_near_resistance",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_lower_half"),
+                _atomic("structure_minor_near_support"),
+                _atomic("structure_minor_near_resistance"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    assert output.error_code == ""
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_major_lower_half_minor_conflicted"
+    assert output.values["strength"] == Decimal("0.55")
+    assert output.values["agreement_ratio"] == Decimal("0")
+    assert summary["major_structure"] == "lower_half"
+    assert summary["minor_structure"] == "conflicted"
+    assert summary["minor_conflict"] is True
+    assert summary["current_zone_position"] == "conflicted"
+    assert "structure_minor_state_conflict_detected" in output.evidence_items[0]["state_tags"]
+
+
+def test_grouped_atomic_structure_records_major_conflict_as_unclear_fact() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_breakout_up",
+            "structure_major_breakdown_down",
+            "structure_minor_range_middle",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_breakout_up"),
+                _atomic("structure_major_breakdown_down"),
+                _atomic("structure_minor_range_middle"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    assert output.error_code == ""
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_major_conflicted"
+    assert output.values["strength"] == Decimal("0")
+    assert summary["major_structure"] == "conflicted"
+    assert summary["major_conflict"] is True
+    assert summary["current_zone_position"] == "conflicted"
+    assert "structure_major_state_conflict_detected" in output.evidence_items[0]["state_tags"]
+
+
 def test_grouped_atomic_risk_distinguishes_classifiable_risk_from_unreliable_signal() -> None:
     calculator = GroupedAtomicAggregationCalculator()
     params = {

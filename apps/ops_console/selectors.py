@@ -104,11 +104,18 @@ def _dt(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _decimal_text(value: Decimal) -> str:
+    normalized = value.normalize()
+    if normalized.is_zero():
+        return "0"
+    return format(normalized, "f")
+
+
 def _clean(value: Any, *, depth: int = 0) -> Any:
     if depth > 3:
         return "[TRUNCATED]"
     if isinstance(value, Decimal):
-        return str(value)
+        return _decimal_text(value)
     if isinstance(value, datetime):
         return _dt(value)
     if isinstance(value, Mapping):
