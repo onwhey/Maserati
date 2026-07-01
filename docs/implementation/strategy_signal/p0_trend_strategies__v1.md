@@ -192,6 +192,27 @@ trend 已偏多；
 structure 显示压力向上突破。
 ```
 
+## structure conflicted handling
+
+P0 trend-following calculators distinguish major and minor structure conflicts:
+
+```text
+major_structure conflicted:
+  means the 1d primary structure is unclear;
+  long_trend_following / short_trend_following add a blocker;
+  final direction is neutral, and no new trend-following signal is emitted.
+
+minor_structure conflicted:
+  means the 4h structure has overlapping support / resistance or breakout / pullback facts;
+  it does not directly invalidate the 1d primary trend;
+  long_trend_following / short_trend_following add a warning;
+  structure_score is reduced and confidence is discounted by the warning;
+  long_trend_following changes trade_price_condition to wait for support / pullback zones;
+  short_trend_following changes trade_price_condition to wait for resistance / rebound zones.
+```
+
+This logic does not generate order actions and does not read account or price facts. It only changes StrategySignal explanation, scores, confidence, and price conditions.
+
 ## 明确不做
 
 本实现不做：
@@ -222,8 +243,13 @@ resistance_zone = {"lower": "...", "upper": "..."}
 策略会把对应区间写入 `trade_price_condition.acceptable_price_zone`：
 
 ```text
-long_trend_following / short_rebound_pressure 读取 resistance_zone；
-long_pullback_support / short_trend_following 读取 support_zone。
+默认情况下：
+  long_trend_following / short_rebound_pressure 读取 resistance_zone；
+  long_pullback_support / short_trend_following 读取 support_zone。
+
+minor_structure conflicted 时：
+  long_trend_following 改为读取 support_zone，表示不追多、等待回踩；
+  short_trend_following 改为读取 resistance_zone，表示不追空、等待反弹。
 ```
 
 如果结构领域没有给出可用区间，策略保留原有文字型价格条件，不自行回算支撑压力。

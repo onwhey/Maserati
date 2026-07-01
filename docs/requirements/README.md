@@ -87,6 +87,7 @@ fill_sync.md
 pipeline_orchestrator.md
 runtime_guard.md
 review_dataset.md
+strategy_replay.md
 ops_console.md
 ```
 

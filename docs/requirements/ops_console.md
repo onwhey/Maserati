@@ -1448,3 +1448,44 @@ OpsConsole 的最终定位是：
 ```text
 OpsConsole 帮人看清系统、处理需要人工授权的问题和导出复盘数据，但它不是交易执行器，也不是自动修复器。
 ```
+## 38. StrategyReplay 后台入口
+
+OpsConsole 可以提供 StrategyReplay 策略回放页面。
+
+该页面用于后台离线验证策略分析链路，不属于正式自动交易主链路。
+
+OpsConsole 在 StrategyReplay 中可以：
+
+```text
+创建策略回放任务；
+选择 StrategyAnalysisRelease；
+选择 UTC 起止时间；
+按 4h 周期批量回放；
+查看回放任务列表；
+查看每个周期的市场事实、市场环境、策略选择、策略信号和目标仓位语义摘要；
+删除回放任务及其明细；
+重跑同一回放配置。
+```
+
+OpsConsole 在 StrategyReplay 中不得：
+
+```text
+直接写正式策略分析事实表；
+把回放结果写入正式 MarketSnapshot、FeatureSet、AtomicSignalSet、DomainSignalSet、MarketRegimeSnapshot、StrategyRouteDecision、StrategySignal、StrategySignalQualityResult 或 DecisionSnapshot；
+进入 PriceSnapshot、OrderPlan、RiskCheck、ExecutionPreparation、Execution、OrderStatusSync 或 FillSync；
+提交订单；
+撤单；
+修改 ActiveLock；
+修改 StrategyAnalysisRelease；
+自动批准或启用策略版本包；
+修改真实交易运行开关；
+调用 Binance；
+调用大模型；
+发送 Hermes。
+```
+
+StrategyReplay 页面必须调用独立 StrategyReplay service，并写入独立 replay 数据对象。
+
+回放数据允许删除和重跑。删除回放数据不得删除正式业务事实，不得影响真实交易链路。
+
+StrategyReplay 的具体需求以 `docs/requirements/strategy_replay.md` 为准。

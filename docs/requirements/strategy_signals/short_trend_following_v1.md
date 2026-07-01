@@ -373,6 +373,26 @@ structure 未显示关键压力被有效向上突破。
 
 `neutral` 表示本策略不给出有效偏空策略信号，不等于交易指令，也不等于撤单或清仓指令。
 
+### 8.1 structure conflicted 处理
+
+`structure` 领域出现 `conflicted` 时，本策略必须区分大结构冲突和小结构冲突：
+
+```text
+1d major_structure conflicted：
+  表示主结构不清晰；
+  本策略不得继续生成 bearish 策略信号；
+  应输出 neutral，并在 blockers / evidence 中说明主结构冲突。
+
+4h minor_structure conflicted：
+  表示短周期支撑 / 压力或跌破 / 反抽事实重叠；
+  不直接否定 1d 空头趋势；
+  但必须降低 structure_score 和 confidence；
+  不允许追空；
+  trade_price_condition 应偏向压力区、反弹区或趋势结构未修复区域。
+```
+
+该处理仍然只是策略层判断，不得生成卖出、开空、加空、减仓或订单动作。
+
 ## 9. 交易价格条件
 
 本策略可以输出 `trade_price_condition`，用于表达策略认为更合理的价格区域。

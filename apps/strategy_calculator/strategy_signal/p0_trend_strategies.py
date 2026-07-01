@@ -274,36 +274,51 @@ class LongTrendFollowingCalculator(BaseP0TrendStrategyCalculator):
     requirement_document_path = "docs/requirements/strategy_signals/long_trend_following_v1.md"
 
     def _score(self, facts: dict[str, DomainFact]) -> StrategyScore:
+        structure = facts["structure"]
         blockers = _base_blockers(facts)
         if facts["market_context"].direction == "bearish":
             blockers.append("market_context_opposes_long_trend")
         if facts["trend"].direction == "bearish":
             blockers.append("trend_opposes_long_trend")
-        if _has_state(facts["structure"], "breakdown_down"):
+        if _has_state(structure, "breakdown_down"):
             blockers.append("structure_key_support_breakdown")
+        if _major_structure_conflicted(structure):
+            blockers.append("structure_major_conflicted_for_long_trend")
         warnings = _base_warnings(facts)
-        mode = "breakout_continuation" if _has_state(facts["structure"], "breakout_up") else "trend_continuation"
+        if _minor_structure_conflicted(structure):
+            warnings.append("structure_minor_conflicted_wait_support")
+        mode = "breakout_continuation" if _has_state(structure, "breakout_up") else "trend_continuation"
         component_scores = {
             "context": _direction_score(facts["market_context"], "bullish", neutral_score="0.45"),
             "trend": _trend_score(facts["trend"], "bullish"),
             "momentum": _momentum_score(facts["momentum"], "bullish"),
-            "structure": _long_trend_structure_score(facts["structure"]),
+            "structure": _long_trend_structure_score(structure),
             "volatility": _volatility_score(facts["volatility"]),
         }
+        price_condition = _price_condition(
+            condition_type=f"{mode}_price_zone",
+            reference_price_zone="突破压力区、突破后回踩不破区域或趋势结构未破坏区域",
+            acceptable_price_zone="关键结构上方但尚未明显过度延伸",
+            refs=["structure.resistance_zone", "structure.breakout_zone", "structure.trend_structure"],
+            reason_code="long_trend_valid_no_chasing",
+            reason_summary="多头趋势或突破有效，但不允许在明显远离关键结构时追价。",
+        )
+        if _minor_structure_conflicted(structure):
+            price_condition = _price_condition(
+                condition_type="trend_minor_conflict_support_price_zone",
+                reference_price_zone="短周期结构冲突时的支撑区、回踩区或趋势结构未破坏区域",
+                acceptable_price_zone="支撑区或回踩区附近，且大结构仍未被破坏",
+                refs=["structure.support_zone", "structure.current_zone_position"],
+                reason_code="long_trend_minor_conflict_wait_support",
+                reason_summary="1d 多头趋势仍有效，但 4h 小结构存在冲突；策略不追多，只接受支撑或回踩区域附近的价格条件。",
+            )
         return self._base_score(
             internal_mode=mode,
             component_scores=component_scores,
             facts=facts,
             blockers=blockers,
             warnings=warnings,
-            price_condition=_price_condition(
-                condition_type=f"{mode}_price_zone",
-                reference_price_zone="突破压力区、突破后回踩不破区域或趋势结构未破坏区域",
-                acceptable_price_zone="关键结构上方但尚未明显过度延伸",
-                refs=["structure.resistance_zone", "structure.breakout_zone", "structure.trend_structure"],
-                reason_code="long_trend_valid_no_chasing",
-                reason_summary="多头趋势或突破有效，但不允许在明显远离关键结构时追价。",
-            ),
+            price_condition=price_condition,
         )
 
 
@@ -352,36 +367,51 @@ class ShortTrendFollowingCalculator(BaseP0TrendStrategyCalculator):
     requirement_document_path = "docs/requirements/strategy_signals/short_trend_following_v1.md"
 
     def _score(self, facts: dict[str, DomainFact]) -> StrategyScore:
+        structure = facts["structure"]
         blockers = _base_blockers(facts)
         if facts["market_context"].direction == "bullish":
             blockers.append("market_context_opposes_short_trend")
         if facts["trend"].direction == "bullish":
             blockers.append("trend_opposes_short_trend")
-        if _has_state(facts["structure"], "breakout_up"):
+        if _has_state(structure, "breakout_up"):
             blockers.append("structure_key_resistance_breakout")
+        if _major_structure_conflicted(structure):
+            blockers.append("structure_major_conflicted_for_short_trend")
         warnings = _base_warnings(facts)
-        mode = "breakdown_continuation" if _has_state(facts["structure"], "breakdown_down") else "trend_continuation"
+        if _minor_structure_conflicted(structure):
+            warnings.append("structure_minor_conflicted_wait_pressure")
+        mode = "breakdown_continuation" if _has_state(structure, "breakdown_down") else "trend_continuation"
         component_scores = {
             "context": _direction_score(facts["market_context"], "bearish", neutral_score="0.45"),
             "trend": _trend_score(facts["trend"], "bearish"),
             "momentum": _momentum_score(facts["momentum"], "bearish"),
-            "structure": _short_trend_structure_score(facts["structure"]),
+            "structure": _short_trend_structure_score(structure),
             "volatility": _volatility_score(facts["volatility"]),
         }
+        price_condition = _price_condition(
+            condition_type=f"{mode}_price_zone",
+            reference_price_zone="跌破支撑区、跌破后回抽不修复区域或趋势结构未修复区域",
+            acceptable_price_zone="关键结构下方但尚未明显过度延伸",
+            refs=["structure.support_zone", "structure.breakdown_zone", "structure.trend_structure"],
+            reason_code="short_trend_valid_no_chasing",
+            reason_summary="空头趋势或跌破有效，但不允许在明显远离关键结构时追价。",
+        )
+        if _minor_structure_conflicted(structure):
+            price_condition = _price_condition(
+                condition_type="trend_minor_conflict_resistance_price_zone",
+                reference_price_zone="短周期结构冲突时的压力区、反弹区或趋势结构未修复区域",
+                acceptable_price_zone="压力区或反弹区附近，且大结构仍未被修复",
+                refs=["structure.resistance_zone", "structure.current_zone_position"],
+                reason_code="short_trend_minor_conflict_wait_pressure",
+                reason_summary="1d 空头趋势仍有效，但 4h 小结构存在冲突；策略不追空，只接受压力或反弹区域附近的价格条件。",
+            )
         return self._base_score(
             internal_mode=mode,
             component_scores=component_scores,
             facts=facts,
             blockers=blockers,
             warnings=warnings,
-            price_condition=_price_condition(
-                condition_type=f"{mode}_price_zone",
-                reference_price_zone="跌破支撑区、跌破后回抽不修复区域或趋势结构未修复区域",
-                acceptable_price_zone="关键结构下方但尚未明显过度延伸",
-                refs=["structure.support_zone", "structure.breakdown_zone", "structure.trend_structure"],
-                reason_code="short_trend_valid_no_chasing",
-                reason_summary="空头趋势或跌破有效，但不允许在明显远离关键结构时追价。",
-            ),
+            price_condition=price_condition,
         )
 
 
@@ -444,6 +474,14 @@ def _has_state(fact: DomainFact, fragment: str) -> bool:
     return fragment in fact.state_code
 
 
+def _major_structure_conflicted(fact: DomainFact) -> bool:
+    return fact.state_code in {"structure_major_conflicted", "structure_conflicted"}
+
+
+def _minor_structure_conflicted(fact: DomainFact) -> bool:
+    return "minor_conflicted" in fact.state_code
+
+
 def _direction_score(fact: DomainFact, desired: str, *, neutral_score: str = "0.35") -> Decimal:
     if fact.direction == desired:
         return max(fact.strength, Decimal("0.55"))
@@ -492,6 +530,12 @@ def _pullback_momentum_score(fact: DomainFact, *, desired_direction: str) -> Dec
 
 
 def _long_trend_structure_score(fact: DomainFact) -> Decimal:
+    if _major_structure_conflicted(fact):
+        return Decimal("0")
+    if _minor_structure_conflicted(fact):
+        if _has_state(fact, "breakout_up"):
+            return Decimal("0.65")
+        return Decimal("0.45")
     if _has_state(fact, "breakout_up"):
         return Decimal("0.95")
     if _has_state(fact, "breakdown_down"):
@@ -504,6 +548,12 @@ def _long_trend_structure_score(fact: DomainFact) -> Decimal:
 
 
 def _short_trend_structure_score(fact: DomainFact) -> Decimal:
+    if _major_structure_conflicted(fact):
+        return Decimal("0")
+    if _minor_structure_conflicted(fact):
+        if _has_state(fact, "breakdown_down"):
+            return Decimal("0.65")
+        return Decimal("0.45")
     if _has_state(fact, "breakdown_down"):
         return Decimal("0.95")
     if _has_state(fact, "breakout_up"):

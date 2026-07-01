@@ -481,3 +481,39 @@ ReviewDataset → 交易链路
 跨模块协作通过 service、selector、Gateway、OrchestrationBusinessObjectLink 和真实业务外键完成；
 任何绕过 DataQuality、MarketSnapshot、StrategyRouting、DecisionSnapshot、OrderPlan、RiskCheck、ExecutionPreparation 或 Execution 的实现都属于架构违规。
 ```
+## 11. StrategyReplay 模块边界
+
+StrategyReplay 是后台研究与离线回放模块。
+
+边界表：
+
+| 模块 | 输入 | 输出 | 不得承担 |
+|---|---|---|---|
+| StrategyReplay / `strategy_replay.md` | 历史 Kline、StrategyAnalysisRelease、后台 UTC 时间范围、回看窗口 | StrategyReplayRun、StrategyReplayPeriodResult、StrategyReplayStepResult、可选 StrategyReplayExport | 不写正式策略分析事实表，不进入订单链路，不调用 Binance，不调用大模型，不影响真实交易 |
+
+StrategyReplay 与正式链路的关系：
+
+```text
+可以复用 calculator；
+不复用正式结果表；
+不复用正式交易对象；
+不作为正式运行输入；
+不作为 RuntimeGuard 巡检对象；
+不作为 ReviewDataset 默认数据来源。
+```
+
+禁止路径：
+
+```text
+StrategyReplay → 正式 MarketSnapshot；
+StrategyReplay → 正式 FeatureSet；
+StrategyReplay → 正式 StrategySignal；
+StrategyReplay → 正式 DecisionSnapshot；
+StrategyReplay → PriceSnapshot；
+StrategyReplay → OrderPlan；
+StrategyReplay → RiskCheck；
+StrategyReplay → Execution；
+StrategyReplay → ActiveLock；
+StrategyReplay → ReviewDatasetRecord；
+StrategyReplay → 自动批准或启用 StrategyAnalysisRelease。
+```

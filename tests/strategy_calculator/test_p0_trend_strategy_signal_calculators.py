@@ -115,6 +115,42 @@ def test_long_trend_following_neutralizes_high_risk() -> None:
     assert values["conflict_snapshot"]["has_conflict"] is True
 
 
+def test_long_trend_following_keeps_trend_but_waits_support_when_minor_structure_conflicts() -> None:
+    calculator = LongTrendFollowingCalculator()
+    facts = base_long_facts()
+    facts[4] = domain_fact(
+        "structure",
+        "neutral",
+        "structure_major_upper_half_minor_conflicted",
+        value_id=5,
+        strength="0.55",
+        payload_summary={"support_zone": {"lower": "60000", "upper": "61000"}},
+    )
+
+    output = calculator.calculate(calculator_input("long_trend_following", facts))
+    values = thaw_value(output.values)
+
+    assert values["direction"] == StrategySignalDirection.BULLISH
+    assert values["trade_price_condition"]["condition_type"] == "trend_minor_conflict_support_price_zone"
+    assert values["trade_price_condition"]["acceptable_price_zone"] == {"lower": "60000", "upper": "61000"}
+    assert values["trade_price_condition"]["allow_chasing"] is False
+    assert "structure_minor_conflicted_wait_support" in values["conflict_snapshot"]["warnings"]
+    assert values["aggregation_snapshot"]["component_scores"]["structure"] == "0.45"
+
+
+def test_long_trend_following_neutralizes_when_major_structure_conflicts() -> None:
+    calculator = LongTrendFollowingCalculator()
+    facts = base_long_facts()
+    facts[4] = domain_fact("structure", "neutral", "structure_major_conflicted", value_id=5, strength="0")
+
+    output = calculator.calculate(calculator_input("long_trend_following", facts))
+    values = thaw_value(output.values)
+
+    assert values["direction"] == StrategySignalDirection.NEUTRAL
+    assert values["conflict_snapshot"]["has_conflict"] is True
+    assert "structure_major_conflicted_for_long_trend" in values["conflict_snapshot"]["blockers"]
+
+
 def test_long_pullback_support_outputs_bullish_near_support_with_weakening_pullback() -> None:
     calculator = LongPullbackSupportCalculator()
     facts = [
@@ -165,6 +201,42 @@ def test_short_trend_following_outputs_bearish_for_aligned_breakdown() -> None:
 
     assert values["direction"] == StrategySignalDirection.BEARISH
     assert values["trade_price_condition"]["condition_type"] == "breakdown_continuation_price_zone"
+
+
+def test_short_trend_following_keeps_trend_but_waits_pressure_when_minor_structure_conflicts() -> None:
+    calculator = ShortTrendFollowingCalculator()
+    facts = base_short_facts()
+    facts[4] = domain_fact(
+        "structure",
+        "neutral",
+        "structure_major_lower_half_minor_conflicted",
+        value_id=5,
+        strength="0.55",
+        payload_summary={"resistance_zone": {"lower": "63000", "upper": "64000"}},
+    )
+
+    output = calculator.calculate(calculator_input("short_trend_following", facts))
+    values = thaw_value(output.values)
+
+    assert values["direction"] == StrategySignalDirection.BEARISH
+    assert values["trade_price_condition"]["condition_type"] == "trend_minor_conflict_resistance_price_zone"
+    assert values["trade_price_condition"]["acceptable_price_zone"] == {"lower": "63000", "upper": "64000"}
+    assert values["trade_price_condition"]["allow_chasing"] is False
+    assert "structure_minor_conflicted_wait_pressure" in values["conflict_snapshot"]["warnings"]
+    assert values["aggregation_snapshot"]["component_scores"]["structure"] == "0.45"
+
+
+def test_short_trend_following_neutralizes_when_major_structure_conflicts() -> None:
+    calculator = ShortTrendFollowingCalculator()
+    facts = base_short_facts()
+    facts[4] = domain_fact("structure", "neutral", "structure_major_conflicted", value_id=5, strength="0")
+
+    output = calculator.calculate(calculator_input("short_trend_following", facts))
+    values = thaw_value(output.values)
+
+    assert values["direction"] == StrategySignalDirection.NEUTRAL
+    assert values["conflict_snapshot"]["has_conflict"] is True
+    assert "structure_major_conflicted_for_short_trend" in values["conflict_snapshot"]["blockers"]
 
 
 def test_short_rebound_pressure_outputs_bearish_near_resistance_with_weakening_rebound() -> None:

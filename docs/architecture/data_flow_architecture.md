@@ -1207,3 +1207,48 @@ Redis 丢失后核心业务事实仍可从 MySQL 恢复；
 ```text
 任何数据只有在来源明确、版本明确、业务身份明确、状态可消费并已安全落库后，才能进入下一层。
 ```
+## 25. StrategyReplay 数据流
+
+StrategyReplay 是后台研究与策略链路离线验证数据流，不属于正式自动交易数据流。
+
+正式策略分析数据流：
+
+```text
+正式 OrchestrationRun
+→ 正式 MarketSnapshot
+→ 正式 FeatureSet
+→ 正式 AtomicSignalSet
+→ 正式 DomainSignalSet
+→ 正式 MarketRegimeSnapshot
+→ 正式 StrategyRouteDecision
+→ 正式 StrategySignal
+→ 正式 StrategySignalQualityResult
+→ 正式 DecisionSnapshot
+→ 后续真实交易链路
+```
+
+StrategyReplay 数据流：
+
+```text
+OpsConsole / management entry
+→ StrategyReplayService
+→ 读取历史 Kline 和 StrategyAnalysisRelease
+→ 调用共享 calculator 计算 replay 结果
+→ 写入独立 StrategyReplayRun / StrategyReplayPeriodResult / StrategyReplayStepResult
+→ 后台展示或导出 replay 结果
+```
+
+隔离规则：
+
+```text
+StrategyReplay 不写正式 MarketSnapshot / FeatureSet / AtomicSignalSet / DomainSignalSet；
+StrategyReplay 不写正式 MarketRegimeSnapshot / StrategyRouteDecision / StrategySignal / StrategySignalQualityResult / DecisionSnapshot；
+StrategyReplay 不进入 PriceSnapshot / OrderPlan / RiskCheck / ExecutionPreparation / Execution；
+StrategyReplay 不读取或修改 ActiveLock；
+StrategyReplay 不生成 ReviewDatasetRecord；
+正式交易链路不读取 StrategyReplay 表；
+RuntimeGuard 不巡检 StrategyReplay；
+ReviewDataset 默认不读取 StrategyReplay。
+```
+
+StrategyReplay 可以复用正式 calculator，但必须通过 replay 专用 service 和 replay 专用对象保存结果。不得通过给正式 service 增加“绕过写库”或“研究模式”开关来混用正式业务对象。
