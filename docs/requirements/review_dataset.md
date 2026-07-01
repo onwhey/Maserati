@@ -844,37 +844,3 @@ ReviewDataset 明确不负责：
 ```
 
 本模块的第一目标是让复盘数据可信、完整、可下载、可追溯。
-## 22. 与 StrategyReplay 的边界
-
-ReviewDataset 和 StrategyReplay 都服务离线分析，但数据来源和职责不同。
-
-ReviewDataset 整理的是正式系统已经落库的运行事实：
-
-```text
-正式 OrchestrationRun；
-正式策略分析对象；
-正式账户、价格、订单、成交、告警和审计事实。
-```
-
-StrategyReplay 生成的是后台研究和回放结果：
-
-```text
-独立 StrategyReplayRun；
-独立 StrategyReplayPeriodResult；
-独立 replay 摘要和导出文件。
-```
-
-规则：
-
-```text
-ReviewDataset 默认不读取 StrategyReplay 表；
-ReviewDataset 不把 StrategyReplayRun 当作 subject_orchestration_run；
-ReviewDataset 不把 StrategyReplay 结果当作正式策略分析事实；
-StrategyReplay 不生成 ReviewDatasetRecord；
-StrategyReplay 不修改 ReviewDatasetExport；
-StrategyReplay 可以提供自己的导出能力，但该导出不属于 ReviewDataset；
-删除 StrategyReplay 数据不得影响 ReviewDataset；
-删除 ReviewDatasetExport 不得影响 StrategyReplay。
-```
-
-如果后续需要把 StrategyReplay 结果用于离线分析，应新增 StrategyReplayExport 或 BacktestExport；不得复用 ReviewDatasetExport 混合正式运行数据和研究回放数据。

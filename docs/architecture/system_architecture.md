@@ -939,24 +939,3 @@ Redis 不作为核心事实唯一存储。
 ```text
 系统可以自动交易，但架构必须保证每一步都有明确事实来源、清晰模块边界、安全准入、审计记录和复盘依据。
 ```
-## 20. StrategyReplay 架构补充
-
-StrategyReplay 属于后台研究与离线验证能力，不属于正式自动交易主链路。
-
-架构规则：
-
-```text
-StrategyReplay 可以由 OpsConsole 或受控 management entry 触发；
-StrategyReplay 只能读取历史 Kline 和明确 StrategyAnalysisRelease；
-StrategyReplay 可以复用正式 calculator；
-StrategyReplay 必须写独立 replay 数据对象；
-StrategyReplay 不写正式策略分析事实表；
-StrategyReplay 不进入 OrderPlan、RiskCheck、ExecutionPreparation 或 Execution；
-StrategyReplay 不调用 Binance；
-StrategyReplay 不调用大模型；
-StrategyReplay 不影响 RuntimeGuard；
-StrategyReplay 不影响 ReviewDataset；
-StrategyReplay 结果允许删除和重跑。
-```
-
-当前开发期的链路诊断命令不能直接等同于正式 StrategyReplay 后台能力。正式后台接入前，必须先完成独立 replay 数据对象和数据隔离。

@@ -1369,32 +1369,3 @@ StrategyAnalysisRelease 验收通过必须满足：
 不访问 Binance，不调用大模型，不直接执行交易；
 不违反项目交易红线。
 ```
-## 26. 与 StrategyReplay 的关系
-
-StrategyReplay 必须绑定明确的 StrategyAnalysisRelease。
-
-StrategyReplay 可以使用：
-
-```text
-当前已启用的 StrategyAnalysisRelease；
-已批准但尚未启用的 StrategyAnalysisRelease；
-后台明确选择的研究候选版本包。
-```
-
-但无论使用哪一种版本包，StrategyReplay 都不得改变版本包状态。
-
-规则：
-
-```text
-StrategyReplay 不得自动批准 StrategyAnalysisRelease；
-StrategyReplay 不得自动启用 StrategyAnalysisRelease；
-StrategyReplay 不得自动失效 StrategyAnalysisRelease；
-StrategyReplay 不得修改 ReleaseItem；
-StrategyReplay 不得修改当前策略组件工作区；
-StrategyReplay 不得把回放成功当作批准完成；
-StrategyReplay 不得把回放失败当作版本包自动失效。
-```
-
-StrategyReplay 的结果可以作为人工查看材料。若管理员希望把某次回放作为版本包验证证据，必须通过受控后台入口手动登记验证材料、说明原因并写审计记录。
-
-StrategyReplay 结果不得写入正式策略分析事实表。正式运行仍然只消费已批准且已启用的 StrategyAnalysisRelease，并写入正式业务对象。
