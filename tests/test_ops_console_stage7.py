@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -1038,6 +1038,35 @@ def test_strategy_release_viewer_can_list_strategy_backtest_runs_with_return_sum
     assert row["run_key"] == "ops-backtest-list-run"
     assert row["has_result"] is True
     assert row["total_return_pct"] == "0.1234"
+
+
+def test_strategy_backtest_running_completed_without_result_is_diagnosed() -> None:
+    old_time = timezone.now() - timedelta(minutes=20)
+    StrategyBacktestRun.objects.create(
+        run_key="ops-backtest-stale-run",
+        status=StrategyBacktestRunStatus.RUNNING,
+        reason_code="strategy_backtest_running",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0.0002"),
+        leverage=Decimal("2"),
+        business_request_prefix="ops-backtest-stale",
+        trace_id="trace-ops-backtest-stale",
+        trigger_source="test",
+        progress_total_periods=10,
+        progress_completed_periods=10,
+        progress_updated_at_utc=old_time,
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.get(reverse("ops_console:strategy_backtest_runs"))
+
+    assert response.status_code == 200
+    row = response.json()["data"]["items"][0]
+    assert row["status"] == "running"
+    assert row["diagnostic_status"] == "running_completed_without_result"
+    assert "结果摘要没有写入" in row["diagnostic_message_zh"]
 
 
 def test_strategy_release_viewer_can_list_strategy_backtest_period_results() -> None:

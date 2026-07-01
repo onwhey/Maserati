@@ -12,6 +12,8 @@ const statusLabelMap: Record<string, string> = {
   disabled: "已禁用",
   queued: "排队中",
   running: "运行中",
+  running_completed_without_result: "疑似卡住",
+  running_progress_stale: "疑似卡住",
   succeeded: "已完成",
   blocked: "已阻断",
   failed: "失败",
@@ -21,11 +23,11 @@ const statusLabelMap: Record<string, string> = {
 
 function toneFor(value: unknown) {
   const text = String(value ?? "").toLowerCase();
+  if (["blocked", "unknown", "warning", "pending", "waiting", "open", "queued", "running", "stale"].some((item) => text.includes(item))) {
+    return "amber" as const;
+  }
   if (["succeeded", "completed", "allow", "allowed", "calculated", "sent", "filled", "true", "ok"].some((item) => text.includes(item))) {
     return "green" as const;
-  }
-  if (["blocked", "unknown", "warning", "pending", "waiting", "open", "queued", "running"].some((item) => text.includes(item))) {
-    return "amber" as const;
   }
   if (["failed", "denied", "rejected", "error", "critical", "false"].some((item) => text.includes(item))) {
     return "red" as const;

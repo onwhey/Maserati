@@ -39,7 +39,8 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
   const periodRows = asRows(periodsResult.data.items);
   const periodPagination = periodsResult.data.pagination;
   const selectedStatus = String(selectedRun.status ?? "");
-  const shouldRefresh = selectedStatus === "queued" || selectedStatus === "running";
+  const diagnosticStatus = String(selectedRun.diagnostic_status ?? "");
+  const shouldRefresh = !diagnosticStatus && (selectedStatus === "queued" || selectedStatus === "running");
   const progressCompleted = Number(selectedRun.progress_completed_periods ?? 0);
   const progressTotal = Number(selectedRun.progress_total_periods ?? 0);
   const progressPercent = progressTotal > 0 ? Math.min(100, Math.round((progressCompleted / progressTotal) * 100)) : 0;
@@ -65,18 +66,13 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
           </CardHeader>
           <CardContent className="space-y-5">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <Metric label="运行 ID" value={selectedRun.id} />
-              <Metric label="状态" value={<StatusBadge value={selectedRun.status} />} />
+              <Metric label="状态" value={<StatusBadge value={diagnosticStatus || selectedRun.status} />} />
               <Metric label="原因" value={reasonLabel(selectedRun.reason_code)} />
               <Metric label="任务 ID" value={compactId(selectedRun.celery_task_id)} />
               <Metric label="进度" value={progressTotal > 0 ? `${progressCompleted} / ${progressTotal}（${progressPercent}%）` : "—"} />
-              <Metric label="当前处理边界" value={formatUtc(selectedRun.progress_current_analysis_close_time_utc)} />
-              <Metric label="进度更新时间" value={formatUtc(selectedRun.progress_updated_at_utc)} />
-              <Metric label="创建时间" value={formatUtc(selectedRun.created_at_utc)} />
-              <Metric label="开始边界" value={formatUtc(selectedRun.start_analysis_close_time_utc)} />
-              <Metric label="结束边界" value={formatUtc(selectedRun.end_analysis_close_time_utc)} />
-              <Metric label="开始运行" value={formatUtc(selectedRun.started_at_utc)} />
-              <Metric label="结束运行" value={formatUtc(selectedRun.finished_at_utc)} />
+              <Metric label="当前处理边界" value={formatUtcDate(selectedRun.progress_current_analysis_close_time_utc)} />
+              <Metric label="开始边界" value={formatUtcDate(selectedRun.start_analysis_close_time_utc)} />
+              <Metric label="结束边界" value={formatUtcDate(selectedRun.end_analysis_close_time_utc)} />
             </div>
 
             {progressTotal > 0 ? (
@@ -93,6 +89,12 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
             {shouldRefresh ? (
               <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
                 后台任务还没结束，本页会每 5 秒自动刷新；你也可以直接刷新页面，任务状态不会丢。
+              </div>
+            ) : null}
+
+            {diagnosticStatus ? (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+                {displayValue(selectedRun.diagnostic_message_zh)}
               </div>
             ) : null}
 
@@ -201,7 +203,7 @@ function BacktestPeriodTable({
           { key: "period_index", label: "序号" },
           { key: "analysis_close_time_utc", label: "UTC 周期", render: (row) => formatUtc(row.analysis_close_time_utc) },
           { key: "status", label: "状态", render: (row) => statusText(row.status) },
-          { key: "is_liquidated", label: "爆仓", render: (row) => (row.is_liquidated ? "是" : "否") },
+          { key: "period_return_pct", label: "周期收益", render: (row) => <ReturnPercent value={row.period_return_pct} /> },
           { key: "selected_strategy", label: "策略", render: (row) => strategyLabel(row.selected_strategy) },
           { key: "signal_direction", label: "方向", render: (row) => directionLabel(row.signal_direction) },
           { key: "previous_position_ratio", label: "调仓前", render: (row) => formatPosition(row.previous_position_ratio) },
@@ -215,7 +217,6 @@ function BacktestPeriodTable({
           { key: "close_price", label: "收盘价", render: (row) => formatDecimal(row.close_price, 2) },
           { key: "liquidation_price", label: "估算强平价", render: (row) => formatDecimal(row.liquidation_price, 2) },
           { key: "kline_return_pct", label: "K线涨跌", render: (row) => formatPercent(row.kline_return_pct) },
-          { key: "period_return_pct", label: "周期收益", render: (row) => formatPercent(row.period_return_pct) },
           { key: "fee", label: "手续费", render: (row) => formatDecimal(row.fee, 4) },
           { key: "equity", label: "权益", render: (row) => formatDecimal(row.equity, 2) },
           { key: "reason_code", label: "原因", render: (row) => reasonLabel(row.reason_code) },
@@ -303,6 +304,14 @@ function formatDecimal(value: unknown, digits = 2): string {
   });
 }
 
+function formatUtcDate(value: unknown): string {
+  const text = String(value ?? "");
+  if (!text) {
+    return "—";
+  }
+  return text.slice(0, 10) || "—";
+}
+
 function formatPercent(value: unknown): string {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -312,6 +321,24 @@ function formatPercent(value: unknown): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })}%`;
+}
+
+function ReturnPercent({ value }: { value: unknown }) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  const text = `${(number * 100).toLocaleString("zh-CN", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}%`;
+  if (number > 0) {
+    return <span className="font-medium text-emerald-600 dark:text-emerald-400">+{text}</span>;
+  }
+  if (number < 0) {
+    return <span className="font-medium text-red-600 dark:text-red-400">{text}</span>;
+  }
+  return <span>{text}</span>;
 }
 
 function formatPosition(value: unknown): string {
@@ -362,6 +389,8 @@ function reasonLabel(value: unknown): string {
     strategy_backtest_completed_liquidated: "回测完成，期间发生爆仓",
     strategy_backtest_completed_with_blocked_period: "回测完成，但存在无法模拟周期",
     strategy_backtest_running: "正在运行",
+    running_completed_without_result: "周期完成但结果未写入，疑似卡住",
+    running_progress_stale: "长时间没有进度更新，疑似卡住",
     strategy_backtest_queued: "等待后台执行",
     strategy_backtest_run_created: "已创建后台任务",
     strategy_route_decision_created: "没有目标仓位或未选择策略",

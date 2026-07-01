@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Eye } from "lucide-react";
 
 import { ApiError } from "@/components/ops/api-error";
 import { PageHeader } from "@/components/ops/page-header";
@@ -70,7 +71,15 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
                     </Link>
                   )
                 },
-                { key: "status", label: "状态", render: (row) => <StatusBadge value={row.status} /> },
+                {
+                  key: "status",
+                  label: "状态",
+                  render: (row) => (
+                    <div title={String(row.diagnostic_message_zh ?? "") || undefined}>
+                      <StatusBadge value={displayStatus(row)} />
+                    </div>
+                  )
+                },
                 { key: "progress", label: "进度", render: (row) => progressText(row) },
                 { key: "release_display_name", label: "版本包" },
                 { key: "total_return_pct", label: "本次收益", render: (row) => <ReturnPercent value={row.total_return_pct} /> },
@@ -80,8 +89,12 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
                   key: "detail",
                   label: "操作",
                   render: (row) => (
-                    <Link className="whitespace-nowrap underline" href={`/strategy-backtests/${row.id}`}>
-                      查看详情
+                    <Link
+                      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-muted"
+                      href={`/strategy-backtests/${row.id}`}
+                    >
+                      <Eye className="h-4 w-4" />
+                      详情
                     </Link>
                   )
                 },
@@ -102,6 +115,10 @@ function progressText(row: Record<string, unknown>): string {
   }
   const percent = Math.min(100, Math.round((completed / total) * 100));
   return `${completed}/${total}（${percent}%）`;
+}
+
+function displayStatus(row: Record<string, unknown>): unknown {
+  return row.diagnostic_status || row.status;
 }
 
 function formatUtcDate(value: unknown): string {

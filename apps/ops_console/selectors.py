@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Q, QuerySet
+from django.utils import timezone
 
 from apps.alerts.models import AlertEvent, NotificationDeliveryAttempt, NotificationSuppression
 from apps.audit.models import AuditRecord
@@ -54,6 +55,7 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisReleaseValidationEvidence,
     StrategyBacktestPeriodResult,
     StrategyBacktestRun,
+    StrategyBacktestRunStatus,
     StrategyAnalysisWorkspace,
     StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
@@ -65,6 +67,7 @@ from apps.strategy_analysis.models import (
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
+BACKTEST_RUNNING_STALE_AFTER = timedelta(minutes=10)
 
 STRATEGY_COMPONENT_MODELS: dict[str, type[Any]] = {
     ReleaseItemComponentType.FEATURE_DEFINITION: FeatureDefinition,
@@ -807,7 +810,7 @@ def get_strategy_release_detail(release_id: int) -> dict[str, Any]:
 
 
 def _strategy_backtest_run_row(run: StrategyBacktestRun) -> dict[str, Any]:
-    return _model_summary(
+    row = _model_summary(
         run,
         (
             "id",
@@ -843,6 +846,29 @@ def _strategy_backtest_run_row(run: StrategyBacktestRun) -> dict[str, Any]:
             "updated_at_utc",
         ),
     ) or {}
+    diagnostic = _strategy_backtest_run_diagnostic(run)
+    row["diagnostic_status"] = diagnostic["status"]
+    row["diagnostic_message_zh"] = diagnostic["message_zh"]
+    return row
+
+
+def _strategy_backtest_run_diagnostic(run: StrategyBacktestRun) -> dict[str, str]:
+    if run.status != StrategyBacktestRunStatus.RUNNING:
+        return {"status": "", "message_zh": ""}
+    last_progress_time = run.progress_updated_at_utc or run.updated_at_utc or run.started_at_utc
+    if not last_progress_time:
+        return {"status": "", "message_zh": ""}
+    if timezone.now() - last_progress_time < BACKTEST_RUNNING_STALE_AFTER:
+        return {"status": "", "message_zh": ""}
+    if run.progress_total_periods > 0 and run.progress_completed_periods >= run.progress_total_periods and not run.result_summary:
+        return {
+            "status": "running_completed_without_result",
+            "message_zh": "回测周期进度已经完成，但结果摘要没有写入，疑似后台任务收尾失败。",
+        }
+    return {
+        "status": "running_progress_stale",
+        "message_zh": "回测任务长时间没有进度更新，疑似后台任务已卡住或 Celery worker 已停止。",
+    }
 
 
 def list_strategy_backtest_runs(params: Mapping[str, Any]) -> dict[str, Any]:
