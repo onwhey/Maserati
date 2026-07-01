@@ -52,6 +52,8 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
     StrategyAnalysisReleaseValidationEvidence,
+    StrategyBacktestPeriodResult,
+    StrategyBacktestRun,
     StrategyAnalysisWorkspace,
     StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
@@ -802,6 +804,137 @@ def get_strategy_release_detail(release_id: int) -> dict[str, Any]:
             ).order_by("-event_time_utc", "-id")[:20]
         ],
     }
+
+
+def _strategy_backtest_run_row(run: StrategyBacktestRun) -> dict[str, Any]:
+    return _model_summary(
+        run,
+        (
+            "id",
+            "run_key",
+            "status",
+            "reason_code",
+            "message",
+            "strategy_analysis_release_id",
+            "strategy_analysis_release_hash",
+            "start_analysis_close_time_utc",
+            "end_analysis_close_time_utc",
+            "lookback_4h_count",
+            "lookback_1d_count",
+            "initial_equity",
+            "fee_rate",
+            "leverage",
+            "no_target_policy",
+            "business_request_prefix",
+            "requested_by",
+            "celery_task_id",
+            "progress_total_periods",
+            "progress_completed_periods",
+            "progress_current_analysis_close_time_utc",
+            "progress_last_status",
+            "progress_last_reason_code",
+            "progress_updated_at_utc",
+            "error_message",
+            "trace_id",
+            "trigger_source",
+            "started_at_utc",
+            "finished_at_utc",
+            "created_at_utc",
+            "updated_at_utc",
+        ),
+    ) or {}
+
+
+def list_strategy_backtest_runs(params: Mapping[str, Any]) -> dict[str, Any]:
+    queryset = StrategyBacktestRun.objects.select_related("strategy_analysis_release").order_by("-created_at_utc", "-id")
+    if status := params.get("status"):
+        queryset = queryset.filter(status=status)
+    if release_id := params.get("strategy_analysis_release_id"):
+        try:
+            queryset = queryset.filter(strategy_analysis_release_id=int(release_id))
+        except (TypeError, ValueError):
+            queryset = queryset.none()
+    rows, pagination = _paginated(queryset, params)
+    return {
+        "items": [
+            {
+                **_strategy_backtest_run_row(run),
+                "release_display_name": getattr(run.strategy_analysis_release, "display_name", "") if run.strategy_analysis_release_id else "",
+                "has_result": bool(run.result_summary),
+                "total_return_pct": _clean((run.result_summary or {}).get("total_return_pct")),
+            }
+            for run in rows
+        ],
+        "pagination": pagination,
+    }
+
+
+def get_strategy_backtest_run_detail(run_id: int) -> dict[str, Any]:
+    try:
+        run = StrategyBacktestRun.objects.select_related("strategy_analysis_release").get(id=run_id)
+    except ObjectDoesNotExist as exc:
+        raise OpsConsoleObjectNotFound(f"StrategyBacktestRun {run_id} not found") from exc
+    release = run.strategy_analysis_release
+    return {
+        "run": {
+            **_strategy_backtest_run_row(run),
+            "release_display_name": getattr(release, "display_name", "") if release else "",
+            "release_code": getattr(release, "release_code", "") if release else "",
+        },
+        "result_summary": _clean(run.result_summary),
+    }
+
+
+def _strategy_backtest_period_result_row(result: StrategyBacktestPeriodResult) -> dict[str, Any]:
+    return _model_summary(
+        result,
+        (
+            "id",
+            "period_index",
+            "analysis_close_time_utc",
+            "status",
+            "reason_code",
+            "market_regime",
+            "selected_strategy",
+            "signal_direction",
+            "previous_position_ratio",
+            "target_position_ratio",
+            "position_change_ratio",
+            "position_change_notional",
+            "position_ratio",
+            "leverage",
+            "effective_position_ratio",
+            "effective_position_change_ratio",
+            "effective_position_notional",
+            "is_liquidated",
+            "liquidation_price",
+            "liquidation_reason_code",
+            "simulated_execution_price",
+            "close_price",
+            "kline_return_pct",
+            "period_return_pct",
+            "fee",
+            "equity",
+            "drawdown_pct",
+            "created_at_utc",
+        ),
+    ) or {}
+
+
+def list_strategy_backtest_period_results(run_id: int, params: Mapping[str, Any]) -> dict[str, Any]:
+    if not StrategyBacktestRun.objects.filter(id=run_id).exists():
+        raise OpsConsoleObjectNotFound(f"StrategyBacktestRun {run_id} not found")
+    queryset = StrategyBacktestPeriodResult.objects.filter(strategy_backtest_run_id=run_id).order_by("period_index")
+    if status := params.get("status"):
+        queryset = queryset.filter(status=status)
+    if strategy := params.get("selected_strategy"):
+        queryset = queryset.filter(selected_strategy=strategy)
+    limit = _int_param(params, "limit", default=300, max_value=1000)
+    offset = _int_param(params, "offset", default=0, min_value=0, max_value=100000)
+    total = queryset.count()
+    rows = list(queryset[offset : offset + limit])
+    pagination = {"limit": limit, "offset": offset, "total": total}
+    return {"items": [_strategy_backtest_period_result_row(result) for result in rows], "pagination": pagination}
 
 
 def _definition_enabled_filter(model: type[Any]) -> QuerySet[Any]:

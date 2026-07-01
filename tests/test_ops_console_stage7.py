@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -26,6 +27,7 @@ from apps.binance_account_sync.models import (
 )
 from apps.execution.models import OrderSubmissionAttempt
 from apps.fill_sync.models import FillSyncResult, OrderFillSummary
+from apps.foundation.results import ResultStatus, ServiceResult
 from apps.orchestration.models import (
     OrchestrationBusinessObjectLink,
     OrchestrationObjectRole,
@@ -48,6 +50,9 @@ from apps.strategy_analysis.models import (
     FeatureDefinition,
     ReleaseItemComponentType,
     StrategyAnalysisReleaseItem,
+    StrategyBacktestPeriodResult,
+    StrategyBacktestRun,
+    StrategyBacktestRunStatus,
 )
 from apps.strategy_calculator.utils import stable_hash
 from tests.test_execution_order_submission_stage5 import _prepared, _submit
@@ -951,3 +956,151 @@ def test_strategy_release_readonly_cannot_create_draft() -> None:
     )
 
     assert response.status_code == 403
+
+
+def test_strategy_release_viewer_can_create_strategy_backtest_run(monkeypatch) -> None:
+    captured = {}
+
+    def fake_create_strategy_backtest_run(**kwargs):
+        captured.update(kwargs)
+        return ServiceResult(
+            ResultStatus.SUCCEEDED,
+            "strategy_backtest_run_created",
+            "ok",
+            kwargs["trace_id"],
+            kwargs["trigger_source"],
+            {
+                "strategy_backtest_run_id": 123,
+                "status": "queued",
+                "celery_task_id": "celery-test-id",
+            },
+        )
+
+    monkeypatch.setattr("apps.ops_console.views.create_strategy_backtest_run", fake_create_strategy_backtest_run)
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.post(
+        reverse("ops_console:strategy_backtest_run_create"),
+        data=json.dumps(
+            {
+                "strategy_analysis_release_id": 10,
+                "strategy_analysis_release_hash": "release-hash",
+                "start_analysis_close_time_utc": "2026-02-20T00:00:00+00:00",
+                "end_analysis_close_time_utc": "2026-02-20T04:00:00+00:00",
+                "initial_equity": "1000",
+                "fee_rate": "0.0002",
+                "leverage": "3",
+                "lookback_4h_count": 500,
+                "lookback_1d_count": 500,
+                "no_target_policy": "hold",
+            }
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reason_code"] == "strategy_backtest_run_created"
+    assert payload["data"]["strategy_backtest_run_id"] == 123
+    assert payload["data"]["status"] == "queued"
+    assert captured["strategy_analysis_release_id"] == 10
+    assert captured["strategy_analysis_release_hash"] == "release-hash"
+    assert captured["start_analysis_close_time_utc"] == datetime(2026, 2, 20, 0, tzinfo=UTC)
+    assert captured["end_analysis_close_time_utc"] == datetime(2026, 2, 20, 4, tzinfo=UTC)
+    assert captured["initial_equity"] == Decimal("1000")
+    assert captured["fee_rate"] == Decimal("0.0002")
+    assert captured["leverage"] == Decimal("3")
+    assert captured["requested_by"].startswith("user-strategy_release_viewer")
+    assert captured["trigger_source"] == "ops_console_strategy_backtest"
+
+
+def test_strategy_release_viewer_can_list_strategy_backtest_runs_with_return_summary() -> None:
+    StrategyBacktestRun.objects.create(
+        run_key="ops-backtest-list-run",
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+        reason_code="strategy_backtest_completed",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0.0002"),
+        leverage=Decimal("2"),
+        business_request_prefix="ops-backtest-list",
+        result_summary={"total_return_pct": "0.1234"},
+        trace_id="trace-ops-backtest-list",
+        trigger_source="test",
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.get(reverse("ops_console:strategy_backtest_runs"))
+
+    assert response.status_code == 200
+    row = response.json()["data"]["items"][0]
+    assert row["run_key"] == "ops-backtest-list-run"
+    assert row["has_result"] is True
+    assert row["total_return_pct"] == "0.1234"
+
+
+def test_strategy_release_viewer_can_list_strategy_backtest_period_results() -> None:
+    run = StrategyBacktestRun.objects.create(
+        run_key="ops-backtest-period-run",
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+        reason_code="strategy_backtest_completed",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0.0002"),
+        leverage=Decimal("2"),
+        business_request_prefix="ops-backtest-period",
+        trace_id="trace-ops-backtest-period",
+        trigger_source="test",
+    )
+    StrategyBacktestPeriodResult.objects.create(
+        strategy_backtest_run=run,
+        period_index=1,
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        status="completed",
+        reason_code="decision_snapshot_created",
+        market_regime="bearish_trend_continuation",
+        selected_strategy="short_trend_following",
+        signal_direction="bearish",
+        previous_position_ratio=Decimal("0"),
+        target_position_ratio=Decimal("-0.5"),
+        position_change_ratio=Decimal("-0.5"),
+        position_change_notional=Decimal("-1000"),
+        position_ratio=Decimal("-0.5"),
+        leverage=Decimal("2"),
+        effective_position_ratio=Decimal("-1"),
+        effective_position_change_ratio=Decimal("-1"),
+        effective_position_notional=Decimal("-1000"),
+        is_liquidated=True,
+        liquidation_price=Decimal("110"),
+        liquidation_reason_code="short_liquidation_intraperiod",
+        simulated_execution_price=Decimal("100"),
+        close_price=Decimal("90"),
+        kline_return_pct=Decimal("-0.1"),
+        period_return_pct=Decimal("0.05"),
+        fee=Decimal("0.2"),
+        equity=Decimal("1049.8"),
+        drawdown_pct=Decimal("0"),
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.get(reverse("ops_console:strategy_backtest_period_results", kwargs={"run_id": run.id}))
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"]["pagination"]["total"] == 1
+    row = payload["data"]["items"][0]
+    assert row["selected_strategy"] == "short_trend_following"
+    assert row["previous_position_ratio"] == "0"
+    assert row["target_position_ratio"] == "-0.5"
+    assert row["position_change_ratio"] == "-0.5"
+    assert row["position_change_notional"] == "-1000"
+    assert row["leverage"] == "2"
+    assert row["effective_position_ratio"] == "-1"
+    assert row["effective_position_change_ratio"] == "-1"
+    assert row["effective_position_notional"] == "-1000"
+    assert row["is_liquidated"] is True
+    assert row["liquidation_price"] == "110"
+    assert row["liquidation_reason_code"] == "short_liquidation_intraperiod"
+    assert row["simulated_execution_price"] == "100"

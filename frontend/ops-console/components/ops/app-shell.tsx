@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   ClipboardList,
   Database,
   FileText,
@@ -26,6 +27,7 @@ const navigation = [
   { href: "/account", label: "账户", icon: Database },
   { href: "/strategy-components", label: "策略组件", icon: ListChecks },
   { href: "/strategy-releases", label: "策略发布", icon: GitBranch },
+  { href: "/strategy-backtests", label: "策略回测", icon: BarChart3 },
   { href: "/review-datasets", label: "复盘数据集", icon: Database },
   { href: "/runtime-guard", label: "运行巡检", icon: AlertTriangle },
   { href: "/alerts", label: "告警", icon: FileText },
@@ -115,7 +117,7 @@ export function AppShell({
             })}
           </div>
         </div>
-        <div className="mx-auto max-w-7xl p-5 lg:p-8">{children}</div>
+        <div className="mx-auto max-w-[1680px] p-5 lg:p-8">{children}</div>
       </main>
     </div>
   );

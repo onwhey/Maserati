@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from collections.abc import Callable
 from typing import Any
 
 from apps.foundation.context import ensure_context
@@ -57,6 +58,7 @@ def replay_strategy_analysis_chain(
     business_request_prefix: str = "strategy-analysis-replay",
     trace_id: str | None = None,
     trigger_source: str = "management_command",
+    progress_callback: Callable[[int, int, dict[str, Any]], None] | None = None,
 ) -> ServiceResult:
     """批量回放策略分析链路，只到 DecisionSnapshot，不进入订单链路。"""
 
@@ -80,19 +82,21 @@ def replay_strategy_analysis_chain(
 
     hashes = _release_hashes(release)
     period_results: list[dict[str, Any]] = []
-    for analysis_close_time in analysis_close_times:
-        period_results.append(
-            _replay_one_period(
-                analysis_close_time=ensure_utc(analysis_close_time),
-                release=release,
-                hashes=hashes,
-                lookback_4h_count=lookback_4h_count,
-                lookback_1d_count=lookback_1d_count,
-                business_request_prefix=business_request_prefix,
-                trace_id=context.trace_id,
-                trigger_source=trigger_source,
-            )
+    total_periods = len(analysis_close_times)
+    for index, analysis_close_time in enumerate(analysis_close_times, start=1):
+        period_result = _replay_one_period(
+            analysis_close_time=ensure_utc(analysis_close_time),
+            release=release,
+            hashes=hashes,
+            lookback_4h_count=lookback_4h_count,
+            lookback_1d_count=lookback_1d_count,
+            business_request_prefix=business_request_prefix,
+            trace_id=context.trace_id,
+            trigger_source=trigger_source,
         )
+        period_results.append(period_result)
+        if progress_callback is not None:
+            progress_callback(index, total_periods, period_result)
 
     all_completed = all(result["status"] in TERMINAL_SUCCESS_STATUSES for result in period_results)
     return ServiceResult(

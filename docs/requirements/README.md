@@ -60,6 +60,7 @@ strategy_signals.md
 strategy_signal_quality.md
 strategy_calculator.md
 strategy_analysis_release.md
+strategy_backtest.md
 decision_snapshot.md
 ```
 

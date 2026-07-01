@@ -352,6 +352,18 @@ StrategyRouting service；
 StrategySignal service；
 DecisionPolicy service；
 后台研究 / 回测 service。
+
+## 11. StrategyBacktest 模块边界
+
+StrategyBacktest 是测试环境策略收益回放模块。
+
+| 模块 | 输入 | 输出 | 禁止 |
+| --- | --- | --- | --- |
+| StrategyBacktest | 历史 Kline、StrategyAnalysisRelease、UTC 时间范围、初始资金、手续费、回测杠杆倍数 | StrategyBacktestRun 状态、回测 JSON 摘要、StrategyBacktestPeriodResult 周期模拟调仓明细和估算爆仓信息 | 不进入订单链路，不提交订单，不写 TradeFill，不影响 ActiveLock，不修改策略版本包，不修改交易所真实杠杆 |
+
+StrategyBacktest 可以复用现有策略分析链路取得历史目标仓位语义，但不得把收益结果写回正式策略分析对象。
+
+当前 P0 只允许非 production 环境运行。
 ```
 
 禁止：

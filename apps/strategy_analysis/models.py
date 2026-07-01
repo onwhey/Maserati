@@ -47,6 +47,14 @@ class AnalysisObjectStatus(models.TextChoices):
     UNKNOWN = "unknown", "未知"
 
 
+class StrategyBacktestRunStatus(models.TextChoices):
+    QUEUED = "queued", "排队中"
+    RUNNING = "running", "运行中"
+    SUCCEEDED = "succeeded", "已完成"
+    BLOCKED = "blocked", "已阻断"
+    FAILED = "failed", "失败"
+
+
 class FeatureValueType(models.TextChoices):
     DECIMAL = "decimal", "数值"
     BOOLEAN = "boolean", "布尔"
@@ -246,6 +254,107 @@ class StrategyAnalysisReleaseActivation(models.Model):
     operated_at_utc = models.DateTimeField("操作 UTC 时间", default=timezone.now)
     trace_id = models.CharField("追踪 ID", max_length=80)
     trigger_source = models.CharField("触发来源", max_length=80)
+
+
+class StrategyBacktestRun(models.Model):
+    run_key = models.CharField("回测运行键", max_length=191, unique=True)
+    status = models.CharField(
+        "状态",
+        max_length=40,
+        choices=StrategyBacktestRunStatus.choices,
+        default=StrategyBacktestRunStatus.QUEUED,
+        db_index=True,
+    )
+    reason_code = models.CharField("原因代码", max_length=120, blank=True)
+    message = models.CharField("摘要", max_length=500, blank=True)
+    strategy_analysis_release = models.ForeignKey(
+        StrategyAnalysisRelease,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="backtest_runs",
+    )
+    strategy_analysis_release_hash = models.CharField("策略版本包指纹", max_length=80, blank=True)
+    start_analysis_close_time_utc = models.DateTimeField("开始分析边界 UTC")
+    end_analysis_close_time_utc = models.DateTimeField("结束分析边界 UTC")
+    lookback_4h_count = models.PositiveIntegerField("4h 回看数量", default=500)
+    lookback_1d_count = models.PositiveIntegerField("1d 回看数量", default=500)
+    initial_equity = models.DecimalField("初始资金", max_digits=38, decimal_places=18)
+    fee_rate = models.DecimalField("手续费率", max_digits=20, decimal_places=18)
+    leverage = models.DecimalField("回测杠杆倍数", max_digits=30, decimal_places=18, default=1)
+    no_target_policy = models.CharField("无目标仓位策略", max_length=40, default="hold")
+    business_request_prefix = models.CharField("业务请求前缀", max_length=120)
+    requested_by = models.CharField("请求人", max_length=120, blank=True)
+    celery_task_id = models.CharField("Celery 任务 ID", max_length=120, blank=True)
+    progress_total_periods = models.PositiveIntegerField("进度总周期数", default=0)
+    progress_completed_periods = models.PositiveIntegerField("进度已完成周期数", default=0)
+    progress_current_analysis_close_time_utc = models.DateTimeField("当前处理分析边界 UTC", null=True, blank=True)
+    progress_last_status = models.CharField("最近周期状态", max_length=80, blank=True)
+    progress_last_reason_code = models.CharField("最近周期原因代码", max_length=120, blank=True)
+    progress_updated_at_utc = models.DateTimeField("进度更新 UTC 时间", null=True, blank=True)
+    result_summary = models.JSONField("结果摘要", default=dict, blank=True)
+    error_message = models.TextField("错误摘要", blank=True)
+    trace_id = models.CharField("追踪 ID", max_length=80)
+    trigger_source = models.CharField("触发来源", max_length=80)
+    started_at_utc = models.DateTimeField("开始 UTC 时间", null=True, blank=True)
+    finished_at_utc = models.DateTimeField("结束 UTC 时间", null=True, blank=True)
+    created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
+    updated_at_utc = models.DateTimeField("更新 UTC 时间", auto_now=True)
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["status", "created_at_utc"]),
+            models.Index(fields=["strategy_analysis_release", "created_at_utc"]),
+            models.Index(fields=["trace_id"]),
+        ]
+
+
+class StrategyBacktestPeriodResult(models.Model):
+    strategy_backtest_run = models.ForeignKey(
+        StrategyBacktestRun,
+        on_delete=models.CASCADE,
+        related_name="period_results",
+    )
+    period_index = models.PositiveIntegerField("回测周期序号")
+    analysis_close_time_utc = models.DateTimeField("分析边界 UTC")
+    status = models.CharField("周期状态", max_length=80)
+    reason_code = models.CharField("原因代码", max_length=120, blank=True)
+    market_regime = models.CharField("市场环境", max_length=120, blank=True)
+    selected_strategy = models.CharField("选中策略", max_length=120, blank=True)
+    signal_direction = models.CharField("策略方向", max_length=40, blank=True)
+    previous_position_ratio = models.DecimalField("调仓前仓位比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    target_position_ratio = models.DecimalField("目标仓位比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    position_change_ratio = models.DecimalField("仓位变化比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    position_change_notional = models.DecimalField("仓位变化名义金额", max_digits=38, decimal_places=18, null=True, blank=True)
+    position_ratio = models.DecimalField("调仓后仓位比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    leverage = models.DecimalField("回测杠杆倍数", max_digits=30, decimal_places=18, null=True, blank=True)
+    effective_position_ratio = models.DecimalField("杠杆后有效仓位比例", max_digits=30, decimal_places=18, null=True, blank=True)
+    effective_position_change_ratio = models.DecimalField("杠杆后有效仓位变化比例", max_digits=30, decimal_places=18, null=True, blank=True)
+    effective_position_notional = models.DecimalField("杠杆后有效仓位名义金额", max_digits=38, decimal_places=18, null=True, blank=True)
+    is_liquidated = models.BooleanField("是否爆仓", default=False)
+    liquidation_price = models.DecimalField("估算强平价", max_digits=38, decimal_places=18, null=True, blank=True)
+    liquidation_reason_code = models.CharField("爆仓原因代码", max_length=120, blank=True)
+    simulated_execution_price = models.DecimalField("模拟成交价", max_digits=38, decimal_places=18, null=True, blank=True)
+    close_price = models.DecimalField("周期收盘价", max_digits=38, decimal_places=18, null=True, blank=True)
+    kline_return_pct = models.DecimalField("K线涨跌比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    period_return_pct = models.DecimalField("周期收益比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    fee = models.DecimalField("模拟手续费", max_digits=38, decimal_places=18, null=True, blank=True)
+    equity = models.DecimalField("周期结束权益", max_digits=38, decimal_places=18, null=True, blank=True)
+    drawdown_pct = models.DecimalField("当前回撤比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["strategy_backtest_run", "period_index"],
+                name="uniq_strategy_backtest_period_index",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["strategy_backtest_run", "period_index"]),
+            models.Index(fields=["strategy_backtest_run", "analysis_close_time_utc"]),
+            models.Index(fields=["selected_strategy"]),
+        ]
 
 
 class StrategyAnalysisWorkspace(models.Model):

@@ -44,6 +44,15 @@ ACTION_GROUPS: dict[str, frozenset[str]] = {
             "admin",
         }
     ),
+    "run_strategy_backtest": frozenset(
+        {
+            "strategy_release_viewer",
+            "strategy_release_editor",
+            "strategy_release_approver",
+            "strategy_release_activator",
+            "admin",
+        }
+    ),
     "edit_strategy_release": frozenset({"strategy_release_editor", "admin"}),
     "approve_strategy_release": frozenset({"strategy_release_approver", "admin"}),
     "activate_strategy_release": frozenset({"strategy_release_activator", "admin"}),

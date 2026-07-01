@@ -10,6 +10,11 @@ const statusLabelMap: Record<string, string> = {
   deprecated: "已弃用",
   retired: "已退役",
   disabled: "已禁用",
+  queued: "排队中",
+  running: "运行中",
+  succeeded: "已完成",
+  blocked: "已阻断",
+  failed: "失败",
   true: "是",
   false: "否"
 };
@@ -19,7 +24,7 @@ function toneFor(value: unknown) {
   if (["succeeded", "completed", "allow", "allowed", "calculated", "sent", "filled", "true", "ok"].some((item) => text.includes(item))) {
     return "green" as const;
   }
-  if (["blocked", "unknown", "warning", "pending", "waiting", "open"].some((item) => text.includes(item))) {
+  if (["blocked", "unknown", "warning", "pending", "waiting", "open", "queued", "running"].some((item) => text.includes(item))) {
     return "amber" as const;
   }
   if (["failed", "denied", "rejected", "error", "critical", "false"].some((item) => text.includes(item))) {

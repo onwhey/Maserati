@@ -1136,6 +1136,52 @@ blocked、denied、no_action 和 skipped 不等于系统故障；
 unknown 不得自动转为 succeeded 或 failed；
 failed 不得通过创建伪造下游对象掩盖；
 下游不得消费 blocked、failed、unknown、dry-run 或后台研究对象；
+
+## 25. StrategyBacktest 数据流
+
+StrategyBacktest 是测试环境收益回放数据流，不属于正式自动交易数据流。
+
+P0 数据流：
+
+```text
+OpsConsole 创建 StrategyBacktestRun
+→ Celery 执行 StrategyBacktestRun
+→ 读取 StrategyBacktestRun 冻结的请求参数
+→ 初始化总周期数和运行状态
+→
+历史 Kline
+→ replay_strategy_analysis_chain 生成历史策略分析结果
+→ 每完成一个 UTC 4h 周期，回写 StrategyBacktestRun 进度
+→ StrategyBacktestService 读取每个周期的目标仓位语义
+→ 使用 StrategyBacktestRun 冻结的 leverage 将目标仓位转换为回测有效敞口
+→ 读取对应 4h Kline 的 open / high / low / close
+→ 按撮合规则计算权益变化、手续费、回撤、估算爆仓和 benchmark
+→ 若触发估算爆仓，则该回测权益归零并停止后续周期收益模拟
+→ 将每个周期的模拟调仓明细写入 StrategyBacktestPeriodResult
+→ 将压缩后的 JSON 摘要写回 StrategyBacktestRun.result_summary
+→ OpsConsole 查询 StrategyBacktestRun 状态、摘要和周期模拟调仓明细
+```
+
+边界：
+
+```text
+StrategyBacktest 不进入 PriceSnapshot；
+StrategyBacktest 不进入 OrderPlan；
+StrategyBacktest 不进入 RiskCheck；
+StrategyBacktest 不进入 ExecutionPreparation；
+StrategyBacktest 不进入 Execution；
+StrategyBacktest 不查询订单状态；
+StrategyBacktest 不同步成交；
+StrategyBacktest 不写 TradeFill；
+StrategyBacktest 不影响 ActiveLock；
+StrategyBacktest 不发送 Hermes；
+StrategyBacktest 不调用大模型；
+StrategyBacktest 不修改 StrategyAnalysisRelease。
+```
+
+当前 P0 只允许测试环境使用。由于 P0 复用 `replay_strategy_analysis_chain`，会在当前测试库生成策略分析中间事实；正式环境不得运行该能力。
+
+`StrategyBacktestRun` 保存回测请求、运行状态和压缩摘要结果；`StrategyBacktestPeriodResult` 保存每个 UTC 4h 周期的模拟调仓明细。二者都不是正式交易对象，不得进入主交易下游。
 恢复安全读取动作时必须按原业务幂等键核对已有事实；
 订单提交动作永远不得通过恢复流程再次执行。
 ```

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from django.contrib.auth import authenticate, login, logout
@@ -39,6 +41,7 @@ from apps.strategy_analysis.services.release import (
     update_draft_release_metadata,
     upsert_release_item,
 )
+from apps.strategy_analysis.services.backtest import create_strategy_backtest_run
 from apps.strategy_analysis.services.workspace import (
     generate_release_from_workspace,
     remove_workspace_item,
@@ -56,6 +59,7 @@ from .selectors import (
     get_review_dataset_record_detail,
     get_run_detail,
     get_runtime_guard_issue_detail,
+    get_strategy_backtest_run_detail,
     list_alerts,
     list_audit_log,
     list_orders,
@@ -64,6 +68,8 @@ from .selectors import (
     list_runtime_guard_issues,
     list_runs,
     get_strategy_workspace,
+    list_strategy_backtest_runs,
+    list_strategy_backtest_period_results,
     list_strategy_release_components,
     list_strategy_releases,
     list_strategy_workspace_components,
@@ -207,6 +213,62 @@ def _int_body_value(body: dict[str, Any], name: str) -> int | None:
     except (TypeError, ValueError):
         return None
     return value if value > 0 else None
+
+
+def _positive_int_body_value(body: dict[str, Any], name: str, *, default: int) -> tuple[int | None, JsonResponse | None]:
+    raw = body.get(name, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return None, error_response(
+            reason_code=f"{name}_invalid",
+            message_zh=f"{name} 必须是正整数。",
+            status=400,
+        )
+    if value <= 0:
+        return None, error_response(
+            reason_code=f"{name}_invalid",
+            message_zh=f"{name} 必须是正整数。",
+            status=400,
+        )
+    return value, None
+
+
+def _decimal_body_value(body: dict[str, Any], name: str, *, default: str) -> tuple[Decimal | None, JsonResponse | None]:
+    raw = str(body.get(name, default)).strip() or default
+    try:
+        return Decimal(raw), None
+    except InvalidOperation:
+        return None, error_response(
+            reason_code=f"{name}_invalid",
+            message_zh=f"{name} 必须是合法数字。",
+            status=400,
+        )
+
+
+def _datetime_body_value(body: dict[str, Any], name: str) -> tuple[datetime | None, JsonResponse | None]:
+    raw = str(body.get(name, "")).strip()
+    if not raw:
+        return None, error_response(
+            reason_code=f"{name}_required",
+            message_zh=f"{name} 必须填写。",
+            status=400,
+        )
+    try:
+        value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None, error_response(
+            reason_code=f"{name}_invalid",
+            message_zh=f"{name} 必须是合法 UTC ISO 时间。",
+            status=400,
+        )
+    if value.tzinfo is None:
+        return None, error_response(
+            reason_code=f"{name}_timezone_required",
+            message_zh=f"{name} 必须带 UTC 时区，例如 2026-02-20T00:00:00+00:00。",
+            status=400,
+        )
+    return value, None
 
 
 def _trace_id(body: dict[str, Any], request: HttpRequest, operation: str) -> str:
@@ -409,6 +471,77 @@ def strategy_releases_view(request: HttpRequest) -> JsonResponse:
 @require_ops_permission("view_strategy_release")
 def strategy_release_current_view(_request: HttpRequest) -> JsonResponse:
     return _handle_selector(get_current_strategy_release)
+
+
+@require_ops_permission("run_strategy_backtest")
+def strategy_backtest_runs_view(request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_strategy_backtest_runs, request.GET)
+
+
+@require_ops_permission("run_strategy_backtest")
+def strategy_backtest_run_detail_view(_request: HttpRequest, run_id: int) -> JsonResponse:
+    return _handle_selector(get_strategy_backtest_run_detail, run_id)
+
+
+@require_ops_permission("run_strategy_backtest")
+def strategy_backtest_period_results_view(request: HttpRequest, run_id: int) -> JsonResponse:
+    return _handle_selector(list_strategy_backtest_period_results, run_id, request.GET)
+
+
+@require_ops_permission("run_strategy_backtest", methods=("POST",))
+def strategy_backtest_run_create_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+
+    release_id = _int_body_value(body, "strategy_analysis_release_id")
+    if release_id is None:
+        return error_response(
+            reason_code="strategy_analysis_release_id_required",
+            message_zh="必须选择明确的策略版本包。",
+            status=400,
+        )
+
+    start, start_error = _datetime_body_value(body, "start_analysis_close_time_utc")
+    if start_error is not None:
+        return start_error
+    end, end_error = _datetime_body_value(body, "end_analysis_close_time_utc")
+    if end_error is not None:
+        return end_error
+    initial_equity, initial_error = _decimal_body_value(body, "initial_equity", default="10000")
+    if initial_error is not None:
+        return initial_error
+    fee_rate, fee_error = _decimal_body_value(body, "fee_rate", default="0.0004")
+    if fee_error is not None:
+        return fee_error
+    leverage, leverage_error = _decimal_body_value(body, "leverage", default="1")
+    if leverage_error is not None:
+        return leverage_error
+    lookback_4h_count, lookback_4h_error = _positive_int_body_value(body, "lookback_4h_count", default=500)
+    if lookback_4h_error is not None:
+        return lookback_4h_error
+    lookback_1d_count, lookback_1d_error = _positive_int_body_value(body, "lookback_1d_count", default=500)
+    if lookback_1d_error is not None:
+        return lookback_1d_error
+
+    result = create_strategy_backtest_run(
+        start_analysis_close_time_utc=start,
+        end_analysis_close_time_utc=end,
+        strategy_analysis_release_id=release_id,
+        strategy_analysis_release_hash=str(body.get("strategy_analysis_release_hash", "")).strip(),
+        lookback_4h_count=lookback_4h_count,
+        lookback_1d_count=lookback_1d_count,
+        initial_equity=initial_equity,
+        fee_rate=fee_rate,
+        leverage=leverage,
+        no_target_policy=str(body.get("no_target_policy", "hold")).strip() or "hold",
+        business_request_prefix=str(body.get("business_request_prefix", "")).strip() or "ops-strategy-backtest",
+        requested_by=_operator_id(request),
+        trace_id=_trace_id(body, request, "strategy-backtest"),
+        trigger_source="ops_console_strategy_backtest",
+    )
+    return _service_response(result)
 
 
 @require_ops_permission("view_strategy_release")

@@ -1448,3 +1448,57 @@ OpsConsole 的最终定位是：
 ```text
 OpsConsole 帮人看清系统、处理需要人工授权的问题和导出复盘数据，但它不是交易执行器，也不是自动修复器。
 ```
+
+## 38. StrategyBacktest 后台入口
+
+OpsConsole 提供 StrategyBacktest P0 页面，用于在测试环境查看策略版本包的历史模拟收益。
+
+当前阶段 `/strategy-backtests` 作为 StrategyBacktest 入口页，用于创建 `StrategyBacktestRun` 后台任务和查看最近运行列表；单次回测详情页 `/strategy-backtests/{run_id}` 展示任务状态、结果摘要和周期模拟调仓明细。页面允许刷新；排队或运行中的任务不会因为页面刷新而丢失。
+
+后台入口必须遵守：
+
+```text
+只允许非 production 环境运行；
+只读取历史 K 线和策略分析结果；
+不进入 PriceSnapshot；
+不进入 OrderPlan；
+不生成 CandidateOrderIntent；
+不执行 RiskCheck；
+不执行 ExecutionPreparation；
+不执行 Execution；
+不提交订单；
+不查询订单状态；
+不写 TradeFill；
+不影响 ActiveLock；
+不发送 Hermes；
+不调用大模型；
+不修改 StrategyAnalysisRelease；
+不自动批准或启用策略。
+```
+
+页面展示重点：
+
+```text
+运行状态；
+是否仍在排队或运行；
+已完成周期 / 总周期；
+当前处理 UTC 分析边界；
+最近周期状态和原因；
+进度更新时间；
+UTC 日期范围；
+总收益率；
+最大回撤；
+模拟调仓次数；
+手续费；
+和 BTC 买入持有对比；
+首尾周期摘要；
+每个 UTC 4h 周期的调仓前仓位、目标仓位、杠杆倍数、有效仓位、仓位变化、有效仓位变化、模拟成交价、收盘价、周期收益、结束权益和估算爆仓信息。
+```
+
+StrategyBacktest P0 页面不要求选择具体 4h 时间点。页面日期按 UTC 解释，并自动转换为当天 `00:00:00+00:00` 的 4h 边界。
+
+StrategyBacktest P0 页面中“无目标仓位时”的默认选项为“维持上一周期仓位”，用于更贴近正式主链路：没有新的目标仓位不等于主动平仓。只有策略明确输出目标仓位为 0 时，回测才模拟平仓。
+
+StrategyBacktest P0 页面允许填写杠杆倍数。该杠杆只用于回测中把目标仓位转换为有效名义敞口，并用于估算是否触发爆仓；不会修改交易所真实杠杆，也不会进入正式订单链路。
+
+StrategyBacktest 的具体收益计算口径以 `docs/requirements/strategy_backtest.md` 为准。
