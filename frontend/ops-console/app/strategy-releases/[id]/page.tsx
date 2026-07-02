@@ -111,7 +111,7 @@ export default async function StrategyReleaseDetailPage({ params }: PageProps) {
           <CardHeader>
             <CardTitle>验证证据</CardTitle>
           </CardHeader>
-          <CardContent>{evidence.length ? <JsonBlock value={evidence} /> : <EmptyState title="暂无验证证据" description="冻结后登记验证证据。" />}</CardContent>
+          <CardContent>{evidence.length ? <JsonBlock value={evidence} /> : <EmptyState title="暂无验证证据" description="批准时会自动引用同版本包已完成回测。" />}</CardContent>
         </Card>
         <Card>
           <CardHeader>

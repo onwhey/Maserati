@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 
 import {
   activateStrategyReleaseAction,
-  addStrategyReleaseEvidenceAction,
   approveStrategyReleaseAction,
   copyStrategyReleaseDraftAction,
   createStrategyReleaseDraftAction,
@@ -114,36 +113,48 @@ export function CopyDraftForm({ release }: { release: Record<string, unknown> })
   const [state, formAction, pending] = useActionState(copyStrategyReleaseDraftAction, initialStrategyReleaseActionState);
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>复制为新草稿</CardTitle>
-        <CardDescription>修改已冻结或已批准版本包时，必须复制成新草稿重新走完整流程。</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form action={formAction} className="space-y-4">
-          <input type="hidden" name="release_id" value={releaseId} />
-          <div className="space-y-2">
-            <Label htmlFor="release_code">新版本包代码</Label>
-            <Input id="release_code" name="release_code" placeholder={`copy-of-${String(release.release_code ?? "")}`} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="display_name">展示名称</Label>
-            <Input id="display_name" name="display_name" placeholder="新草稿展示名称" />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="description">说明</Label>
-            <Input id="description" name="description" placeholder="说明复制目的" />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="reason">原因</Label>
-            <Input id="reason" name="reason" placeholder="例如：基于当前版本调整某个组件版本" />
-          </div>
-          <ConfirmWrite />
-          <Button type="submit" variant="outline" disabled={pending}>
-            {pending ? "复制中..." : "复制为草稿"}
-          </Button>
-          <ActionResult state={state} />
-        </form>
-      </CardContent>
+      <details className="group">
+        <summary className="cursor-pointer list-none">
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle>复制为新草稿</CardTitle>
+                <CardDescription>修改已冻结或已批准版本包时，必须复制成新草稿重新走完整流程。</CardDescription>
+              </div>
+              <span className="rounded-md border px-2 py-1 text-xs text-muted-foreground">
+                <span className="group-open:hidden">展开</span>
+                <span className="hidden group-open:inline">收起</span>
+              </span>
+            </div>
+          </CardHeader>
+        </summary>
+        <CardContent>
+          <form action={formAction} className="space-y-4">
+            <input type="hidden" name="release_id" value={releaseId} />
+            <div className="space-y-2">
+              <Label htmlFor="release_code">新版本包代码</Label>
+              <Input id="release_code" name="release_code" placeholder={`copy-of-${String(release.release_code ?? "")}`} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="display_name">展示名称</Label>
+              <Input id="display_name" name="display_name" placeholder="新草稿展示名称" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="description">说明</Label>
+              <Input id="description" name="description" placeholder="说明复制目的" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="reason">原因</Label>
+              <Input id="reason" name="reason" placeholder="例如：基于当前版本调整某个组件版本" />
+            </div>
+            <ConfirmWrite />
+            <Button type="submit" variant="outline" disabled={pending}>
+              {pending ? "复制中..." : "复制为草稿"}
+            </Button>
+            <ActionResult state={state} />
+          </form>
+        </CardContent>
+      </details>
     </Card>
   );
 }
@@ -171,10 +182,6 @@ export function ReleaseStateActionForms({ release }: { release: Record<string, u
     initialStrategyReleaseActionState
   );
   const [freezeState, freezeAction, freezePending] = useActionState(freezeStrategyReleaseAction, initialStrategyReleaseActionState);
-  const [evidenceState, evidenceAction, evidencePending] = useActionState(
-    addStrategyReleaseEvidenceAction,
-    initialStrategyReleaseActionState
-  );
   const [approveState, approveAction, approvePending] = useActionState(approveStrategyReleaseAction, initialStrategyReleaseActionState);
   const [activateState, activateAction, activatePending] = useActionState(activateStrategyReleaseAction, initialStrategyReleaseActionState);
   const [rejectState, rejectAction, rejectPending] = useActionState(rejectStrategyReleaseAction, initialStrategyReleaseActionState);
@@ -213,25 +220,13 @@ export function ReleaseStateActionForms({ release }: { release: Record<string, u
 
       <Card>
         <CardHeader>
-          <CardTitle>验证证据、批准与启用</CardTitle>
-          <CardDescription>批准不会自动启用；启用只影响后续新编排。</CardDescription>
+          <CardTitle>批准与启用</CardTitle>
+          <CardDescription>批准会自动引用同版本包已完成回测作为验证证据；启用只影响后续新编排。</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <form action={evidenceAction} className="space-y-3">
-            <input type="hidden" name="release_id" value={releaseId} />
-            <Input name="evidence_type" placeholder="证据类型，例如 backtest" />
-            <Input name="evidence_ref" placeholder="证据引用，例如 本地回测报告路径" />
-            <Input name="summary" placeholder="证据摘要" />
-            <Input name="reason" placeholder="登记证据原因" />
-            <ConfirmWrite />
-            <Button type="submit" disabled={evidencePending}>
-              {evidencePending ? "登记中..." : "登记验证证据"}
-            </Button>
-            <ActionResult state={evidenceState} />
-          </form>
           <form action={approveAction} className="space-y-3">
             <input type="hidden" name="release_id" value={releaseId} />
-            <Input name="reason" placeholder="批准原因" />
+            <Input name="reason" placeholder="批准原因，例如：回测结果可接受，进入候选启用" />
             <ConfirmWrite />
             <Button type="submit" variant="outline" disabled={approvePending}>
               {approvePending ? "批准中..." : "批准版本包"}

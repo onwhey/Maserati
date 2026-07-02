@@ -302,6 +302,7 @@ def _load_decision_policy(
     *,
     release_id: int,
     release_hash: str,
+    allow_backtest_release: bool,
     registry: CalculatorRegistry,
 ) -> tuple[DecisionPolicyDefinition | None, FrozenReleaseSlice | None, str]:
     try:
@@ -309,6 +310,7 @@ def _load_decision_policy(
             release_id=release_id,
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.DECISION_POLICY_DEFINITION,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError):
         return None, None, "decision_policy_missing"
@@ -779,6 +781,7 @@ def _load_decision_context(
     trace_id: str,
     trigger_source: str,
     dry_run: bool,
+    allow_backtest_release: bool,
     registry: CalculatorRegistry,
 ) -> tuple[DecisionContext | None, ServiceResult | None]:
     quality_result, quality_error = _load_quality_result(strategy_signal_quality_result_id)
@@ -812,6 +815,7 @@ def _load_decision_context(
     policy, policy_slice, policy_error = _load_decision_policy(
         release_id=strategy_analysis_release_id,
         release_hash=strategy_analysis_release_hash,
+        allow_backtest_release=allow_backtest_release,
         registry=registry,
     )
     if policy is None or policy_slice is None:
@@ -871,6 +875,7 @@ def build_decision_snapshot(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     error, message = _validate_request(
@@ -920,6 +925,7 @@ def build_decision_snapshot(
         trace_id=trace_id,
         trigger_source=trigger_source,
         dry_run=dry_run,
+        allow_backtest_release=allow_backtest_release,
         registry=registry,
     )
     if context_error is not None:

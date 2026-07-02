@@ -372,6 +372,21 @@ reason_code 可见；
 失败任务显示失败状态；
 ```
 
+本次验收记录：
+
+```text
+验收日期：2026-07-02
+验收结果：通过
+
+已确认：
+回测任务可以通过 OpsConsole 创建；
+回测运行列表刷新后仍可见；
+列表展示状态、进度、版本包、本次收益、开始日期、结束日期；
+本次收益支持正收益绿色、负收益红色；
+“疑似卡住”状态可见，并以黄色状态展示；
+列表中的详情入口可进入单次回测详情页。
+```
+
 ### 8.2 回测详情页
 
 页面：
@@ -399,6 +414,51 @@ reason_code 可见；
 能找到亏损来源；
 能找到爆仓周期；
 页面刷新不丢数据；
+```
+
+本次验收记录：
+
+```text
+验收日期：2026-07-02
+验收结果：通过
+
+已确认：
+回测详情页可展示收益摘要；
+回测详情页可展示模拟调仓明细；
+模拟调仓明细中的周期收益为单个 4h 周期收益，不是累计收益；
+UTC 周期按分钟展示，不显示多余 UTC 后缀；
+调仓明细整行可进入周期详情页；
+“无策略”状态使用简洁中文展示；
+周期详情页可以查看本周期市场事实解释、策略决策解释和底层排查明细；
+市场事实解释默认折叠，展开后按领域查看；
+本周期结论已改为键值对形式，便于阅读；
+领域状态、方向和策略名称已中文化展示，不直接暴露内部变量名。
+```
+
+### 8.3 本次代码级验收记录
+
+验收日期：2026-07-02
+
+验收命令：
+
+```powershell
+.\.venv\Scripts\python.exe manage.py check
+.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
+.\.venv\Scripts\python.exe -m pytest tests\strategy_analysis\test_strategy_backtest.py tests\test_ops_console_stage7.py -q
+
+cd frontend\ops-console
+npm run typecheck
+npm run build
+```
+
+验收结果：
+
+```text
+Django check：通过
+makemigrations --check --dry-run：通过，无遗漏 migration
+pytest：39 passed
+前端 typecheck：通过
+前端 build：通过
 ```
 
 ## 9. 安全红线验收
@@ -573,3 +633,65 @@ StrategySignal 具体规则改进；
 ```
 
 如果未满足，应先修系统问题，不进入策略参数调优。
+
+## 13. 当前阶段验收结论
+
+验收日期：2026-07-02
+
+当前阶段结论：
+
+```text
+系统链路验收：通过
+回测功能验收：通过
+OpsConsole 回测页面可读性验收：通过
+正式交易边界验收：通过
+代码级验收：通过
+```
+
+已确认能力：
+
+```text
+StrategyAnalysisRelease 可以作为回测输入；
+StrategyBacktest 可以创建、排队、运行、完成并落库；
+回测列表页可以展示状态、进度、版本包和本次收益；
+回测详情页可以展示收益摘要和模拟调仓明细；
+单个 4h 周期可以进入详情页查看市场事实、策略决策、目标仓位和底层排查数据；
+回测结果刷新页面后仍可追溯；
+回测不会生成 CandidateOrderIntent、ApprovedOrderIntent、PreparedOrderIntent、OrderSubmissionAttempt 或 TradeFill；
+当前环境真实交易部署权限关闭，Binance 订单提交关闭；
+后端 check、迁移检查、关键 pytest、前端 typecheck 和 build 均通过。
+```
+
+本阶段明确不下结论的事项：
+
+```text
+不证明当前策略长期盈利；
+不证明当前策略参数最优；
+不证明 MarketRegime 分类已经足够准确；
+不证明 StrategyRouting 规则已经合理覆盖所有市场；
+不证明 StrategySignal 规则已经具备实盘有效性；
+不验收真实交易执行链路；
+不验收真实订单提交、成交同步或 ActiveLock 生产级收尾；
+不启用真实交易。
+```
+
+阶段判断：
+
+```text
+当前阶段可以认为“系统已经具备支持策略有效性分析的基础能力”。
+
+也就是说，下一阶段可以开始围绕真实历史行情复盘策略识别准确性、策略路由合理性、StrategySignal 规则和参数表现。
+
+下一阶段不应再优先修基础链路，除非在策略复盘过程中发现链路、回测口径或数据追溯存在新的系统性问题。
+```
+
+下一阶段建议：
+
+```text
+选择多个典型行情区间；
+用已启用的 StrategyAnalysisRelease 跑回测；
+按周期详情页检查系统判断是否符合行情；
+记录错误分类、错误路由、错误策略信号和错误目标仓位；
+先归因问题属于市场事实层、MarketRegime、StrategyRouting、StrategySignal 还是 DecisionSnapshot；
+再决定是否调整算法、阈值或策略规则。
+```

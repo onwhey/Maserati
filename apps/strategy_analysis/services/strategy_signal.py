@@ -359,6 +359,7 @@ def _resolve_definition_context(
     *,
     decision: StrategyRouteDecision,
     expected_definition_hash: str,
+    allow_backtest_release: bool,
     registry: CalculatorRegistry,
 ) -> tuple[FrozenReleaseSlice | None, tuple[str, ...], tuple[str, ...], dict[str, str], str]:
     try:
@@ -366,6 +367,7 @@ def _resolve_definition_context(
             release_id=decision.strategy_analysis_release_id,
             release_hash=decision.release_hash,
             component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError):
         return None, (), (), {}, "strategy_definition_slice_invalid"
@@ -442,6 +444,7 @@ def _load_context(
     release_id: int,
     release_hash: str,
     expected_definition_hash: str,
+    allow_backtest_release: bool,
     registry: CalculatorRegistry,
 ) -> tuple[StrategySignalContext | None, str]:
     decision, error = _load_decision(decision_id=decision_id, release_id=release_id, release_hash=release_hash)
@@ -463,6 +466,7 @@ def _load_context(
     strategy_slice, allowed, required, weights, error = _resolve_definition_context(
         decision=decision,
         expected_definition_hash=expected_definition_hash,
+        allow_backtest_release=allow_backtest_release,
         registry=registry,
     )
     if strategy_slice is None:
@@ -1022,6 +1026,7 @@ def generate_strategy_signal(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     error, message = _validate_request(
@@ -1070,6 +1075,7 @@ def generate_strategy_signal(
         release_id=strategy_analysis_release_id,
         release_hash=strategy_analysis_release_hash,
         expected_definition_hash=expected_strategy_definition_hash,
+        allow_backtest_release=allow_backtest_release,
         registry=registry,
     )
     if context is None:

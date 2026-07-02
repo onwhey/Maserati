@@ -98,3 +98,20 @@ function normalizeUtcDateTimeInput(rawValue: string): string {
   }
   return value;
 }
+
+export async function deleteStrategyBacktestRunAction(formData: FormData): Promise<void> {
+  const runId = Number(formData.get("run_id") ?? 0);
+  if (!Number.isInteger(runId) || runId <= 0) {
+    redirect("/strategy-backtests?delete_error=strategy_backtest_run_id_invalid");
+  }
+
+  const result = await opsPost<Record<string, unknown>>(`/api/ops/strategy-backtests/runs/${runId}/delete/`, {
+    reason: "ops-console-list-delete"
+  });
+
+  const serviceStatus = String(result.data?.status ?? "");
+  if (!result.ok || serviceStatus !== "succeeded") {
+    redirect(`/strategy-backtests?delete_error=${encodeURIComponent(result.reason_code)}`);
+  }
+  redirect(`/strategy-backtests?deleted_run_id=${encodeURIComponent(String(runId))}`);
+}

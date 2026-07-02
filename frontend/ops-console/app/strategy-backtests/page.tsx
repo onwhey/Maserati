@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Eye } from "lucide-react";
+import { Eye, Trash2 } from "lucide-react";
 
 import { ApiError } from "@/components/ops/api-error";
 import { PageHeader } from "@/components/ops/page-header";
@@ -12,6 +12,7 @@ import type { Paginated } from "@/lib/api/types";
 import { asRows } from "@/lib/ops-data";
 
 import { StrategyBacktestForm } from "./backtest-form";
+import { deleteStrategyBacktestRunAction } from "./actions";
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -20,6 +21,8 @@ type PageProps = {
 export default async function StrategyBacktestsPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const selectedRunId = firstParam(params.run_id) ?? "";
+  const deletedRunId = firstParam(params.deleted_run_id) ?? "";
+  const deleteError = firstParam(params.delete_error) ?? "";
   if (selectedRunId) {
     redirect(`/strategy-backtests/${encodeURIComponent(selectedRunId)}`);
   }
@@ -50,6 +53,17 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
           周期计算收益。具体收益摘要和模拟调仓明细请进入某次回测详情页查看。
         </CardContent>
       </Card>
+
+      {deletedRunId ? (
+        <Card className="mb-6 border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-200">
+          <CardContent className="pt-6 text-sm">已删除回测 #{deletedRunId} 及其生成的分析数据。</CardContent>
+        </Card>
+      ) : null}
+      {deleteError ? (
+        <Card className="mb-6 border-red-200 bg-red-50 text-red-800 dark:border-red-900 dark:bg-red-950/30 dark:text-red-200">
+          <CardContent className="pt-6 text-sm">删除失败：{deleteError}</CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
         <StrategyBacktestForm releases={releases} />
@@ -89,13 +103,26 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
                   key: "detail",
                   label: "操作",
                   render: (row) => (
-                    <Link
-                      className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-muted"
-                      href={`/strategy-backtests/${row.id}`}
-                    >
-                      <Eye className="h-4 w-4" />
-                      详情
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link
+                        className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-muted"
+                        href={`/strategy-backtests/${row.id}`}
+                      >
+                        <Eye className="h-4 w-4" />
+                        详情
+                      </Link>
+                      <form action={deleteStrategyBacktestRunAction}>
+                        <input type="hidden" name="run_id" value={String(row.id)} />
+                        <button
+                          type="submit"
+                          disabled={!canDeleteRun(row)}
+                          className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-950/30"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          删除
+                        </button>
+                      </form>
+                    </div>
                   )
                 },
               ]}
@@ -119,6 +146,15 @@ function progressText(row: Record<string, unknown>): string {
 
 function displayStatus(row: Record<string, unknown>): unknown {
   return row.diagnostic_status || row.status;
+}
+
+function canDeleteRun(row: Record<string, unknown>): boolean {
+  const status = String(row.status ?? "");
+  const diagnosticStatus = String(row.diagnostic_status ?? "");
+  if (status === "running") {
+    return Boolean(diagnosticStatus);
+  }
+  return status !== "queued";
 }
 
 function formatUtcDate(value: unknown): string {

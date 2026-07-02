@@ -41,7 +41,7 @@ from apps.strategy_analysis.services.release import (
     update_draft_release_metadata,
     upsert_release_item,
 )
-from apps.strategy_analysis.services.backtest import create_strategy_backtest_run
+from apps.strategy_analysis.services.backtest import create_strategy_backtest_run, delete_strategy_backtest_run
 from apps.strategy_analysis.services.workspace import (
     generate_release_from_workspace,
     remove_workspace_item,
@@ -546,6 +546,23 @@ def strategy_backtest_run_create_view(request: HttpRequest) -> JsonResponse:
         requested_by=_operator_id(request),
         trace_id=_trace_id(body, request, "strategy-backtest"),
         trigger_source="ops_console_strategy_backtest",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("run_strategy_backtest", methods=("POST",))
+def strategy_backtest_run_delete_view(request: HttpRequest, run_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+
+    result = delete_strategy_backtest_run(
+        strategy_backtest_run_id=run_id,
+        operator_id=_operator_id(request),
+        reason=str(body.get("reason", "")).strip(),
+        trace_id=_trace_id(body, request, "strategy-backtest-delete"),
+        trigger_source="ops_console_strategy_backtest_delete",
     )
     return _service_response(result)
 

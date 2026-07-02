@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useRef } from "react";
+import { useActionState, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -96,6 +96,10 @@ export function GenerateReleaseFromWorkspaceForm() {
     generateStrategyReleaseFromWorkspaceAction,
     initialStrategyReleaseActionState
   );
+  const [releaseCode, setReleaseCode] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [description, setDescription] = useState("");
+  const [reason, setReason] = useState("");
 
   return (
     <Card>
@@ -108,19 +112,43 @@ export function GenerateReleaseFromWorkspaceForm() {
           <input type="hidden" name="confirm_write" value="on" />
           <div className="space-y-2">
             <Label htmlFor="release_code">版本包代码</Label>
-            <Input id="release_code" name="release_code" placeholder="例如：strategy-release-p0-001" />
+            <Input
+              id="release_code"
+              name="release_code"
+              placeholder="例如：strategy-release-p0-001"
+              value={releaseCode}
+              onChange={(event) => setReleaseCode(event.currentTarget.value)}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="display_name">展示名称</Label>
-            <Input id="display_name" name="display_name" placeholder="例如：P0 趋势策略配置" />
+            <Input
+              id="display_name"
+              name="display_name"
+              placeholder="例如：P0 趋势策略配置"
+              value={displayName}
+              onChange={(event) => setDisplayName(event.currentTarget.value)}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="description">说明</Label>
-            <Input id="description" name="description" placeholder="说明本次配置的策略范围" />
+            <Input
+              id="description"
+              name="description"
+              placeholder="说明本次配置的策略范围"
+              value={description}
+              onChange={(event) => setDescription(event.currentTarget.value)}
+            />
           </div>
           <div className="space-y-2">
             <Label htmlFor="reason">生成原因</Label>
-            <Input id="reason" name="reason" placeholder="例如：采纳当前组件配置进入回测验证" />
+            <Input
+              id="reason"
+              name="reason"
+              placeholder="例如：采纳当前组件配置进入回测验证"
+              value={reason}
+              onChange={(event) => setReason(event.currentTarget.value)}
+            />
           </div>
           <Button type="submit" disabled={pending}>
             {pending ? "生成中..." : "生成草稿"}

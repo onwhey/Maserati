@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 
 from apps.foundation.context import ensure_context
 from apps.foundation.idempotency import build_idempotency_key
@@ -78,40 +78,46 @@ def check_data_quality(
     if dry_run:
         return _dry_result(context.trace_id, trigger_source, status, issues, expected_times, klines)
 
-    with transaction.atomic():
-        result = DataQualityResult.objects.create(
-            business_request_key=business_request_key,
-            trace_id=context.trace_id,
-            trigger_source=trigger_source,
-            exchange=domain.exchange,
-            market_type=domain.market_type,
-            symbol=domain.symbol,
-            timeframe=timeframe,
-            status=status,
-            reason_code="quality_pass" if allows_downstream else "quality_issues_found",
-            check_start_open_time_utc=start_open,
-            check_end_open_time_utc=end_open,
-            expected_latest_open_time_utc=expected_latest_open_time_utc,
-            expected_count=len(expected_times),
-            actual_count=len(klines),
-            issue_count=len(issues),
-            allows_downstream=allows_downstream,
-            coverage_start_open_time_utc=klines[0].open_time_utc if klines else None,
-            coverage_end_open_time_utc=klines[-1].open_time_utc if klines else None,
-            source_collection_run_id=source_collection_run_id,
-            source_backfill_run_id=source_backfill_run_id,
-        )
-        DataQualityIssue.objects.bulk_create([
-            DataQualityIssue(
-                result=result,
-                issue_type=issue.issue_type,
-                detail=issue.detail,
-                open_time_utc=issue.open_time_utc,
-                backfillable=issue.backfillable,
+    try:
+        with transaction.atomic():
+            result = DataQualityResult.objects.create(
+                business_request_key=business_request_key,
+                trace_id=context.trace_id,
+                trigger_source=trigger_source,
+                exchange=domain.exchange,
+                market_type=domain.market_type,
+                symbol=domain.symbol,
+                timeframe=timeframe,
+                status=status,
+                reason_code="quality_pass" if allows_downstream else "quality_issues_found",
+                check_start_open_time_utc=start_open,
+                check_end_open_time_utc=end_open,
+                expected_latest_open_time_utc=expected_latest_open_time_utc,
+                expected_count=len(expected_times),
+                actual_count=len(klines),
+                issue_count=len(issues),
+                allows_downstream=allows_downstream,
+                coverage_start_open_time_utc=klines[0].open_time_utc if klines else None,
+                coverage_end_open_time_utc=klines[-1].open_time_utc if klines else None,
+                source_collection_run_id=source_collection_run_id,
+                source_backfill_run_id=source_backfill_run_id,
             )
-            for issue in issues
-        ])
-        backfill_request = _create_backfill_request_if_needed(result, issues)
+            DataQualityIssue.objects.bulk_create([
+                DataQualityIssue(
+                    result=result,
+                    issue_type=issue.issue_type,
+                    detail=issue.detail,
+                    open_time_utc=issue.open_time_utc,
+                    backfillable=issue.backfillable,
+                )
+                for issue in issues
+            ])
+            backfill_request = _create_backfill_request_if_needed(result, issues)
+    except IntegrityError:
+        existing_after_race = DataQualityResult.objects.filter(business_request_key=business_request_key).first()
+        if existing_after_race and not dry_run:
+            return _result_from_quality(existing_after_race)
+        raise
 
     if not allows_downstream:
         record_market_data_alert(

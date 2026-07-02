@@ -189,6 +189,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "feature-set"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "feature_layer", feature)
     if blocked:
@@ -202,6 +203,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "atomic-set"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "atomic_signal", atomic)
     if blocked:
@@ -215,6 +217,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "domain-set"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "domain_signal", domain)
     if blocked:
@@ -228,6 +231,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "market-regime"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "market_regime", regime)
     if blocked:
@@ -242,6 +246,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "strategy-route"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "strategy_routing", route)
     if blocked:
@@ -283,6 +288,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "strategy-signal"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "strategy_signal", signal)
     if blocked:
@@ -298,6 +304,7 @@ def _replay_one_period(
         reference_time_utc=analysis_reference_time,
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "strategy_signal_quality", quality)
     if blocked:
@@ -310,6 +317,7 @@ def _replay_one_period(
         business_request_key=_key(business_request_prefix, period_key, "decision-snapshot"),
         trace_id=trace_id,
         trigger_source=trigger_source,
+        allow_backtest_release=True,
     )
     blocked = _blocked_period(base, "decision_snapshot", decision)
     if blocked:

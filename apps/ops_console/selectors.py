@@ -859,6 +859,8 @@ def _strategy_backtest_run_row(run: StrategyBacktestRun) -> dict[str, Any]:
             "updated_at_utc",
         ),
     ) or {}
+    if run.status == StrategyBacktestRunStatus.SUCCEEDED:
+        row["error_message"] = ""
     diagnostic = _strategy_backtest_run_diagnostic(run)
     row["diagnostic_status"] = diagnostic["status"]
     row["diagnostic_message_zh"] = diagnostic["message_zh"]

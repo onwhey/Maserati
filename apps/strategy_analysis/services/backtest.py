@@ -19,20 +19,51 @@ from typing import Any
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
 from apps.foundation.context import ensure_context
 from apps.foundation.results import ResultStatus, ServiceResult
 from apps.market_data.domain import TIMEFRAME_4H, configured_collection_domain, ensure_utc, is_timeframe_boundary, timeframe_delta
-from apps.market_data.models import Kline
+from apps.market_data.models import DataQualityResult, Kline, MarketSnapshot
 
-from ..models import StrategyAnalysisRelease, StrategyBacktestPeriodResult, StrategyBacktestRun, StrategyBacktestRunStatus
+from ..models import (
+    AtomicSignalSet,
+    DecisionSnapshot,
+    DomainSignalSet,
+    FeatureSet,
+    MarketRegimeSnapshot,
+    StrategyAnalysisRelease,
+    StrategyBacktestPeriodResult,
+    StrategyBacktestRun,
+    StrategyBacktestRunStatus,
+    StrategyRouteDecision,
+    StrategySignal,
+    StrategySignalQualityResult,
+)
 from .replay import replay_strategy_analysis_chain
 
 
 NO_TARGET_POLICY_HOLD = "hold"
 NO_TARGET_POLICY_FLAT = "flat"
 REPLAY_SIMULATABLE_STATUSES = {"completed", "completed_no_strategy"}
+DELETABLE_BACKTEST_RUN_STATUSES = {
+    StrategyBacktestRunStatus.SUCCEEDED,
+    StrategyBacktestRunStatus.BLOCKED,
+    StrategyBacktestRunStatus.FAILED,
+}
+BACKTEST_DELETE_STALE_AFTER = timedelta(minutes=10)
+BACKTEST_ANALYSIS_OBJECT_ID_KEYS = {
+    "market_snapshot_id": "market_snapshot",
+    "feature_set_id": "feature_set",
+    "atomic_signal_set_id": "atomic_signal_set",
+    "domain_signal_set_id": "domain_signal_set",
+    "market_regime_snapshot_id": "market_regime_snapshot",
+    "strategy_route_decision_id": "strategy_route_decision",
+    "strategy_signal_id": "strategy_signal",
+    "quality_result_id": "strategy_signal_quality_result",
+    "decision_snapshot_id": "decision_snapshot",
+}
 
 
 def create_strategy_backtest_run(
@@ -214,8 +245,9 @@ def execute_strategy_backtest_run(*, strategy_backtest_run_id: int) -> ServiceRe
     run.message = result.message
     _replace_period_results(run, result.data)
     run.result_summary = _compact_result_summary(result.data)
+    run.error_message = ""
     run.finished_at_utc = timezone.now()
-    run.save(update_fields=["status", "reason_code", "message", "result_summary", "finished_at_utc", "updated_at_utc"])
+    run.save(update_fields=["status", "reason_code", "message", "result_summary", "error_message", "finished_at_utc", "updated_at_utc"])
     return ServiceResult(
         result.status,
         result.reason_code,
@@ -224,6 +256,172 @@ def execute_strategy_backtest_run(*, strategy_backtest_run_id: int) -> ServiceRe
         "strategy_backtest_celery_worker",
         {"strategy_backtest_run_id": run.id, "status": run.status, **result.data},
     )
+
+
+def delete_strategy_backtest_run(
+    *,
+    strategy_backtest_run_id: int,
+    operator_id: str = "",
+    reason: str = "",
+    trace_id: str | None = None,
+    trigger_source: str = "ops_console_strategy_backtest_delete",
+) -> ServiceResult:
+    context = ensure_context(trace_id=trace_id, trigger_source=trigger_source)
+    guard_error = _environment_guard()
+    if guard_error:
+        return ServiceResult(
+            ResultStatus.BLOCKED,
+            guard_error,
+            "StrategyBacktest 只允许在测试或开发环境清理",
+            context.trace_id,
+            trigger_source,
+        )
+
+    try:
+        with transaction.atomic():
+            run = StrategyBacktestRun.objects.select_for_update().filter(id=strategy_backtest_run_id).first()
+            if run is None:
+                return ServiceResult(
+                    ResultStatus.NO_ACTION,
+                    "strategy_backtest_run_not_found",
+                    "StrategyBacktestRun 不存在或已经删除",
+                    context.trace_id,
+                    trigger_source,
+                    {"strategy_backtest_run_id": strategy_backtest_run_id},
+                )
+            if not _is_deletable_backtest_run(run):
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "strategy_backtest_delete_active_run_blocked",
+                    "仍在排队或正常运行中的回测不能直接删除",
+                    context.trace_id,
+                    trigger_source,
+                    {"strategy_backtest_run_id": run.id, "status": run.status},
+                )
+
+            period_results = list(run.period_results.all())
+            generated_ids = _collect_backtest_generated_object_ids(run=run, period_results=period_results)
+            deletion_counts = _delete_backtest_generated_objects(generated_ids)
+            period_result_count = len(period_results)
+            run_id = run.id
+            run_key = run.run_key
+            run.delete()
+    except ProtectedError as exc:
+        return ServiceResult(
+            ResultStatus.BLOCKED,
+            "strategy_backtest_delete_protected",
+            "回测数据仍被非本次回测对象引用，已停止删除",
+            context.trace_id,
+            trigger_source,
+            {"strategy_backtest_run_id": strategy_backtest_run_id, "error_message": str(exc)},
+        )
+
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_backtest_run_deleted",
+        "StrategyBacktestRun 及本次回测生成的分析事实已删除",
+        context.trace_id,
+        trigger_source,
+        {
+            "strategy_backtest_run_id": run_id,
+            "run_key": run_key,
+            "operator_id": operator_id,
+            "reason": reason,
+            "deleted_period_result_count": period_result_count,
+            "deleted_objects": deletion_counts,
+        },
+    )
+
+
+def _collect_backtest_generated_object_ids(
+    *,
+    run: StrategyBacktestRun,
+    period_results: list[StrategyBacktestPeriodResult],
+) -> dict[str, set[int]]:
+    generated_ids: dict[str, set[int]] = {name: set() for name in BACKTEST_ANALYSIS_OBJECT_ID_KEYS.values()}
+    generated_ids["data_quality_result"] = set()
+
+    for result in period_results:
+        payload = result.analysis_object_ids if isinstance(result.analysis_object_ids, dict) else {}
+        for key, bucket in BACKTEST_ANALYSIS_OBJECT_ID_KEYS.items():
+            object_id = _positive_int(payload.get(key))
+            if object_id:
+                generated_ids[bucket].add(object_id)
+
+    request_prefix = f"{run.business_request_prefix}-{run.id}:"
+    _extend_ids_from_business_prefix(generated_ids["data_quality_result"], DataQualityResult, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["market_snapshot"], MarketSnapshot, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["feature_set"], FeatureSet, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["atomic_signal_set"], AtomicSignalSet, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["domain_signal_set"], DomainSignalSet, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["market_regime_snapshot"], MarketRegimeSnapshot, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["strategy_route_decision"], StrategyRouteDecision, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["strategy_signal"], StrategySignal, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["strategy_signal_quality_result"], StrategySignalQualityResult, request_prefix)
+    _extend_ids_from_business_prefix(generated_ids["decision_snapshot"], DecisionSnapshot, request_prefix)
+
+    snapshot_ids = generated_ids["market_snapshot"]
+    if snapshot_ids:
+        for row in MarketSnapshot.objects.filter(id__in=snapshot_ids).values(
+            "data_quality_result_4h_id",
+            "data_quality_result_1d_id",
+        ):
+            quality_4h_id = _positive_int(row.get("data_quality_result_4h_id"))
+            quality_1d_id = _positive_int(row.get("data_quality_result_1d_id"))
+            if quality_4h_id:
+                generated_ids["data_quality_result"].add(quality_4h_id)
+            if quality_1d_id:
+                generated_ids["data_quality_result"].add(quality_1d_id)
+
+    return generated_ids
+
+
+def _is_deletable_backtest_run(run: StrategyBacktestRun) -> bool:
+    if run.status in DELETABLE_BACKTEST_RUN_STATUSES:
+        return True
+    if run.status != StrategyBacktestRunStatus.RUNNING:
+        return False
+    last_progress_time = run.progress_updated_at_utc or run.updated_at_utc or run.started_at_utc
+    if not last_progress_time:
+        return False
+    return timezone.now() - last_progress_time >= BACKTEST_DELETE_STALE_AFTER
+
+
+def _extend_ids_from_business_prefix(target: set[int], model: type, request_prefix: str) -> None:
+    target.update(model.objects.filter(business_request_key__startswith=request_prefix).values_list("id", flat=True))
+
+
+def _delete_backtest_generated_objects(generated_ids: dict[str, set[int]]) -> dict[str, int]:
+    deletion_order = [
+        ("decision_snapshot", DecisionSnapshot),
+        ("strategy_signal_quality_result", StrategySignalQualityResult),
+        ("strategy_signal", StrategySignal),
+        ("strategy_route_decision", StrategyRouteDecision),
+        ("market_regime_snapshot", MarketRegimeSnapshot),
+        ("domain_signal_set", DomainSignalSet),
+        ("atomic_signal_set", AtomicSignalSet),
+        ("feature_set", FeatureSet),
+        ("market_snapshot", MarketSnapshot),
+        ("data_quality_result", DataQualityResult),
+    ]
+    deleted: dict[str, int] = {}
+    for bucket, model in deletion_order:
+        ids = generated_ids.get(bucket, set())
+        if not ids:
+            deleted[bucket] = 0
+            continue
+        queryset = model.objects.filter(id__in=ids)
+        deleted[bucket] = queryset.count()
+        queryset.delete()
+    return deleted
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _compact_result_summary(data: dict[str, Any]) -> dict[str, Any]:

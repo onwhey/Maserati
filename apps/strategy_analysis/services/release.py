@@ -55,6 +55,8 @@ from ..models import (
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
     StrategyAnalysisReleaseValidationEvidence,
+    StrategyBacktestRun,
+    StrategyBacktestRunStatus,
     StrategyDefinition,
     StrategyRoutePolicy,
     StrategyRouteRule,
@@ -1349,6 +1351,56 @@ def validate_release_integrity(
     return errors
 
 
+def _validation_evidence_refs_for_approval(
+    *,
+    release: StrategyAnalysisRelease,
+    operator_id: str,
+) -> list[int]:
+    existing_evidence = list(
+        StrategyAnalysisReleaseValidationEvidence.objects.filter(
+            release=release,
+            release_hash=release.release_hash,
+        )
+    )
+    existing_refs = {item.evidence_ref for item in existing_evidence}
+    evidence_refs = [item.id for item in existing_evidence]
+    completed_backtests = StrategyBacktestRun.objects.filter(
+        strategy_analysis_release=release,
+        strategy_analysis_release_hash=release.release_hash,
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+    ).order_by("id")
+    for run in completed_backtests:
+        evidence_ref = f"StrategyBacktestRun:{run.id}"
+        if evidence_ref in existing_refs:
+            continue
+        summary = _backtest_evidence_summary(run)
+        evidence = StrategyAnalysisReleaseValidationEvidence.objects.create(
+            release=release,
+            release_hash=release.release_hash,
+            evidence_type="strategy_backtest",
+            evidence_ref=evidence_ref,
+            summary=summary,
+            created_by=operator_id,
+        )
+        evidence_refs.append(evidence.id)
+        existing_refs.add(evidence_ref)
+    StrategyAnalysisRelease.objects.filter(id=release.id).update(validation_evidence_count=len(evidence_refs))
+    return evidence_refs
+
+
+def _backtest_evidence_summary(run: StrategyBacktestRun) -> str:
+    summary = run.result_summary if isinstance(run.result_summary, dict) else {}
+    total_return = summary.get("total_return_pct", "")
+    max_drawdown = summary.get("max_drawdown_pct", "")
+    period_count = summary.get("period_count") or summary.get("stored_period_count") or run.progress_total_periods
+    return (
+        f"回测运行 {run.id} 已完成；"
+        f"周期数：{period_count}；"
+        f"总收益：{total_return}；"
+        f"最大回撤：{max_drawdown}。"
+    )
+
+
 def approve_release(
     *,
     release_id: int,
@@ -1366,14 +1418,18 @@ def approve_release(
         current_hash = calculate_release_hash(release)
         if release.release_hash != current_hash:
             return ServiceResult(ResultStatus.BLOCKED, "release_hash_mismatch", "版本包指纹已失配", trace_id, trigger_source)
-        evidence_refs = list(
-            StrategyAnalysisReleaseValidationEvidence.objects.filter(
-                release=release,
-                release_hash=release.release_hash,
-            ).values_list("id", flat=True)
+        evidence_refs = _validation_evidence_refs_for_approval(
+            release=release,
+            operator_id=operator_id,
         )
         if not evidence_refs:
-            return ServiceResult(ResultStatus.BLOCKED, "validation_evidence_missing", "缺少验证证据，不能批准", trace_id, trigger_source)
+            return ServiceResult(
+                ResultStatus.BLOCKED,
+                "validation_evidence_missing",
+                "没有同版本包、同 hash 的已完成回测证据，不能批准",
+                trace_id,
+                trigger_source,
+            )
         integrity_errors = validate_release_integrity(release, registry=registry)
         if integrity_errors:
             return ServiceResult(
@@ -1786,26 +1842,34 @@ def resolve_frozen_slice(
     release_hash: str,
     component_type: str,
     expected_definition_set_hash: str = "",
+    allow_backtest_release: bool = False,
 ) -> FrozenReleaseSlice:
     release = StrategyAnalysisRelease.objects.get(id=release_id)
-    if release.approval_status not in {ReleaseApprovalStatus.APPROVED, ReleaseApprovalStatus.INVALIDATED}:
+    allowed_statuses = {ReleaseApprovalStatus.APPROVED, ReleaseApprovalStatus.INVALIDATED}
+    if allow_backtest_release:
+        allowed_statuses = allowed_statuses | {ReleaseApprovalStatus.VALIDATING}
+    if release.approval_status not in allowed_statuses:
         raise ValueError("版本包没有已批准身份")
     if release.release_hash != release_hash:
         raise ValueError("版本包指纹不匹配")
     if calculate_release_hash(release) != release_hash:
         raise ValueError("版本包内容已被修改")
-    if not StrategyAnalysisReleaseApproval.objects.filter(
-        release=release,
-        release_hash=release_hash,
-        action=ReleaseAction.APPROVE,
-    ).exists():
-        raise ValueError("版本包缺少匹配的批准记录")
-    if not StrategyAnalysisReleaseActivation.objects.filter(
-        release=release,
-        release_hash=release_hash,
-        action__in=[ReleaseAction.ACTIVATE, ReleaseAction.ROLLBACK],
-    ).exists():
-        raise ValueError("版本包没有历史启用事实")
+    if release.approval_status == ReleaseApprovalStatus.VALIDATING:
+        if not allow_backtest_release:
+            raise ValueError("版本包没有已批准身份")
+    else:
+        if not StrategyAnalysisReleaseApproval.objects.filter(
+            release=release,
+            release_hash=release_hash,
+            action=ReleaseAction.APPROVE,
+        ).exists():
+            raise ValueError("版本包缺少匹配的批准记录")
+        if not allow_backtest_release and not StrategyAnalysisReleaseActivation.objects.filter(
+            release=release,
+            release_hash=release_hash,
+            action__in=[ReleaseAction.ACTIVATE, ReleaseAction.ROLLBACK],
+        ).exists():
+            raise ValueError("版本包没有历史启用事实")
     items = tuple(release.items.filter(component_type=component_type).order_by("sort_order", "component_code", "id"))
     actual_hash = calculate_definition_set_hash(items)
     if expected_definition_set_hash and actual_hash != expected_definition_set_hash:

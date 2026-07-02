@@ -709,6 +709,7 @@ def _resolve_definition_for_regime(
     trace_id: str,
     trigger_source: str,
     dry_run: bool,
+    allow_backtest_release: bool,
     registry: CalculatorRegistry,
 ) -> tuple[FrozenReleaseSlice | None, MarketRegimeDefinition | None, ServiceResult | None]:
 
@@ -717,6 +718,7 @@ def _resolve_definition_for_regime(
             release_id=strategy_analysis_release_id,
             release_hash=strategy_analysis_release_hash,
             component_type=ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError) as exc:
         result = _result_with_alert(
@@ -943,6 +945,7 @@ def classify_for_strategy_routing(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     request_error, request_message = _validate_request_fields(
@@ -998,6 +1001,7 @@ def classify_for_strategy_routing(
         trace_id=trace_id,
         trigger_source=trigger_source,
         dry_run=dry_run,
+        allow_backtest_release=allow_backtest_release,
         registry=registry,
     )
     if blocked is not None:

@@ -48,6 +48,8 @@ StrategyBacktest 的第一阶段目标是：
 
 当前 P0 可以复用 `replay_strategy_analysis_chain` 得到历史周期的 `DecisionSnapshot` 语义。
 
+StrategyBacktest 允许消费已经冻结的 `validating` 版本包，用于产生批准前验证证据。该放行只适用于测试环境回测 / 回放链路，不适用于正式主交易编排；正式主交易编排仍只能消费已经批准并启用的 StrategyAnalysisRelease。
+
 由于 `replay_strategy_analysis_chain` 复用正式策略分析 service，当前 P0 会把回放过程中的策略分析事实写入当前测试库的正式策略分析表。该行为只允许在测试环境使用；正式环境不得运行。
 
 OpsConsole 触发的回测必须先生成 `StrategyBacktestRun` 运行记录，用于保存请求参数、排队 / 运行 / 完成状态、错误摘要和最终 JSON 摘要。`StrategyBacktestRun` 只属于测试环境研究能力，不属于正式自动交易主链路对象。

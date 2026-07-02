@@ -14,15 +14,21 @@ import { BacktestAutoRefresh } from "../auto-refresh";
 
 type PageProps = {
   params: Promise<{ run_id: string }>;
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-export default async function StrategyBacktestDetailPage({ params }: PageProps) {
+const PERIOD_PAGE_SIZE = 1000;
+
+export default async function StrategyBacktestDetailPage({ params, searchParams }: PageProps) {
   const { run_id: runId } = await params;
+  const resolvedSearchParams = searchParams ? await searchParams : {};
+  const periodPage = positiveIntParam(resolvedSearchParams.period_page, 1);
+  const periodOffset = (periodPage - 1) * PERIOD_PAGE_SIZE;
   const detailResult = await opsFetch<Record<string, unknown>>(
     `/api/ops/strategy-backtests/runs/${encodeURIComponent(runId)}/`
   );
   const periodsResult = await opsFetch<Paginated<Record<string, unknown>>>(
-    `/api/ops/strategy-backtests/runs/${encodeURIComponent(runId)}/periods/?limit=500`
+    `/api/ops/strategy-backtests/runs/${encodeURIComponent(runId)}/periods/?limit=${PERIOD_PAGE_SIZE}&offset=${periodOffset}`
   );
 
   if (!detailResult.ok) {
@@ -39,7 +45,7 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
   const periodPagination = periodsResult.data.pagination;
   const selectedStatus = String(selectedRun.status ?? "");
   const diagnosticStatus = String(selectedRun.diagnostic_status ?? "");
-  const shouldRefresh = !diagnosticStatus && (selectedStatus === "queued" || selectedStatus === "running");
+  const shouldRefresh = selectedStatus === "queued" || selectedStatus === "running";
   const progressCompleted = Number(selectedRun.progress_completed_periods ?? 0);
   const progressTotal = Number(selectedRun.progress_total_periods ?? 0);
   const progressPercent = progressTotal > 0 ? Math.min(100, Math.round((progressCompleted / progressTotal) * 100)) : 0;
@@ -130,6 +136,8 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
               runId={displayValue(selectedRun.id)}
               periods={periodRows}
               total={Number(periodPagination.total ?? 0)}
+              page={periodPage}
+              pageSize={PERIOD_PAGE_SIZE}
               isFinished={!shouldRefresh && Object.keys(resultSummary).length > 0}
             />
           </CardContent>
@@ -172,11 +180,15 @@ function BacktestPeriodTable({
   runId,
   periods,
   total,
+  page,
+  pageSize,
   isFinished
 }: {
   runId: string;
   periods: Array<Record<string, unknown>>;
   total: number;
+  page: number;
+  pageSize: number;
   isFinished: boolean;
 }) {
   if (periods.length === 0) {
@@ -213,12 +225,32 @@ function BacktestPeriodTable({
   ];
   const gridTemplateColumns =
     "70px 170px 100px 110px 150px 80px 90px 100px 100px 100px 100px 120px 140px 120px 120px 130px 100px 100px 110px 180px";
+  const from = periods.length > 0 ? (page - 1) * pageSize + 1 : 0;
+  const to = Math.min((page - 1) * pageSize + periods.length, total);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const hasPrevious = page > 1;
+  const hasNext = page < totalPages;
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-muted-foreground">
-        模拟成交价按该 UTC 4h 周期的开盘价计算，不是真实交易所订单价；仓位变化为目标仓位相对上一周期仓位的变化。
-        {total > periods.length ? ` 当前展示前 ${periods.length} 条，共 ${total} 条。` : ""}
+      <div className="flex flex-col gap-2 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
+        <div>
+          模拟成交价按该 UTC 4h 周期的开盘价计算，不是真实交易所订单价；仓位变化为目标仓位相对上一周期仓位的变化。
+          {total > periods.length ? ` 当前展示 ${from}-${to} 条，共 ${total} 条。` : ""}
+        </div>
+        {totalPages > 1 ? (
+          <div className="flex items-center gap-2">
+            <PeriodPageLink runId={runId} page={page - 1} disabled={!hasPrevious}>
+              上一页
+            </PeriodPageLink>
+            <span>
+              第 {page} / {totalPages} 页
+            </span>
+            <PeriodPageLink runId={runId} page={page + 1} disabled={!hasNext}>
+              下一页
+            </PeriodPageLink>
+          </div>
+        ) : null}
       </div>
       <div className="overflow-x-auto rounded-xl border bg-card text-card-foreground">
         <div className="min-w-[2300px]">
@@ -251,6 +283,27 @@ function BacktestPeriodTable({
         </div>
       </div>
     </div>
+  );
+}
+
+function PeriodPageLink({
+  runId,
+  page,
+  disabled,
+  children
+}: {
+  runId: string;
+  page: number;
+  disabled: boolean;
+  children: ReactNode;
+}) {
+  if (disabled) {
+    return <span className="rounded border px-2 py-1 text-muted-foreground/60">{children}</span>;
+  }
+  return (
+    <Link className="rounded border px-2 py-1 no-underline hover:bg-muted" href={`/strategy-backtests/${runId}?period_page=${page}`}>
+      {children}
+    </Link>
   );
 }
 
@@ -448,4 +501,13 @@ function compactId(value: unknown): string {
     return text || "—";
   }
   return `${text.slice(0, 8)}…${text.slice(-6)}`;
+}
+
+function positiveIntParam(value: string | string[] | undefined, fallback: number): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return parsed;
 }

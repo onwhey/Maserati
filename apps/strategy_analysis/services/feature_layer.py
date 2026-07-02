@@ -488,6 +488,7 @@ def build_feature_set(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     existing = FeatureSet.objects.filter(business_request_key=business_request_key).first()
@@ -534,6 +535,7 @@ def build_feature_set(
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.FEATURE_DEFINITION,
             expected_definition_set_hash=expected_definition_set_hash,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError) as exc:
         if not dry_run:

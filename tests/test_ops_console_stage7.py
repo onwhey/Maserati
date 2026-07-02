@@ -1014,6 +1014,42 @@ def test_strategy_release_viewer_can_create_strategy_backtest_run(monkeypatch) -
     assert captured["trigger_source"] == "ops_console_strategy_backtest"
 
 
+def test_strategy_release_viewer_can_delete_strategy_backtest_run(monkeypatch) -> None:
+    captured = {}
+
+    def fake_delete_strategy_backtest_run(**kwargs):
+        captured.update(kwargs)
+        return ServiceResult(
+            ResultStatus.SUCCEEDED,
+            "strategy_backtest_run_deleted",
+            "ok",
+            kwargs["trace_id"],
+            kwargs["trigger_source"],
+            {
+                "strategy_backtest_run_id": kwargs["strategy_backtest_run_id"],
+                "deleted_objects": {"feature_set": 1, "atomic_signal_set": 1},
+            },
+        )
+
+    monkeypatch.setattr("apps.ops_console.views.delete_strategy_backtest_run", fake_delete_strategy_backtest_run)
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.post(
+        reverse("ops_console:strategy_backtest_run_delete", args=[18]),
+        data=json.dumps({"reason": "cleanup bad backtest"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reason_code"] == "strategy_backtest_run_deleted"
+    assert payload["data"]["strategy_backtest_run_id"] == 18
+    assert captured["strategy_backtest_run_id"] == 18
+    assert captured["reason"] == "cleanup bad backtest"
+    assert captured["operator_id"].startswith("user-strategy_release_viewer")
+    assert captured["trigger_source"] == "ops_console_strategy_backtest_delete"
+
+
 def test_strategy_release_viewer_can_list_strategy_backtest_runs_with_return_summary() -> None:
     StrategyBacktestRun.objects.create(
         run_key="ops-backtest-list-run",

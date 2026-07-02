@@ -10,10 +10,10 @@ export function BacktestAutoRefresh({ enabled }: { enabled: boolean }) {
     if (!enabled) {
       return;
     }
-    const timer = window.setTimeout(() => {
+    const timer = window.setInterval(() => {
       router.refresh();
     }, 5000);
-    return () => window.clearTimeout(timer);
+    return () => window.clearInterval(timer);
   }, [enabled, router]);
 
   return null;

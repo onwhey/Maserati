@@ -238,6 +238,7 @@ def _load_strategy_slice(
     release_id: int,
     release_hash: str,
     expected_definition_set_hash: str,
+    allow_backtest_release: bool,
 ) -> tuple[FrozenReleaseSlice | None, dict[int, StrategyDefinition] | None, str]:
     try:
         strategy_slice = resolve_frozen_slice(
@@ -245,6 +246,7 @@ def _load_strategy_slice(
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
             expected_definition_set_hash=expected_definition_set_hash,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError):
         return None, None, "strategy_definition_slice_invalid"
@@ -303,17 +305,20 @@ def _load_policy_and_rules(
     expected_policy_hash: str,
     allowed_regime_codes: list[str],
     strategy_ids: set[int],
+    allow_backtest_release: bool,
 ) -> tuple[FrozenReleaseSlice | None, FrozenReleaseSlice | None, StrategyRoutePolicy | None, tuple[StrategyRouteRule, ...] | None, dict[int, dict[str, Any]] | None, str]:
     try:
         policy_slice = resolve_frozen_slice(
             release_id=release_id,
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+            allow_backtest_release=allow_backtest_release,
         )
         rule_slice = resolve_frozen_slice(
             release_id=release_id,
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError):
         return None, None, None, None, None, "strategy_route_release_slice_invalid"
@@ -390,11 +395,13 @@ def _load_routing_context(
     release_hash: str,
     expected_policy_hash: str,
     expected_strategy_definition_set_hash: str,
+    allow_backtest_release: bool,
 ) -> tuple[RoutingContext | None, str]:
     strategy_slice, strategies, error = _load_strategy_slice(
         release_id=release_id,
         release_hash=release_hash,
         expected_definition_set_hash=expected_strategy_definition_set_hash,
+        allow_backtest_release=allow_backtest_release,
     )
     if error or strategy_slice is None or strategies is None:
         return None, error
@@ -404,6 +411,7 @@ def _load_routing_context(
         expected_policy_hash=expected_policy_hash,
         allowed_regime_codes=list(snapshot.market_regime_definition.allowed_regime_codes),
         strategy_ids=set(strategies),
+        allow_backtest_release=allow_backtest_release,
     )
     policy_slice, rule_slice, policy, rules, conditions, error = result
     if error or policy_slice is None or rule_slice is None or policy is None or rules is None or conditions is None:
@@ -847,6 +855,7 @@ def route_for_strategy_signal(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     error, message = _validate_request(
@@ -908,6 +917,7 @@ def route_for_strategy_signal(
         release_hash=strategy_analysis_release_hash,
         expected_policy_hash=expected_strategy_route_policy_hash,
         expected_strategy_definition_set_hash=expected_strategy_definition_set_hash,
+        allow_backtest_release=allow_backtest_release,
     )
     if context is None:
         return _result_with_alert(

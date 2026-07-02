@@ -110,7 +110,7 @@ OpsConsole 负责：
 从当前配置工作区生成 StrategyAnalysisRelease draft；
 执行 StrategyAnalysisRelease 依赖闭包预校验；
 冻结 StrategyAnalysisRelease；
-登记 StrategyAnalysisRelease 验证证据；
+在批准 StrategyAnalysisRelease 时自动登记同版本包回测证据；
 批准、拒绝、失效和启用 StrategyAnalysisRelease；
 展示复盘数据导出入口与导出历史；
 展示订单、状态和成交详情；
@@ -871,8 +871,8 @@ FeatureDefinition 由已纳入 AtomicSignal 的特征依赖自动反推；
 重新从当前配置工作区生成 draft ReleaseItem；
 执行依赖闭包预校验；
 冻结 draft 并进入 validating；
-登记验证证据；
-批准 validating 版本包；
+用 validating 版本包执行回测验证；
+批准 validating 版本包，并自动登记同版本包、同 hash 的已完成回测运行作为验证证据；
 拒绝 validating 版本包；
 失效 approved 或 active 版本包；
 启用 approved 版本包；
@@ -926,7 +926,7 @@ calculator 不可解析的组件；
 冻结必须二次确认；
 冻结后计算 release_hash；
 验证证据必须绑定 release_hash；
-批准必须引用验证证据；
+批准必须引用验证证据；如果没有既有验证证据，批准动作必须自动查找并登记同版本包、同 hash 的已完成回测运行作为验证证据；
 批准不会自动启用；
 启用必须二次确认；
 启用只影响新开始的编排；

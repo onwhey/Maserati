@@ -40,6 +40,7 @@ urlpatterns = [
     path("strategy-backtests/runs/", views.strategy_backtest_runs_view, name="strategy_backtest_runs"),
     path("strategy-backtests/runs/create/", views.strategy_backtest_run_create_view, name="strategy_backtest_run_create"),
     path("strategy-backtests/runs/<int:run_id>/", views.strategy_backtest_run_detail_view, name="strategy_backtest_run_detail"),
+    path("strategy-backtests/runs/<int:run_id>/delete/", views.strategy_backtest_run_delete_view, name="strategy_backtest_run_delete"),
     path(
         "strategy-backtests/runs/<int:run_id>/periods/",
         views.strategy_backtest_period_results_view,

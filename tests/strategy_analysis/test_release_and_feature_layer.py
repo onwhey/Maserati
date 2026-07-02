@@ -21,6 +21,8 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisReleaseActivation,
     StrategyAnalysisReleaseApproval,
     StrategyAnalysisReleaseItem,
+    StrategyBacktestRun,
+    StrategyBacktestRunStatus,
 )
 from apps.strategy_analysis.services.feature_layer import _extract_feature_value, build_feature_set
 from apps.strategy_analysis.services.release import (
@@ -317,6 +319,44 @@ def test_release_requires_validation_evidence_before_approval() -> None:
 
 
 @pytest.mark.django_db
+def test_release_approval_auto_registers_completed_backtest_evidence() -> None:
+    registry = register_required_calculators()
+    release, _feature = create_full_release()
+    freeze_release_for_validation(release_id=release.id, trace_id="trace_release", trigger_source="test")
+    release.refresh_from_db()
+    StrategyBacktestRun.objects.create(
+        run_key="backtest:auto-evidence",
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+        reason_code="strategy_backtest_completed",
+        message="回测完成",
+        strategy_analysis_release=release,
+        strategy_analysis_release_hash=release.release_hash,
+        start_analysis_close_time_utc=dt(2026, 1, 1),
+        end_analysis_close_time_utc=dt(2026, 1, 2),
+        initial_equity=Decimal("10000"),
+        fee_rate=Decimal("0.0004"),
+        business_request_prefix="auto-evidence",
+        result_summary={"period_count": 7, "total_return_pct": "0.01", "max_drawdown_pct": "0.02"},
+        trace_id="trace_release",
+        trigger_source="test",
+    )
+
+    result = approve_release(
+        release_id=release.id,
+        operator_id="tester",
+        reason="test approval",
+        trace_id="trace_release",
+        trigger_source="test",
+        registry=registry,
+    )
+
+    assert result.status == ResultStatus.BLOCKED
+    assert result.reason_code == "release_integrity_failed"
+    release.refresh_from_db()
+    assert release.validation_evidence_count == 1
+
+
+@pytest.mark.django_db
 def test_release_rejects_fake_component_objects() -> None:
     registry = register_required_calculators()
     release, _feature = create_full_release()
@@ -365,6 +405,33 @@ def test_feature_layer_blocks_when_release_not_approved() -> None:
 
     assert result.status == ResultStatus.BLOCKED
     assert FeatureSet.objects.count() == 0
+
+
+@pytest.mark.django_db
+def test_feature_layer_allows_validating_release_for_backtest_replay() -> None:
+    registry = register_required_calculators()
+    snapshot = create_market_snapshot()
+    release, _feature = create_full_release()
+    freeze_release_for_validation(release_id=release.id, trace_id="trace_release", trigger_source="test")
+    release.refresh_from_db()
+    expected_hash = calculate_definition_set_hash(
+        release.items.filter(component_type=ReleaseItemComponentType.FEATURE_DEFINITION)
+    )
+
+    result = build_feature_set(
+        market_snapshot_id=snapshot.id,
+        strategy_analysis_release_id=release.id,
+        release_hash=release.release_hash,
+        expected_definition_set_hash=expected_hash,
+        business_request_key="feature-set:validating-backtest",
+        trace_id="trace_feature",
+        trigger_source="test",
+        registry=registry,
+        allow_backtest_release=True,
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    assert FeatureSet.objects.count() == 1
 
 
 @pytest.mark.django_db

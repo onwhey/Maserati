@@ -682,6 +682,7 @@ def build_atomic_signals(
     trace_id: str,
     trigger_source: str,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     registry: CalculatorRegistry = default_registry,
 ) -> ServiceResult:
     existing = AtomicSignalSet.objects.filter(business_request_key=business_request_key).first()
@@ -717,6 +718,7 @@ def build_atomic_signals(
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION,
             expected_definition_set_hash=expected_definition_set_hash,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError) as exc:
         return _result_with_alert(

@@ -309,12 +309,14 @@ def _load_quality_rule_set(
     release_id: int,
     release_hash: str,
     expected_quality_rule_set_hash: str,
+    allow_backtest_release: bool,
 ) -> tuple[StrategySignalQualityRuleSet | None, FrozenReleaseSlice | None, str]:
     try:
         quality_slice = resolve_frozen_slice(
             release_id=release_id,
             release_hash=release_hash,
             component_type=ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET,
+            allow_backtest_release=allow_backtest_release,
         )
     except (ObjectDoesNotExist, ValueError):
         return None, None, "strategy_signal_quality_rule_set_unavailable"
@@ -994,6 +996,7 @@ def _prepare_quality_validation(
     validation_mode: str,
     reference_time_utc: datetime | None,
     dry_run: bool,
+    allow_backtest_release: bool,
     trace_id: str,
     trigger_source: str,
 ) -> tuple[PreparedQualityValidation | None, ServiceResult | None]:
@@ -1046,6 +1049,7 @@ def _prepare_quality_validation(
         release_id=strategy_analysis_release_id,
         release_hash=strategy_analysis_release_hash,
         expected_quality_rule_set_hash=expected_quality_rule_set_hash,
+        allow_backtest_release=allow_backtest_release,
     )
     if rule_set is None or quality_slice is None:
         return None, _result_with_alert(
@@ -1122,6 +1126,7 @@ def validate_strategy_signal(
     validation_mode: str,
     reference_time_utc: datetime | None = None,
     dry_run: bool = False,
+    allow_backtest_release: bool = False,
     trace_id: str,
     trigger_source: str,
 ) -> ServiceResult:
@@ -1177,6 +1182,7 @@ def validate_strategy_signal(
         reference_time_utc=reference_time_utc,
         business_request_key=business_request_key,
         dry_run=dry_run,
+        allow_backtest_release=allow_backtest_release,
         trace_id=trace_id,
         trigger_source=trigger_source,
     )

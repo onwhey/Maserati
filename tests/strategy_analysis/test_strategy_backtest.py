@@ -9,11 +9,16 @@ from typing import Any
 
 import pytest
 from django.core.management import call_command
+from django.utils import timezone
 
 from apps.foundation.results import ResultStatus, ServiceResult
 from apps.market_data.domain import DATA_SOURCE_BINANCE_REST, TIMEFRAME_4H, configured_collection_domain
-from apps.market_data.models import Kline
+from apps.market_data.models import DataQualityResult, Kline, MarketSnapshot
 from apps.strategy_analysis.models import (
+    AnalysisObjectStatus,
+    AtomicSignalSet,
+    DomainSignalSet,
+    FeatureSet,
     StrategyAnalysisRelease,
     StrategyBacktestPeriodResult,
     StrategyBacktestRun,
@@ -21,6 +26,7 @@ from apps.strategy_analysis.models import (
 )
 from apps.strategy_analysis.services.backtest import (
     create_strategy_backtest_run,
+    delete_strategy_backtest_run,
     execute_strategy_backtest_run,
     run_strategy_backtest,
 )
@@ -325,6 +331,209 @@ def test_create_strategy_backtest_run_persists_queued_run_and_enqueues_task(monk
 
 
 @pytest.mark.django_db
+def test_delete_strategy_backtest_run_removes_generated_analysis_facts() -> None:
+    release = StrategyAnalysisRelease.objects.create(release_code="delete-backtest-release", release_hash="release-hash")
+    run = StrategyBacktestRun.objects.create(
+        run_key="delete-backtest-run",
+        status=StrategyBacktestRunStatus.FAILED,
+        reason_code="strategy_backtest_run_failed",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0"),
+        leverage=Decimal("1"),
+        business_request_prefix="delete-backtest",
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+    )
+    request_prefix = f"{run.business_request_prefix}-{run.id}"
+    quality_4h = _create_quality_result(f"{request_prefix}:20260220T000000Z:quality-4h", "4h")
+    quality_1d = _create_quality_result(f"{request_prefix}:20260220T000000Z:quality-1d", "1d")
+    snapshot = _create_market_snapshot(
+        business_request_key=f"{request_prefix}:20260220T000000Z:market-snapshot",
+        quality_4h=quality_4h,
+        quality_1d=quality_1d,
+    )
+    feature_set = FeatureSet.objects.create(
+        feature_set_key=f"delete-feature-set-{run.id}",
+        business_request_key=f"{request_prefix}:20260220T000000Z:feature-set",
+        market_snapshot=snapshot,
+        strategy_analysis_release=release,
+        release_hash=release.release_hash,
+        status=AnalysisObjectStatus.CREATED,
+        is_usable=True,
+        allows_atomic_signal=True,
+        feature_schema_version="1.0",
+        definition_set_hash="feature-definition-hash",
+        feature_count=0,
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+    )
+    atomic_set = AtomicSignalSet.objects.create(
+        atomic_signal_set_key=f"delete-atomic-set-{run.id}",
+        business_request_key=f"{request_prefix}:20260220T000000Z:atomic-set",
+        feature_set=feature_set,
+        feature_set_key=feature_set.feature_set_key,
+        strategy_analysis_release=release,
+        release_hash=release.release_hash,
+        market_snapshot=snapshot,
+        exchange=snapshot.exchange,
+        market_type=snapshot.market_type,
+        symbol=snapshot.symbol,
+        analysis_close_time_utc=snapshot.analysis_close_time_utc,
+        signal_schema_version="1.0",
+        definition_set_hash="atomic-definition-hash",
+        status=AnalysisObjectStatus.CREATED,
+        is_usable=True,
+        allows_domain_signal=True,
+        selected_definition_count=0,
+        computed_count=0,
+        valid_count=0,
+        invalid_count=0,
+        failed_count=0,
+        required_failed_count=0,
+        failure_ratio=Decimal("0"),
+        failure_block_ratio=Decimal("0"),
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+    )
+    domain_set = DomainSignalSet.objects.create(
+        domain_signal_set_key=f"delete-domain-set-{run.id}",
+        business_request_key=f"{request_prefix}:20260220T000000Z:domain-set",
+        atomic_signal_set=atomic_set,
+        atomic_signal_set_key=atomic_set.atomic_signal_set_key,
+        strategy_analysis_release=release,
+        release_hash=release.release_hash,
+        market_snapshot=snapshot,
+        exchange=snapshot.exchange,
+        market_type=snapshot.market_type,
+        symbol=snapshot.symbol,
+        analysis_close_time_utc=snapshot.analysis_close_time_utc,
+        domain_schema_version="1.0",
+        definition_set_hash="domain-definition-hash",
+        status=AnalysisObjectStatus.CREATED,
+        is_usable=True,
+        allows_market_regime=True,
+        selected_definition_count=0,
+        computed_count=0,
+        valid_count=0,
+        invalid_count=0,
+        required_failed_count=0,
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+    )
+    StrategyBacktestPeriodResult.objects.create(
+        strategy_backtest_run=run,
+        period_index=1,
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        status="blocked",
+        reason_code="test",
+        market_regime="",
+        selected_strategy="",
+        signal_direction="",
+        analysis_object_ids={
+            "market_snapshot_id": snapshot.id,
+            "feature_set_id": feature_set.id,
+            "atomic_signal_set_id": atomic_set.id,
+            "domain_signal_set_id": domain_set.id,
+        },
+    )
+
+    result = delete_strategy_backtest_run(
+        strategy_backtest_run_id=run.id,
+        operator_id="tester",
+        reason="cleanup bad backtest",
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    assert result.reason_code == "strategy_backtest_run_deleted"
+    assert result.data["deleted_period_result_count"] == 1
+    assert result.data["deleted_objects"]["feature_set"] == 1
+    assert result.data["deleted_objects"]["atomic_signal_set"] == 1
+    assert result.data["deleted_objects"]["domain_signal_set"] == 1
+    assert result.data["deleted_objects"]["market_snapshot"] == 1
+    assert result.data["deleted_objects"]["data_quality_result"] == 2
+    assert not StrategyBacktestRun.objects.filter(id=run.id).exists()
+    assert not StrategyBacktestPeriodResult.objects.filter(strategy_backtest_run_id=run.id).exists()
+    assert not DomainSignalSet.objects.filter(id=domain_set.id).exists()
+    assert not AtomicSignalSet.objects.filter(id=atomic_set.id).exists()
+    assert not FeatureSet.objects.filter(id=feature_set.id).exists()
+    assert not MarketSnapshot.objects.filter(id=snapshot.id).exists()
+    assert not DataQualityResult.objects.filter(id__in=[quality_4h.id, quality_1d.id]).exists()
+
+
+@pytest.mark.django_db
+def test_delete_strategy_backtest_run_blocks_active_run() -> None:
+    run = StrategyBacktestRun.objects.create(
+        run_key="delete-active-backtest-run",
+        status=StrategyBacktestRunStatus.RUNNING,
+        reason_code="strategy_backtest_running",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0"),
+        leverage=Decimal("1"),
+        business_request_prefix="delete-active-backtest",
+        trace_id="trace-delete-active-backtest-run",
+        trigger_source="test",
+    )
+
+    result = delete_strategy_backtest_run(
+        strategy_backtest_run_id=run.id,
+        trace_id="trace-delete-active-backtest-run",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.BLOCKED
+    assert result.reason_code == "strategy_backtest_delete_active_run_blocked"
+    assert StrategyBacktestRun.objects.filter(id=run.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_strategy_backtest_run_allows_stale_running_run() -> None:
+    stale_time = timezone.now() - timedelta(minutes=30)
+    run = StrategyBacktestRun.objects.create(
+        run_key="delete-stale-running-backtest-run",
+        status=StrategyBacktestRunStatus.RUNNING,
+        reason_code="strategy_backtest_running",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0"),
+        leverage=Decimal("1"),
+        business_request_prefix="delete-stale-running-backtest",
+        progress_total_periods=1,
+        progress_completed_periods=1,
+        progress_updated_at_utc=stale_time,
+        trace_id="trace-delete-stale-running-backtest-run",
+        trigger_source="test",
+    )
+    StrategyBacktestPeriodResult.objects.create(
+        strategy_backtest_run=run,
+        period_index=1,
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        status="completed_no_strategy",
+        reason_code="strategy_route_decision_created",
+        market_regime="",
+        selected_strategy="",
+        signal_direction="",
+    )
+
+    result = delete_strategy_backtest_run(
+        strategy_backtest_run_id=run.id,
+        trace_id="trace-delete-stale-running-backtest-run",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    assert result.reason_code == "strategy_backtest_run_deleted"
+    assert result.data["deleted_period_result_count"] == 1
+    assert not StrategyBacktestRun.objects.filter(id=run.id).exists()
+
+
+@pytest.mark.django_db
 def test_execute_strategy_backtest_run_updates_result_summary(monkeypatch) -> None:
     release = StrategyAnalysisRelease.objects.create(release_code="execute-backtest-release", release_hash="release-hash")
     run = StrategyBacktestRun.objects.create(
@@ -338,6 +547,7 @@ def test_execute_strategy_backtest_run_updates_result_summary(monkeypatch) -> No
         fee_rate=Decimal("0"),
         leverage=Decimal("2"),
         business_request_prefix="execute-backtest",
+        error_message="previous failure",
         trace_id="trace-execute-backtest-run",
         trigger_source="test",
     )
@@ -404,6 +614,7 @@ def test_execute_strategy_backtest_run_updates_result_summary(monkeypatch) -> No
     run.refresh_from_db()
     assert run.status == StrategyBacktestRunStatus.SUCCEEDED
     assert run.reason_code == "strategy_backtest_completed"
+    assert run.error_message == ""
     assert run.result_summary["final_equity"] == "1010"
     assert run.progress_total_periods == 1
     assert run.progress_completed_periods == 1
@@ -547,4 +758,54 @@ def _create_4h_kline(
         quote_volume=Decimal("10000"),
         trade_count=100,
         data_source=DATA_SOURCE_BINANCE_REST,
+    )
+
+
+def _create_quality_result(business_request_key: str, timeframe: str) -> DataQualityResult:
+    return DataQualityResult.objects.create(
+        business_request_key=business_request_key,
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
+        exchange="binance",
+        market_type="usds_m_futures",
+        symbol="BTCUSDT",
+        timeframe=timeframe,
+        status="PASS",
+        check_start_open_time_utc=datetime(2026, 2, 19, 0, tzinfo=UTC),
+        check_end_open_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        expected_count=1,
+        actual_count=1,
+        allows_downstream=True,
+    )
+
+
+def _create_market_snapshot(
+    *,
+    business_request_key: str,
+    quality_4h: DataQualityResult,
+    quality_1d: DataQualityResult,
+) -> MarketSnapshot:
+    return MarketSnapshot.objects.create(
+        business_request_key=business_request_key,
+        exchange="binance",
+        market_type="usds_m_futures",
+        symbol="BTCUSDT",
+        base_timeframe="4h",
+        higher_timeframe="1d",
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        analysis_reference_time_utc=datetime(2026, 2, 20, 0, 0, 1, tzinfo=UTC),
+        latest_4h_open_time_utc=datetime(2026, 2, 19, 20, tzinfo=UTC),
+        latest_1d_open_time_utc=datetime(2026, 2, 19, 0, tzinfo=UTC),
+        lookback_4h_count=1,
+        lookback_1d_count=1,
+        actual_4h_count=1,
+        actual_1d_count=1,
+        start_4h_open_time_utc=datetime(2026, 2, 19, 20, tzinfo=UTC),
+        end_4h_open_time_utc=datetime(2026, 2, 19, 20, tzinfo=UTC),
+        start_1d_open_time_utc=datetime(2026, 2, 19, 0, tzinfo=UTC),
+        end_1d_open_time_utc=datetime(2026, 2, 19, 0, tzinfo=UTC),
+        data_quality_result_4h=quality_4h,
+        data_quality_result_1d=quality_1d,
+        trace_id="trace-delete-backtest-run",
+        trigger_source="test",
     )
