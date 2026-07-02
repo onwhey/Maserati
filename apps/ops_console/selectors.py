@@ -40,12 +40,21 @@ from apps.review_dataset.selectors import (
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueStatus
+from apps.market_data.models import MarketSnapshot
 from apps.strategy_analysis.models import (
+    AtomicSignalSet,
     AtomicSignalDefinition,
+    AtomicSignalValue,
+    DecisionSnapshot,
     DecisionPolicyDefinition,
     DefinitionLifecycleStatus,
+    DomainSignalSet,
     DomainSignalDefinition,
+    DomainSignalValue,
+    FeatureSet,
     FeatureDefinition,
+    FeatureValue,
+    MarketRegimeSnapshot,
     MarketRegimeDefinition,
     ReleaseItemComponentType,
     StrategyAnalysisRelease,
@@ -59,8 +68,12 @@ from apps.strategy_analysis.models import (
     StrategyAnalysisWorkspace,
     StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
+    StrategyRouteDecision,
     StrategyRoutePolicy,
     StrategyRouteRule,
+    StrategySignal,
+    StrategySignalQualityIssue,
+    StrategySignalQualityResult,
     StrategySignalQualityRuleSet,
 )
 
@@ -942,6 +955,8 @@ def _strategy_backtest_period_result_row(result: StrategyBacktestPeriodResult) -
             "fee",
             "equity",
             "drawdown_pct",
+            "analysis_object_ids",
+            "analysis_summary",
             "created_at_utc",
         ),
     ) or {}
@@ -961,6 +976,380 @@ def list_strategy_backtest_period_results(run_id: int, params: Mapping[str, Any]
     rows = list(queryset[offset : offset + limit])
     pagination = {"limit": limit, "offset": offset, "total": total}
     return {"items": [_strategy_backtest_period_result_row(result) for result in rows], "pagination": pagination}
+
+
+def get_strategy_backtest_period_analysis_detail(run_id: int, period_result_id: int) -> dict[str, Any]:
+    try:
+        period = StrategyBacktestPeriodResult.objects.select_related("strategy_backtest_run").get(
+            id=period_result_id,
+            strategy_backtest_run_id=run_id,
+        )
+    except ObjectDoesNotExist as exc:
+        raise OpsConsoleObjectNotFound(f"StrategyBacktestPeriodResult {period_result_id} not found") from exc
+
+    ids = period.analysis_object_ids or {}
+    if not ids:
+        return {
+            "available": False,
+            "message_zh": "这个周期没有保存分析链路对象 ID。请重新跑一次回测后再查看周期分析详情。",
+            "run": _strategy_backtest_run_row(period.strategy_backtest_run),
+            "period": _strategy_backtest_period_result_row(period),
+            "analysis_object_ids": {},
+            "analysis_summary": _clean(period.analysis_summary),
+            "layers": {},
+        }
+
+    feature_set = _get_by_id(FeatureSet, ids.get("feature_set_id"))
+    atomic_signal_set = _get_by_id(AtomicSignalSet, ids.get("atomic_signal_set_id"))
+    domain_signal_set = _get_by_id(DomainSignalSet, ids.get("domain_signal_set_id"))
+    market_regime_snapshot = _get_by_id(MarketRegimeSnapshot, ids.get("market_regime_snapshot_id"))
+    strategy_route_decision = _get_by_id(StrategyRouteDecision, ids.get("strategy_route_decision_id"))
+    strategy_signal = _get_by_id(StrategySignal, ids.get("strategy_signal_id"))
+    quality_result = _get_by_id(StrategySignalQualityResult, ids.get("quality_result_id"))
+    decision_snapshot = _get_by_id(DecisionSnapshot, ids.get("decision_snapshot_id"))
+    market_snapshot = _get_by_id(MarketSnapshot, ids.get("market_snapshot_id"))
+
+    return {
+        "available": True,
+        "message_zh": "",
+        "run": _strategy_backtest_run_row(period.strategy_backtest_run),
+        "period": _strategy_backtest_period_result_row(period),
+        "analysis_object_ids": _clean(ids),
+        "analysis_summary": _clean(period.analysis_summary),
+        "layers": {
+            "market_snapshot": _market_snapshot_detail(market_snapshot),
+            "feature_layer": _feature_layer_detail(feature_set),
+            "atomic_signal": _atomic_signal_detail(atomic_signal_set),
+            "domain_signal": _domain_signal_detail(domain_signal_set),
+            "market_regime": _market_regime_detail(market_regime_snapshot),
+            "strategy_routing": _strategy_routing_detail(strategy_route_decision),
+            "strategy_signal": _strategy_signal_detail(strategy_signal),
+            "strategy_signal_quality": _strategy_signal_quality_detail(quality_result),
+            "decision_snapshot": _decision_snapshot_detail(decision_snapshot),
+        },
+    }
+
+
+def _get_by_id(model: type[Any], object_id: Any) -> Any | None:
+    if object_id in (None, ""):
+        return None
+    try:
+        return model.objects.get(id=int(object_id))
+    except (ObjectDoesNotExist, TypeError, ValueError):
+        return None
+
+
+def _market_snapshot_detail(snapshot: MarketSnapshot | None) -> dict[str, Any]:
+    return {
+        "object": _model_summary(
+            snapshot,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "reason_code",
+                "analysis_close_time_utc",
+                "latest_4h_open_time_utc",
+                "latest_1d_open_time_utc",
+                "lookback_4h_count",
+                "lookback_1d_count",
+                "actual_4h_count",
+                "actual_1d_count",
+                "allows_feature_layer",
+                "payload_summary",
+            ),
+        ),
+    }
+
+
+def _feature_layer_detail(feature_set: FeatureSet | None) -> dict[str, Any]:
+    values = (
+        FeatureValue.objects.filter(feature_set=feature_set).order_by("feature_code")
+        if feature_set is not None
+        else FeatureValue.objects.none()
+    )
+    return {
+        "object": _model_summary(
+            feature_set,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "reason_code",
+                "is_usable",
+                "allows_atomic_signal",
+                "definition_set_hash",
+                "feature_count",
+                "created_at_utc",
+            ),
+        ),
+        "values": [
+            _model_summary(
+                value,
+                (
+                    "id",
+                    "feature_code",
+                    "value_type",
+                    "numeric_value",
+                    "bool_value",
+                    "text_value",
+                    "status",
+                    "is_valid",
+                    "algorithm_name",
+                    "algorithm_version",
+                    "evidence",
+                    "error_code",
+                    "error_message",
+                ),
+            )
+            for value in values[:300]
+        ],
+    }
+
+
+def _atomic_signal_detail(signal_set: AtomicSignalSet | None) -> dict[str, Any]:
+    values = (
+        AtomicSignalValue.objects.filter(atomic_signal_set=signal_set).order_by("signal_code")
+        if signal_set is not None
+        else AtomicSignalValue.objects.none()
+    )
+    return {
+        "object": _model_summary(
+            signal_set,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "is_usable",
+                "allows_domain_signal",
+                "selected_definition_count",
+                "computed_count",
+                "valid_count",
+                "invalid_count",
+                "required_failed_count",
+                "failure_ratio",
+                "payload_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+        "values": [
+            _model_summary(
+                value,
+                (
+                    "id",
+                    "signal_code",
+                    "direction",
+                    "strength",
+                    "confidence",
+                    "status",
+                    "is_valid",
+                    "value_bool",
+                    "value_decimal",
+                    "value_text",
+                    "value_json",
+                    "used_feature_codes",
+                    "used_feature_value_ids",
+                    "evidence_text_zh",
+                    "error_code",
+                    "error_message",
+                ),
+            )
+            for value in values[:300]
+        ],
+    }
+
+
+def _domain_signal_detail(signal_set: DomainSignalSet | None) -> dict[str, Any]:
+    values = (
+        DomainSignalValue.objects.filter(domain_signal_set=signal_set).order_by("domain_code")
+        if signal_set is not None
+        else DomainSignalValue.objects.none()
+    )
+    return {
+        "object": _model_summary(
+            signal_set,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "is_usable",
+                "allows_market_regime",
+                "selected_definition_count",
+                "computed_count",
+                "valid_count",
+                "invalid_count",
+                "required_failed_count",
+                "payload_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+        "values": [
+            _model_summary(
+                value,
+                (
+                    "id",
+                    "domain_code",
+                    "output_mode",
+                    "direction",
+                    "state_code",
+                    "strength",
+                    "coverage_ratio",
+                    "agreement_ratio",
+                    "status",
+                    "is_valid",
+                    "used_atomic_signal_codes",
+                    "used_atomic_signal_value_ids",
+                    "evidence_text_zh",
+                    "error_code",
+                    "error_message",
+                ),
+            )
+            for value in values[:100]
+        ],
+    }
+
+
+def _market_regime_detail(snapshot: MarketRegimeSnapshot | None) -> dict[str, Any]:
+    return {
+        "object": _model_summary(
+            snapshot,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "is_usable",
+                "allows_strategy_routing",
+                "regime_code",
+                "regime_scores",
+                "regime_confidence",
+                "classification_margin",
+                "used_domain_signal_codes",
+                "used_domain_signal_value_ids",
+                "evidence_text_zh",
+                "payload_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+    }
+
+
+def _strategy_routing_detail(decision: StrategyRouteDecision | None) -> dict[str, Any]:
+    return {
+        "object": _model_summary(
+            decision,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "route_outcome",
+                "matched_strategy_route_rule_id",
+                "selected_strategy_definition_id",
+                "fallback_used",
+                "is_usable",
+                "allows_strategy_signal",
+                "matched_conditions",
+                "selection_reason",
+                "evidence_text_zh",
+                "payload_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+    }
+
+
+def _strategy_signal_detail(signal: StrategySignal | None) -> dict[str, Any]:
+    return {
+        "object": _model_summary(
+            signal,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "is_usable",
+                "strategy_code",
+                "strategy_version",
+                "direction",
+                "strength",
+                "confidence",
+                "confidence_semantics",
+                "prediction_horizon",
+                "allows_strategy_signal_quality",
+                "trade_price_condition",
+                "aggregation_snapshot",
+                "conflict_snapshot",
+                "evidence_text_zh",
+                "payload_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+    }
+
+
+def _strategy_signal_quality_detail(result: StrategySignalQualityResult | None) -> dict[str, Any]:
+    issues = (
+        StrategySignalQualityIssue.objects.filter(quality_result=result).order_by("severity", "issue_code")
+        if result is not None
+        else StrategySignalQualityIssue.objects.none()
+    )
+    return {
+        "object": _model_summary(
+            result,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "quality_status",
+                "quality_score",
+                "is_usable",
+                "allows_decision_snapshot",
+                "issue_count",
+                "warning_count",
+                "error_count",
+                "critical_count",
+                "blocked_reason",
+                "check_summary",
+                "summary_text_zh",
+                "error_code",
+                "error_message",
+            ),
+        ),
+        "issues": [
+            _model_summary(
+                issue,
+                ("id", "issue_code", "severity", "check_group", "check_name", "field_name", "message_zh", "details"),
+            )
+            for issue in issues[:100]
+        ],
+    }
+
+
+def _decision_snapshot_detail(snapshot: DecisionSnapshot | None) -> dict[str, Any]:
+    return {
+        "object": _model_summary(
+            snapshot,
+            (
+                "id",
+                "business_request_key",
+                "status",
+                "is_usable",
+                "allows_order_plan",
+                "target_intent",
+                "target_position_ratio",
+                "target_confidence",
+                "target_reason_code",
+                "target_reason_summary_zh",
+                "frozen_trade_price_condition",
+                "evidence_summary",
+                "error_code",
+                "error_message",
+            ),
+        ),
+    }
 
 
 def _definition_enabled_filter(model: type[Any]) -> QuerySet[Any]:

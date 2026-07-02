@@ -252,6 +252,14 @@ def _replay_one_period(
             "status": "completed_no_strategy",
             "stopped_step": "strategy_routing",
             "reason_code": route.reason_code,
+            "ids": {
+                "market_snapshot_id": snapshot.data["market_snapshot_id"],
+                "feature_set_id": feature.data["feature_set_id"],
+                "atomic_signal_set_id": atomic.data["atomic_signal_set_id"],
+                "domain_signal_set_id": domain.data["domain_signal_set_id"],
+                "market_regime_snapshot_id": regime.data["market_regime_snapshot_id"],
+                "strategy_route_decision_id": route.data["strategy_route_decision_id"],
+            },
             "summary": _summary(
                 domain_signal_set_id=domain.data["domain_signal_set_id"],
                 market_regime_snapshot_id=regime.data["market_regime_snapshot_id"],

@@ -59,6 +59,7 @@ from .selectors import (
     get_review_dataset_record_detail,
     get_run_detail,
     get_runtime_guard_issue_detail,
+    get_strategy_backtest_period_analysis_detail,
     get_strategy_backtest_run_detail,
     list_alerts,
     list_audit_log,
@@ -486,6 +487,11 @@ def strategy_backtest_run_detail_view(_request: HttpRequest, run_id: int) -> Jso
 @require_ops_permission("run_strategy_backtest")
 def strategy_backtest_period_results_view(request: HttpRequest, run_id: int) -> JsonResponse:
     return _handle_selector(list_strategy_backtest_period_results, run_id, request.GET)
+
+
+@require_ops_permission("run_strategy_backtest")
+def strategy_backtest_period_analysis_detail_view(_request: HttpRequest, run_id: int, period_result_id: int) -> JsonResponse:
+    return _handle_selector(get_strategy_backtest_period_analysis_detail, run_id, period_result_id)
 
 
 @require_ops_permission("run_strategy_backtest", methods=("POST",))

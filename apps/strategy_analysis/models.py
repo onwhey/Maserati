@@ -341,6 +341,8 @@ class StrategyBacktestPeriodResult(models.Model):
     fee = models.DecimalField("模拟手续费", max_digits=38, decimal_places=18, null=True, blank=True)
     equity = models.DecimalField("周期结束权益", max_digits=38, decimal_places=18, null=True, blank=True)
     drawdown_pct = models.DecimalField("当前回撤比例", max_digits=20, decimal_places=18, null=True, blank=True)
+    analysis_object_ids = models.JSONField("分析链路对象 ID", default=dict, blank=True)
+    analysis_summary = models.JSONField("分析链路摘要", default=dict, blank=True)
     created_at_utc = models.DateTimeField("创建 UTC 时间", auto_now_add=True)
 
     class Meta:

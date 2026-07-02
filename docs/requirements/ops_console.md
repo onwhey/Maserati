@@ -1453,7 +1453,7 @@ OpsConsole 帮人看清系统、处理需要人工授权的问题和导出复盘
 
 OpsConsole 提供 StrategyBacktest P0 页面，用于在测试环境查看策略版本包的历史模拟收益。
 
-当前阶段 `/strategy-backtests` 作为 StrategyBacktest 入口页，用于创建 `StrategyBacktestRun` 后台任务和查看最近运行列表；单次回测详情页 `/strategy-backtests/{run_id}` 展示任务状态、结果摘要和周期模拟调仓明细。页面允许刷新；排队或运行中的任务不会因为页面刷新而丢失。
+当前阶段 `/strategy-backtests` 作为 StrategyBacktest 入口页，用于创建 `StrategyBacktestRun` 后台任务和查看最近运行列表；单次回测详情页 `/strategy-backtests/{run_id}` 展示任务状态、结果摘要和周期模拟调仓明细；周期复盘解释页 `/strategy-backtests/{run_id}/periods/{period_id}` 展示单个周期从 MarketSnapshot 到 DecisionSnapshot 的各层产出，并用人类可读方式解释系统为什么这样判断。页面允许刷新；排队或运行中的任务不会因为页面刷新而丢失。
 
 后台入口必须遵守：
 
@@ -1493,9 +1493,14 @@ UTC 日期范围；
 和 BTC 买入持有对比；
 首尾周期摘要；
 每个 UTC 4h 周期的调仓前仓位、目标仓位、杠杆倍数、有效仓位、仓位变化、有效仓位变化、模拟成交价、收盘价、周期收益、结束权益和估算爆仓信息。
+单个周期的 MarketSnapshot、FeatureLayer、AtomicSignal、DomainSignal、MarketRegime、StrategyRouting、StrategySignal、StrategySignalQuality 和 DecisionSnapshot 只读详情。
+单个周期的人工复盘解释，包括本周期结论、领域判断依据、领域使用的原子信号、原子信号使用的特征值、策略选择依据、目标仓位依据和排错建议。
 ```
 
 StrategyBacktest P0 页面不要求选择具体 4h 时间点。页面日期按 UTC 解释，并自动转换为当天 `00:00:00+00:00` 的 4h 边界。
+StrategyBacktest 周期复盘解释页只读取回测周期落库时保存的链路对象索引和各模块事实，不重新计算策略分析，不触发回测，不访问 Binance，不进入订单链路，不发送 Hermes，不调用大模型。旧回测记录如果没有保存链路对象索引，可以提示重新跑一次回测。
+
+周期复盘解释页默认面向人工阅读，不得以大段 JSON 作为主要展示方式。页面应按“市场事实 → 市场环境 → 策略路由 → 策略信号 → 信号质量 → 目标仓位”的逻辑组织内容；原始 JSON 和底层明细只作为折叠排查区保留。
 
 StrategyBacktest P0 页面中“无目标仓位时”的默认选项为“维持上一周期仓位”，用于更贴近正式主链路：没有新的目标仓位不等于主动平仓。只有策略明确输出目标仓位为 0 时，回测才模拟平仓。
 

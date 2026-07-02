@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 
 import { ApiError } from "@/components/ops/api-error";
 import { PageHeader } from "@/components/ops/page-header";
-import { SimpleTable } from "@/components/ops/simple-table";
 import { StatusBadge } from "@/components/ops/status-badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { opsFetch } from "@/lib/api/client";
@@ -73,6 +72,7 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
               <Metric label="当前处理边界" value={formatUtcDate(selectedRun.progress_current_analysis_close_time_utc)} />
               <Metric label="开始边界" value={formatUtcDate(selectedRun.start_analysis_close_time_utc)} />
               <Metric label="结束边界" value={formatUtcDate(selectedRun.end_analysis_close_time_utc)} />
+              <Metric label="创建时间" value={formatUtcDate(selectedRun.created_at_utc)} />
             </div>
 
             {progressTotal > 0 ? (
@@ -127,6 +127,7 @@ export default async function StrategyBacktestDetailPage({ params }: PageProps) 
           </CardHeader>
           <CardContent>
             <BacktestPeriodTable
+              runId={displayValue(selectedRun.id)}
               periods={periodRows}
               total={Number(periodPagination.total ?? 0)}
               isFinished={!shouldRefresh && Object.keys(resultSummary).length > 0}
@@ -163,20 +164,17 @@ function BacktestResult({ result }: { result: Record<string, unknown> }) {
         <div className="mb-2 text-sm font-medium">策略出现次数</div>
         <StrategyCounts value={result.strategy_counts} />
       </div>
-
-      <div className="grid gap-3 lg:grid-cols-2">
-        <PeriodSummary title="第一周期" value={asRecord(result.first_period)} />
-        <PeriodSummary title="最后周期" value={asRecord(result.last_period)} />
-      </div>
     </div>
   );
 }
 
 function BacktestPeriodTable({
+  runId,
   periods,
   total,
   isFinished
 }: {
+  runId: string;
   periods: Array<Record<string, unknown>>;
   total: number;
   isFinished: boolean;
@@ -191,37 +189,67 @@ function BacktestPeriodTable({
     );
   }
 
+  const columns: Array<{ key: string; label: string; render?: (row: Record<string, unknown>) => ReactNode }> = [
+    { key: "period_index", label: "序号" },
+    { key: "analysis_close_time_utc", label: "UTC 周期", render: (row) => formatUtcMinute(row.analysis_close_time_utc) },
+    { key: "status", label: "状态", render: (row) => statusText(row.status) },
+    { key: "period_return_pct", label: "周期收益", render: (row) => <ReturnPercent value={row.period_return_pct} /> },
+    { key: "selected_strategy", label: "策略", render: (row) => strategyLabel(row.selected_strategy) },
+    { key: "signal_direction", label: "方向", render: (row) => directionLabel(row.signal_direction) },
+    { key: "previous_position_ratio", label: "调仓前", render: (row) => formatPosition(row.previous_position_ratio) },
+    { key: "target_position_ratio", label: "目标仓位", render: (row) => formatPosition(row.target_position_ratio) },
+    { key: "effective_position_ratio", label: "有效仓位", render: (row) => formatPosition(row.effective_position_ratio) },
+    { key: "position_change_ratio", label: "仓位变化", render: (row) => positionChangeText(row.position_change_ratio) },
+    { key: "effective_position_change_ratio", label: "有效变化", render: (row) => positionChangeText(row.effective_position_change_ratio) },
+    { key: "position_change_notional", label: "变化金额", render: (row) => signedDecimal(row.position_change_notional, 2) },
+    { key: "effective_position_notional", label: "有效名义金额", render: (row) => signedDecimal(row.effective_position_notional, 2) },
+    { key: "simulated_execution_price", label: "模拟成交价", render: (row) => formatDecimal(row.simulated_execution_price, 2) },
+    { key: "close_price", label: "收盘价", render: (row) => formatDecimal(row.close_price, 2) },
+    { key: "liquidation_price", label: "估算强平价", render: (row) => formatDecimal(row.liquidation_price, 2) },
+    { key: "kline_return_pct", label: "K线涨跌", render: (row) => formatPercent(row.kline_return_pct) },
+    { key: "fee", label: "手续费", render: (row) => formatDecimal(row.fee, 4) },
+    { key: "equity", label: "权益", render: (row) => formatDecimal(row.equity, 2) },
+    { key: "reason_code", label: "原因", render: (row) => reasonLabel(row.reason_code) },
+  ];
+  const gridTemplateColumns =
+    "70px 170px 100px 110px 150px 80px 90px 100px 100px 100px 100px 120px 140px 120px 120px 130px 100px 100px 110px 180px";
+
   return (
     <div className="space-y-3">
       <div className="text-xs text-muted-foreground">
         模拟成交价按该 UTC 4h 周期的开盘价计算，不是真实交易所订单价；仓位变化为目标仓位相对上一周期仓位的变化。
         {total > periods.length ? ` 当前展示前 ${periods.length} 条，共 ${total} 条。` : ""}
       </div>
-      <SimpleTable
-        rows={periods}
-        columns={[
-          { key: "period_index", label: "序号" },
-          { key: "analysis_close_time_utc", label: "UTC 周期", render: (row) => formatUtc(row.analysis_close_time_utc) },
-          { key: "status", label: "状态", render: (row) => statusText(row.status) },
-          { key: "period_return_pct", label: "周期收益", render: (row) => <ReturnPercent value={row.period_return_pct} /> },
-          { key: "selected_strategy", label: "策略", render: (row) => strategyLabel(row.selected_strategy) },
-          { key: "signal_direction", label: "方向", render: (row) => directionLabel(row.signal_direction) },
-          { key: "previous_position_ratio", label: "调仓前", render: (row) => formatPosition(row.previous_position_ratio) },
-          { key: "target_position_ratio", label: "目标仓位", render: (row) => formatPosition(row.target_position_ratio) },
-          { key: "effective_position_ratio", label: "有效仓位", render: (row) => formatPosition(row.effective_position_ratio) },
-          { key: "position_change_ratio", label: "仓位变化", render: (row) => positionChangeText(row.position_change_ratio) },
-          { key: "effective_position_change_ratio", label: "有效变化", render: (row) => positionChangeText(row.effective_position_change_ratio) },
-          { key: "position_change_notional", label: "变化金额", render: (row) => signedDecimal(row.position_change_notional, 2) },
-          { key: "effective_position_notional", label: "有效名义金额", render: (row) => signedDecimal(row.effective_position_notional, 2) },
-          { key: "simulated_execution_price", label: "模拟成交价", render: (row) => formatDecimal(row.simulated_execution_price, 2) },
-          { key: "close_price", label: "收盘价", render: (row) => formatDecimal(row.close_price, 2) },
-          { key: "liquidation_price", label: "估算强平价", render: (row) => formatDecimal(row.liquidation_price, 2) },
-          { key: "kline_return_pct", label: "K线涨跌", render: (row) => formatPercent(row.kline_return_pct) },
-          { key: "fee", label: "手续费", render: (row) => formatDecimal(row.fee, 4) },
-          { key: "equity", label: "权益", render: (row) => formatDecimal(row.equity, 2) },
-          { key: "reason_code", label: "原因", render: (row) => reasonLabel(row.reason_code) },
-        ]}
-      />
+      <div className="overflow-x-auto rounded-xl border bg-card text-card-foreground">
+        <div className="min-w-[2300px]">
+          <div
+            className="grid h-10 items-center border-b bg-muted/30 text-sm font-medium text-muted-foreground"
+            style={{ gridTemplateColumns }}
+          >
+            {columns.map((column) => (
+              <div key={column.key} className="min-w-0 truncate px-3">
+                {column.label}
+              </div>
+            ))}
+          </div>
+          <div>
+            {periods.map((row, index) => (
+              <Link
+                key={String(row.id ?? index)}
+                className="grid h-10 items-center border-b text-sm text-foreground no-underline transition-colors last:border-b-0 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                href={`/strategy-backtests/${runId}/periods/${row.id}`}
+                style={{ gridTemplateColumns }}
+              >
+                {columns.map((column) => (
+                  <div key={column.key} className="min-w-0 truncate px-3">
+                    {column.render ? column.render(row) : displayValue(row[column.key])}
+                  </div>
+                ))}
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -257,42 +285,6 @@ function StrategyCounts({ value }: { value: unknown }) {
   );
 }
 
-function PeriodSummary({ title, value }: { title: string; value: Record<string, unknown> }) {
-  return (
-    <div>
-      <div className="mb-2 text-sm font-medium">{title}</div>
-      <div className="grid gap-2 rounded-lg border bg-muted/20 p-3 text-sm">
-        <SummaryRow label="时间" value={formatUtc(value.analysis_close_time_utc)} />
-        <SummaryRow label="状态" value={statusText(value.status)} />
-        <SummaryRow label="原因" value={reasonLabel(value.reason_code)} />
-        <SummaryRow label="爆仓" value={value.is_liquidated ? "是" : "否"} />
-        <SummaryRow label="估算强平价" value={formatDecimal(value.liquidation_price, 2)} />
-        <SummaryRow label="市场环境" value={regimeLabel(value.market_regime)} />
-        <SummaryRow label="策略" value={strategyLabel(value.selected_strategy)} />
-        <SummaryRow label="方向" value={directionLabel(value.signal_direction)} />
-        <SummaryRow label="目标仓位" value={formatPosition(value.target_position_ratio)} />
-        <SummaryRow label="有效仓位" value={formatPosition(value.effective_position_ratio)} />
-        <SummaryRow label="实际仓位" value={formatPosition(value.position_ratio)} />
-        <SummaryRow label="开盘 / 收盘" value={`${formatDecimal(value.open_price, 2)} / ${formatDecimal(value.close_price, 2)}`} />
-        <SummaryRow label="K线涨跌" value={formatPercent(value.kline_return_pct)} />
-        <SummaryRow label="周期收益" value={formatPercent(value.period_return_pct)} />
-        <SummaryRow label="回撤" value={formatPercent(value.drawdown_pct)} />
-        <SummaryRow label="手续费" value={formatDecimal(value.fee, 4)} />
-        <SummaryRow label="权益" value={formatDecimal(value.equity, 2)} />
-      </div>
-    </div>
-  );
-}
-
-function SummaryRow({ label, value }: { label: string; value: unknown }) {
-  return (
-    <div className="grid grid-cols-[92px_1fr] gap-3">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words font-medium">{displayValue(value)}</span>
-    </div>
-  );
-}
-
 function formatDecimal(value: unknown, digits = 2): string {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -310,6 +302,15 @@ function formatUtcDate(value: unknown): string {
     return "—";
   }
   return text.slice(0, 10) || "—";
+}
+
+function formatUtcMinute(value: unknown): string {
+  const text = String(value ?? "");
+  if (!text) {
+    return "—";
+  }
+  const minute = text.slice(0, 16).replace("T", " ");
+  return minute || "—";
 }
 
 function formatPercent(value: unknown): string {
@@ -409,7 +410,7 @@ function statusText(value: unknown): string {
   const text = String(value ?? "");
   const labels: Record<string, string> = {
     completed: "已完成",
-    completed_no_strategy: "已完成，无策略",
+    completed_no_strategy: "无策略",
     liquidated: "已爆仓",
     blocked: "阻断",
     running: "运行中",
@@ -427,19 +428,6 @@ function directionLabel(value: unknown): string {
     bearish: "偏空",
     neutral: "中性",
     none: "无方向"
-  };
-  return (labels[text] ?? text) || "—";
-}
-
-function regimeLabel(value: unknown): string {
-  const text = String(value ?? "");
-  const labels: Record<string, string> = {
-    unclear_environment: "环境不明确",
-    bearish_trend_continuation: "空头趋势延续",
-    high_risk_environment: "高风险环境",
-    bullish_trend_continuation: "多头趋势延续",
-    bearish_rebound_environment: "空头背景反弹",
-    bullish_pullback_environment: "多头背景回调"
   };
   return (labels[text] ?? text) || "—";
 }

@@ -432,6 +432,48 @@ StrategyBacktest 只写 StrategyBacktestRun 和 StrategyBacktestPeriodResult；
 不得修改 StrategyAnalysisRelease 状态；
 ```
 
+### 9.1 本次正式链路边界验收记录
+
+验收日期：2026-07-02
+
+当前 `.env` 关键开关：
+
+```text
+DEPLOYMENT_REAL_TRADING_ENABLED=false
+ALLOW_REAL_EXTERNAL_SERVICES=true
+BINANCE_ORDER_SUBMISSION_ENABLED=false
+ORDER_PLAN_ENABLED=false
+RISK_CHECK_ENABLED=false
+EXECUTION_PREPARATION_ENABLED=false
+BINANCE_ACCOUNT_READ_ENABLED=false
+BINANCE_PUBLIC_DATA_ENABLED=true
+BINANCE_GATEWAY_ENABLED=true
+```
+
+订单链路对象计数：
+
+```text
+CandidateOrderIntent     0
+ApprovedOrderIntent      0
+PreparedOrderIntent      0
+OrderSubmissionAttempt   0
+TradeFill                0
+```
+
+验收结论：
+
+```text
+通过。
+
+当前环境允许真实公共行情访问，用于 K 线采集和回测验证；
+真实交易部署权限关闭；
+Binance 订单提交关闭；
+OrderPlan、RiskCheck、ExecutionPreparation 均关闭；
+回测未产生候选订单、风控审批订单、执行准备订单、订单提交尝试或成交事实。
+
+因此，本阶段回测没有进入真实交易订单链路，没有污染正式交易对象。
+```
+
 ## 10. 建议验收命令
 
 代码级验收：
@@ -531,4 +573,3 @@ StrategySignal 具体规则改进；
 ```
 
 如果未满足，应先修系统问题，不进入策略参数调优。
-

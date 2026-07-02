@@ -45,6 +45,11 @@ urlpatterns = [
         views.strategy_backtest_period_results_view,
         name="strategy_backtest_period_results",
     ),
+    path(
+        "strategy-backtests/runs/<int:run_id>/periods/<int:period_result_id>/analysis/",
+        views.strategy_backtest_period_analysis_detail_view,
+        name="strategy_backtest_period_analysis_detail",
+    ),
     path("strategy-releases/components/", views.strategy_release_components_view, name="strategy_release_components"),
     path("strategy-releases/create-draft/", views.strategy_release_create_draft_view, name="strategy_release_create_draft"),
     path("strategy-releases/<int:release_id>/", views.strategy_release_detail_view, name="strategy_release_detail"),

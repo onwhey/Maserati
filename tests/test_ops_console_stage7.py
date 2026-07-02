@@ -1133,3 +1133,80 @@ def test_strategy_release_viewer_can_list_strategy_backtest_period_results() -> 
     assert row["liquidation_price"] == "110"
     assert row["liquidation_reason_code"] == "short_liquidation_intraperiod"
     assert row["simulated_execution_price"] == "100"
+
+
+def test_strategy_release_viewer_can_read_strategy_backtest_period_analysis_detail() -> None:
+    run = StrategyBacktestRun.objects.create(
+        run_key="ops-backtest-period-analysis-run",
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+        reason_code="strategy_backtest_completed",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0.0002"),
+        leverage=Decimal("2"),
+        business_request_prefix="ops-backtest-period-analysis",
+        trace_id="trace-ops-backtest-period-analysis",
+        trigger_source="test",
+    )
+    period = StrategyBacktestPeriodResult.objects.create(
+        strategy_backtest_run=run,
+        period_index=1,
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        status="completed",
+        reason_code="decision_snapshot_created",
+        period_return_pct=Decimal("0.01"),
+        analysis_object_ids={"feature_set_id": 999999},
+        analysis_summary={"strategy_routing": {"selected_strategy": "short_trend_following"}},
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.get(
+        reverse(
+            "ops_console:strategy_backtest_period_analysis_detail",
+            kwargs={"run_id": run.id, "period_result_id": period.id},
+        )
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["available"] is True
+    assert payload["period"]["id"] == period.id
+    assert payload["analysis_object_ids"]["feature_set_id"] == 999999
+    assert "feature_layer" in payload["layers"]
+
+
+def test_strategy_backtest_period_analysis_detail_without_ids_requests_rerun() -> None:
+    run = StrategyBacktestRun.objects.create(
+        run_key="ops-backtest-period-analysis-empty-run",
+        status=StrategyBacktestRunStatus.SUCCEEDED,
+        reason_code="strategy_backtest_completed",
+        start_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        end_analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        initial_equity=Decimal("1000"),
+        fee_rate=Decimal("0.0002"),
+        leverage=Decimal("2"),
+        business_request_prefix="ops-backtest-period-analysis-empty",
+        trace_id="trace-ops-backtest-period-analysis-empty",
+        trigger_source="test",
+    )
+    period = StrategyBacktestPeriodResult.objects.create(
+        strategy_backtest_run=run,
+        period_index=1,
+        analysis_close_time_utc=datetime(2026, 2, 20, 0, tzinfo=UTC),
+        status="completed",
+        reason_code="decision_snapshot_created",
+    )
+    client = _client_with_group("strategy_release_viewer")
+
+    response = client.get(
+        reverse(
+            "ops_console:strategy_backtest_period_analysis_detail",
+            kwargs={"run_id": run.id, "period_result_id": period.id},
+        )
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["available"] is False
+    assert "重新跑一次回测" in payload["message_zh"]

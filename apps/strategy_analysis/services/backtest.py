@@ -281,6 +281,8 @@ def _replace_period_results(run: StrategyBacktestRun, data: dict[str, Any]) -> N
                 fee=_optional_decimal(period.get("fee")),
                 equity=_optional_decimal(period.get("equity")),
                 drawdown_pct=_optional_decimal(period.get("drawdown_pct")),
+                analysis_object_ids=period.get("analysis_object_ids") if isinstance(period.get("analysis_object_ids"), dict) else {},
+                analysis_summary=period.get("analysis_summary") if isinstance(period.get("analysis_summary"), dict) else {},
             )
         )
     if rows:
@@ -762,6 +764,8 @@ def _period_row(
         "fee": _decimal_text(fee),
         "equity": _decimal_text(equity),
         "drawdown_pct": _decimal_text(drawdown),
+        "analysis_object_ids": period.get("ids") if isinstance(period.get("ids"), dict) else {},
+        "analysis_summary": summary,
     }
 
 
@@ -790,6 +794,8 @@ def _blocked_period_row(
         "liquidation_price": "",
         "liquidation_reason_code": "",
         "equity": _decimal_text(equity),
+        "analysis_object_ids": period.get("ids") if isinstance(period.get("ids"), dict) else {},
+        "analysis_summary": period.get("summary") if isinstance(period.get("summary"), dict) else {},
     }
 
 
