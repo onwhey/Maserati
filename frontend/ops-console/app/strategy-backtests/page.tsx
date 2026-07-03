@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Eye, Trash2 } from "lucide-react";
+import { Eye } from "lucide-react";
 
 import { ApiError } from "@/components/ops/api-error";
 import { PageHeader } from "@/components/ops/page-header";
@@ -12,7 +12,7 @@ import type { Paginated } from "@/lib/api/types";
 import { asRows } from "@/lib/ops-data";
 
 import { StrategyBacktestForm } from "./backtest-form";
-import { deleteStrategyBacktestRunAction } from "./actions";
+import { DeleteStrategyBacktestRunButton } from "./delete-run-button";
 
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -111,17 +111,7 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
                         <Eye className="h-4 w-4" />
                         详情
                       </Link>
-                      <form action={deleteStrategyBacktestRunAction}>
-                        <input type="hidden" name="run_id" value={String(row.id)} />
-                        <button
-                          type="submit"
-                          disabled={!canDeleteRun(row)}
-                          className="inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2 py-1 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-950/30"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          删除
-                        </button>
-                      </form>
+                      <DeleteStrategyBacktestRunButton runId={String(row.id)} disabled={!canDeleteRun(row)} />
                     </div>
                   )
                 },
