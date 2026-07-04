@@ -2,7 +2,9 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { Trash2, X } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { useFormStatus } from "react-dom";
 
 import { EmptyState } from "@/components/ops/empty-state";
 import { StatusBadge } from "@/components/ops/status-badge";
@@ -10,13 +12,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 
-import { bulkUpdateStrategyWorkspaceItemsAction } from "./actions";
+import { bulkUpdateStrategyWorkspaceItemsAction, deleteStrategyRoutePolicyAction } from "./actions";
 import { WorkspaceComponentActionForm, WorkspaceRoutePolicyRadioForm } from "./forms";
 import { initialStrategyReleaseActionState } from "../strategy-releases/state";
 
 type ComponentGroup = {
   componentType: string;
   componentCode: string;
+  componentObjectId: string;
+  renderKey: string;
   displayName: string;
   selected?: Record<string, unknown>;
   items: Record<string, unknown>[];
@@ -42,6 +46,47 @@ function versionText(component: Record<string, unknown>) {
   return displayText(component.version || component.algorithm_version, "无版本");
 }
 
+function humanizeStrategyText(value: unknown) {
+  return displayText(value, "暂无说明")
+    .replaceAll("bullish", "看多")
+    .replaceAll("bearish", "看空")
+    .replaceAll("neutral", "中性 / 不交易")
+    .replaceAll("no_trade_strategy", "不交易策略")
+    .replaceAll("StrategyDefinition", "策略定义");
+}
+
+function strategyCoreIdea(component: Record<string, unknown>) {
+  const code = String(component.component_code ?? "");
+  if (code === "long_trend_following") {
+    return "处理上涨趋势延续或有效向上突破；确认多头优势后输出看多判断，本层不直接下单。";
+  }
+  if (code === "long_pullback_support") {
+    return "处理大背景偏多中的回调或支撑侧机会；趋势未破坏且靠近支撑时倾向看多。";
+  }
+  if (code === "short_trend_following") {
+    return "处理下跌趋势延续或有效向下跌破；确认空头优势后输出看空判断，本层不直接下单。";
+  }
+  if (code === "short_rebound_pressure") {
+    return "处理大背景偏空中的反弹或压力侧机会；反弹未修复趋势且靠近压力时倾向看空。";
+  }
+  if (code.includes("top_reversal_unconfirmed_no_trade")) {
+    return "处理多头顶部反转候选但尚未确认的行情；不提前做空，也不继续追多，明确不交易。";
+  }
+  if (code.includes("bottom_reversal_unconfirmed_no_trade")) {
+    return "处理空头底部反转候选但尚未确认的行情；不提前做多，也不继续追空，明确不交易。";
+  }
+  if (code.includes("neutral_range_no_trade")) {
+    return "处理无方向震荡区间；没有明确趋势优势时不交易。";
+  }
+  if (code.includes("high_risk_environment_no_trade")) {
+    return "处理高风险或信号失真环境；先保护资金，不主动交易。";
+  }
+  if (code.includes("unclear_environment_no_trade")) {
+    return "处理市场环境不明确的阶段；事实不足以支持方向选择时不交易。";
+  }
+  return humanizeStrategyText(component.description);
+}
+
 function componentGroupKey(component: Record<string, unknown>) {
   return `${String(component.component_type)}:${String(component.component_code)}`;
 }
@@ -51,6 +96,8 @@ function groupComponentsByCode(components: Record<string, unknown>[], layerSlug?
     return components.map((component) => ({
       componentType: String(component.component_type ?? ""),
       componentCode: String(component.component_code ?? ""),
+      componentObjectId: String(component.component_object_id ?? ""),
+      renderKey: `${String(component.component_type ?? "")}:${String(component.component_object_id ?? "")}`,
       displayName: String(component.display_name ?? ""),
       selected: Boolean(component.workspace_is_selected_version) ? component : undefined,
       items: [component]
@@ -64,6 +111,8 @@ function groupComponentsByCode(components: Record<string, unknown>[], layerSlug?
   return [...grouped.values()].map((items) => ({
     componentType: String(items[0]?.component_type ?? ""),
     componentCode: String(items[0]?.component_code ?? ""),
+    componentObjectId: String(items[0]?.component_object_id ?? ""),
+    renderKey: componentGroupKey(items[0] ?? {}),
     displayName: String(items.find((item) => item.display_name)?.display_name ?? ""),
     selected: items.find((item) => Boolean(item.workspace_is_selected_version)),
     items
@@ -74,6 +123,7 @@ function groupSearchText(group: ComponentGroup) {
   return [
     group.componentType,
     group.componentCode,
+    group.componentObjectId,
     group.displayName,
     ...group.items.flatMap((item) => [
       item.version,
@@ -243,19 +293,21 @@ function GroupHeader({
   const isStrategy = group.componentType === "strategy_definition";
   const selectedVersion = group.selected ? versionText(group.selected) : "";
   const selectedIncluded = Boolean(group.selected?.workspace_is_included);
-  const selectedTitle = isFeature ? "当前采用" : isStrategy ? "当前选择" : "当前版本";
+  const selectedTitle = isFeature ? "当前采用" : isStrategy ? "当前路由使用" : "当前版本";
+  const title = isStrategy ? displayText(group.displayName, group.componentCode) : displayText(group.componentCode);
+  const subtitle = isStrategy ? displayText(group.componentCode) : displayText(group.displayName, "暂无展示名称");
   return (
     <summary className="cursor-pointer px-4 py-3 transition-colors hover:bg-muted/30">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
         <div className="min-w-0 space-y-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium text-foreground">{displayText(group.componentCode)}</span>
+            <span className="font-medium text-foreground">{title}</span>
             <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
               {group.items.length} 个版本
             </span>
           </div>
-          <div className="truncate text-sm text-muted-foreground">{displayText(group.displayName, "暂无展示名称")}</div>
-          <div className="text-xs text-muted-foreground">类型：{displayText(group.componentType)}</div>
+          <div className="truncate text-sm text-muted-foreground">{subtitle}</div>
+          {!isStrategy ? <div className="text-xs text-muted-foreground">类型：{displayText(group.componentType)}</div> : null}
         </div>
         <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           {group.selected ? (
@@ -266,10 +318,10 @@ function GroupHeader({
               {!isFeature && !isStrategy ? (
                 <div>{selectedIncluded ? "已纳入当前组合" : "未纳入当前组合"}</div>
               ) : null}
-              {isStrategy ? <div>是否打包由路由规则绑定决定</div> : null}
+              {isStrategy ? <div>当前路由正在使用这个策略版本</div> : null}
             </>
           ) : (
-            <div>未选择版本</div>
+            <div>{isStrategy ? "当前路由未使用" : "未选择版本"}</div>
           )}
         </div>
       </div>
@@ -277,55 +329,225 @@ function GroupHeader({
   );
 }
 
-function GroupCard({
+function RoutePolicyCard({
   group,
-  isFeature,
-  children
+  layerSlug
 }: {
   group: ComponentGroup;
-  isFeature: boolean;
-  children: ReactNode;
+  layerSlug: string;
 }) {
-  const isRoutePolicy = group.componentType === "strategy_route_policy";
+  const component = group.items[0] ?? {};
   return (
-    <div className="overflow-hidden rounded-xl border bg-card">
-      <div className="px-4 py-3">
-        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
-          <div className="min-w-0 space-y-1">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium text-foreground">{displayText(group.componentCode)}</span>
-              <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                {isRoutePolicy ? "独立路由方案" : `${group.items.length} 个版本`}
-              </span>
-            </div>
-            <div className="truncate text-sm text-muted-foreground">{displayText(group.displayName, "暂无展示名称")}</div>
-            <div className="text-xs text-muted-foreground">类型：{displayText(group.componentType)}</div>
+    <div className="rounded-xl border bg-card px-4 py-3">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_260px] lg:items-center">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">{displayText(group.displayName, group.componentCode)}</span>
+            <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+              {versionText(component)}
+            </span>
+            <StatusBadge value={component.status} />
           </div>
-          <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-            {group.selected ? (
-              <>
-                <div>
-                  {isRoutePolicy
-                    ? "当前使用"
-                    : group.componentType === "strategy_definition"
-                      ? "当前选择"
-                      : isFeature
-                        ? "当前采用"
-                        : "当前版本"}
-                  ：<span className="font-medium text-foreground">{versionText(group.selected)}</span>
-                </div>
-                {!isFeature && group.componentType !== "strategy_definition" && !isRoutePolicy ? (
-                  <div>{group.selected.workspace_is_included ? "已纳入当前组合" : "未纳入当前组合"}</div>
-                ) : null}
-              </>
-            ) : (
-              <div>{isRoutePolicy ? "未使用" : "未选择版本"}</div>
-            )}
-          </div>
+          <div className="text-xs text-muted-foreground">{displayText(group.componentCode)}</div>
+          <div className="text-sm text-muted-foreground">{displayText(component.description, "暂无说明")}</div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+          <WorkspaceRoutePolicyRadioForm component={component} layerPath={layerSlug} />
+          <DeleteRoutePolicyButton component={component} />
         </div>
       </div>
-      {children}
     </div>
+  );
+}
+
+const STRATEGY_ROW_TONES = [
+  "bg-sky-50/65 dark:bg-sky-950/20",
+  "bg-emerald-50/65 dark:bg-emerald-950/20",
+  "bg-amber-50/65 dark:bg-amber-950/20",
+  "bg-violet-50/65 dark:bg-violet-950/20",
+  "bg-rose-50/65 dark:bg-rose-950/20",
+  "bg-cyan-50/65 dark:bg-cyan-950/20"
+];
+
+function strategyRowTone(index: number) {
+  return STRATEGY_ROW_TONES[index % STRATEGY_ROW_TONES.length];
+}
+
+function versionSortValue(component: Record<string, unknown>) {
+  const version = versionText(component);
+  const versionNumber = version.match(/\d+/)?.[0];
+  if (versionNumber) {
+    return Number(versionNumber);
+  }
+  return Number(component.component_object_id ?? 0);
+}
+
+function sortedStrategyVersions(group: ComponentGroup) {
+  return [...group.items].sort((left, right) => {
+    const versionDiff = versionSortValue(left) - versionSortValue(right);
+    if (versionDiff !== 0) {
+      return versionDiff;
+    }
+    return Number(left.component_object_id ?? 0) - Number(right.component_object_id ?? 0);
+  });
+}
+
+function StrategyCompactTable({ groups }: { groups: ComponentGroup[] }) {
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1260px] border-collapse text-sm text-foreground/85">
+          <thead className="bg-muted/70 text-xs text-muted-foreground">
+            <tr className="border-b">
+              <th className="w-[340px] px-3 py-2 text-left font-medium">策略名称</th>
+              <th className="w-[260px] px-3 py-2 text-left font-medium">策略代码</th>
+              <th className="w-[80px] px-3 py-2 text-left font-medium">版本</th>
+              <th className="px-3 py-2 text-left font-medium">核心思路</th>
+              <th className="w-[150px] px-3 py-2 text-left font-medium">算法</th>
+              <th className="w-[110px] px-3 py-2 text-left font-medium">路由使用</th>
+            </tr>
+          </thead>
+          {groups.map((group, groupIndex) => {
+            const versions = sortedStrategyVersions(group);
+            const tone = strategyRowTone(groupIndex);
+            const title = displayText(group.displayName, group.componentCode);
+            const code = displayText(group.componentCode);
+
+            return (
+              <tbody key={group.renderKey} className={`${tone} border-b last:border-b-0`}>
+                {versions.map((component, rowIndex) => (
+                  <tr
+                    key={`${String(component.component_type)}:${String(component.component_object_id ?? rowIndex)}`}
+                    className="border-b border-border/60 last:border-b-0"
+                  >
+                    {rowIndex === 0 ? (
+                      <td rowSpan={versions.length} className="whitespace-nowrap px-3 py-2 align-middle text-foreground">
+                        <div className="font-medium text-foreground">{title}</div>
+                      </td>
+                    ) : null}
+                    {rowIndex === 0 ? (
+                      <td rowSpan={versions.length} className="px-3 py-2 align-middle">
+                        <div className="max-w-[240px] truncate font-mono text-xs text-foreground/65" title={code}>
+                          {code}
+                        </div>
+                      </td>
+                    ) : null}
+                    <td className="px-3 py-2 align-top">
+                      <span className="rounded-md bg-background/80 px-2 py-0.5 text-xs text-foreground/70">
+                        {versionText(component)}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 align-top text-foreground/75">
+                      <div className="line-clamp-2">{strategyCoreIdea(component)}</div>
+                    </td>
+                    <td className="px-3 py-2 align-top text-xs text-foreground/65">
+                      <div className="truncate">{displayText(component.algorithm_name)}</div>
+                    </td>
+                    <td className="px-3 py-2 align-top text-xs">
+                      {component.workspace_is_selected_version ? (
+                        <span className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                          使用中
+                        </span>
+                      ) : (
+                        <span className="rounded-md bg-background/80 px-2 py-1 text-muted-foreground">未使用</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            );
+          })}
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function DeleteRoutePolicyButton({ component }: { component: Record<string, unknown> }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [state, action] = useActionState(deleteStrategyRoutePolicyAction, initialStrategyReleaseActionState);
+  const routePolicyId = Number(component.component_object_id ?? 0);
+  const title = displayText(component.display_name, displayText(component.component_code));
+
+  useEffect(() => {
+    if (state.ok && state.reason_code) {
+      setOpen(false);
+      router.refresh();
+    }
+  }, [router, state.ok, state.reason_code]);
+
+  return (
+    <>
+      <button
+        type="button"
+        disabled={!routePolicyId}
+        onClick={() => setOpen(true)}
+        className="inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-md px-2 text-sm font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-transparent dark:text-red-400 dark:hover:bg-red-950/30"
+      >
+        <Trash2 className="h-4 w-4" />
+        删除
+      </button>
+      {!state.ok && state.reason_code ? (
+        <div className="basis-full text-xs text-destructive lg:text-right">{state.message}</div>
+      ) : null}
+
+      {open ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4" role="presentation">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`delete-route-policy-title-${routePolicyId}`}
+            className="w-full max-w-md rounded-xl border bg-background p-5 shadow-xl"
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 id={`delete-route-policy-title-${routePolicyId}`} className="text-base font-semibold">
+                  确认删除策略路由方案
+                </h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  将删除“{title}”及其下面的路由规则。已被版本包、回测或正式路由结果引用的方案不会被删除。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="关闭"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form action={action} className="mt-5 flex justify-end gap-2">
+              <input type="hidden" name="route_policy_id" value={routePolicyId} />
+              <input type="hidden" name="reason" value="后台删除策略路由方案" />
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-muted"
+              >
+                取消
+              </button>
+              <DeleteRoutePolicySubmitButton />
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function DeleteRoutePolicySubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="inline-flex h-9 items-center rounded-md bg-red-600 px-3 text-sm font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {pending ? "删除中..." : "确认删除"}
+    </button>
   );
 }
 
@@ -336,13 +558,13 @@ function ComponentVersionRows({
   group: ComponentGroup;
   layerSlug: string;
 }) {
-  if (layerSlug === "strategy-routing") {
+  if (layerSlug === "strategies") {
     return (
       <div className="divide-y border-t">
         {group.items.map((component, index) => (
           <div
             key={`${String(component.component_type)}:${String(component.component_object_id ?? index)}`}
-            className="grid gap-3 bg-background px-4 py-3 lg:grid-cols-[120px_minmax(0,1fr)_180px] lg:items-center"
+            className="grid gap-3 bg-background px-4 py-3 lg:grid-cols-[130px_minmax(0,1fr)_220px] lg:items-center"
           >
             <div className="flex items-center gap-2">
               <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
@@ -351,10 +573,14 @@ function ComponentVersionRows({
               <StatusBadge value={component.status} />
             </div>
             <div className="min-w-0 space-y-1">
-              <div className="truncate text-sm text-muted-foreground">{displayText(component.description, "暂无说明")}</div>
+              <div className="text-sm text-muted-foreground">{strategyCoreIdea(component)}</div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                <span>算法：{displayText(component.algorithm_name)}</span>
+                <span>算法版本：{displayText(component.algorithm_version)}</span>
+              </div>
             </div>
-            <div className="lg:text-right">
-              <WorkspaceRoutePolicyRadioForm component={component} layerPath={layerSlug} />
+            <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              {component.workspace_is_selected_version ? "当前路由使用此版本" : "当前路由未使用"}
             </div>
           </div>
         ))}
@@ -409,13 +635,14 @@ export function ComponentGroupList({
     initialStrategyReleaseActionState
   );
   const isStrategyRouteLayer = layerSlug === "strategy-routing";
+  const isStrategyLayer = layerSlug === "strategies";
+  const isReadOnlyLayer = isStrategyRouteLayer || isStrategyLayer;
   const groups = useMemo(() => groupComponentsByCode(components, layerSlug), [components, layerSlug]);
   const filteredGroups = useMemo(() => filterGroups(groups, query, adoptionFilter), [groups, query, adoptionFilter]);
   const selectOperations = useMemo(() => bulkOperations(filteredGroups, "select"), [filteredGroups]);
   const cancelOperations = useMemo(() => bulkOperations(filteredGroups, "cancel"), [filteredGroups]);
   const invertOperations = useMemo(() => bulkOperations(filteredGroups, "invert"), [filteredGroups]);
   const isFeatureLayer = layerSlug === "features";
-  const useFlatCards = isStrategyRouteLayer;
 
   useEffect(() => {
     if (bulkState.ok && bulkState.reason_code && bulkState.reason_code !== "strategy_workspace_bulk_noop") {
@@ -434,11 +661,11 @@ export function ComponentGroupList({
           />
           <Select value={adoptionFilter} onChange={(event) => setAdoptionFilter(event.target.value as AdoptionFilter)}>
             <option value="all">全部</option>
-            <option value="adopted">已采用</option>
-            <option value="not_adopted">未采用</option>
+            <option value="adopted">{isStrategyLayer ? "当前路由使用" : "已采用"}</option>
+            <option value="not_adopted">{isStrategyLayer ? "当前路由未使用" : "未采用"}</option>
           </Select>
         </div>
-        {!isStrategyRouteLayer ? (
+        {!isReadOnlyLayer ? (
           <div className="flex flex-wrap items-center gap-2 xl:justify-end">
             <BulkOperationForm
               action={bulkAction}
@@ -475,27 +702,31 @@ export function ComponentGroupList({
       <div className="text-xs text-muted-foreground">
         {isStrategyRouteLayer
           ? `共计 ${groups.length} 个路由方案，当前显示 ${filteredGroups.length} 个。`
+          : isStrategyLayer
+            ? `共计 ${groups.length} 个策略，当前显示 ${filteredGroups.length} 个。`
           : `共计 ${groups.length} 个组件，当前显示 ${filteredGroups.length} 个。`}
       </div>
 
       {filteredGroups.length ? (
-        <div className="space-y-3">
-          {filteredGroups.map((group) => (
-            useFlatCards ? (
-              <GroupCard key={`${group.componentType}:${group.componentCode}`} group={group} isFeature={isFeatureLayer}>
-                <ComponentVersionRows group={group} layerSlug={layerSlug} />
-              </GroupCard>
-            ) : (
-              <details
-                key={`${group.componentType}:${group.componentCode}`}
-                className="overflow-hidden rounded-xl border bg-card"
-              >
-                <GroupHeader group={group} isFeature={isFeatureLayer} />
-                <ComponentVersionRows group={group} layerSlug={layerSlug} />
-              </details>
-            )
-          ))}
-        </div>
+        isStrategyLayer ? (
+          <StrategyCompactTable groups={filteredGroups} />
+        ) : (
+          <div className="space-y-3">
+            {filteredGroups.map((group) => (
+              isStrategyRouteLayer ? (
+                <RoutePolicyCard key={group.renderKey} group={group} layerSlug={layerSlug} />
+              ) : (
+                <details
+                  key={group.renderKey}
+                  className="overflow-hidden rounded-xl border bg-card"
+                >
+                  <GroupHeader group={group} isFeature={isFeatureLayer} />
+                  <ComponentVersionRows group={group} layerSlug={layerSlug} />
+                </details>
+              )
+            ))}
+          </div>
+        )
       ) : (
         <EmptyState title="没有匹配的组件" description="可以换一个关键词，或切换采用状态筛选。" />
       )}

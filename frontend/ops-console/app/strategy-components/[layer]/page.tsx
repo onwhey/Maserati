@@ -95,6 +95,8 @@ export default async function StrategyComponentLayerPage({ params }: PageProps) 
               ? "本页只选择特征版本；是否进入发布包由已纳入原子信号的依赖自动决定。"
               : layer.slug === "strategy-routing"
                 ? "策略路由是一整套行情到策略的分配方案；当前策略组合只能使用一个路由方案。"
+                : layer.slug === "strategies"
+                  ? "本页只查看策略库；策略是否进入版本包由当前策略路由绑定决定。"
                 : "本页选择组件版本，并决定是否纳入当前策略组合。"}
           </CardDescription>
         </CardHeader>

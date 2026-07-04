@@ -695,3 +695,97 @@ StrategyBacktest 可以创建、排队、运行、完成并落库；
 先归因问题属于市场事实层、MarketRegime、StrategyRouting、StrategySignal 还是 DecisionSnapshot；
 再决定是否调整算法、阈值或策略规则。
 ```
+
+## 14. 策略路由版本包一致性补充验收记录
+
+验收日期：2026-07-04
+
+验收目标：
+
+```text
+确认策略路由从“代码固定映射”调整为“后台选择一个独立路由方案”后，版本包生成、回测运行和周期追溯仍然一致。
+
+本次只验收系统一致性，不评价策略是否盈利，也不评价具体策略逻辑是否正确。
+```
+
+本次使用对象：
+
+```text
+StrategyAnalysisRelease ID：14
+StrategyAnalysisRelease hash：bb3948b3c356ee2dbd2a596624700b841eda8385721c2ecc0d77f0cd4c9ab2d6
+StrategyBacktestRun ID：12
+回测周期数：19
+完成周期数：19
+阻断周期数：0
+```
+
+已验证事项：
+
+```text
+策略包只能纳入一个策略路由方案；
+策略路由方案作为一个整体参与版本包，不再与其他路由方案混用；
+策略包中的策略来源于当前路由方案绑定的策略；
+回测可以读取该版本包并完成完整策略分析链路；
+每个完成周期都能追溯到 MarketSnapshot、FeatureSet、AtomicSignalSet、DomainSignalSet、MarketRegimeSnapshot、StrategyRouteDecision、StrategySignal、StrategySignalQuality 和 DecisionSnapshot；
+回测结果写入 StrategyBacktestRun / StrategyBacktestPeriodResult；
+回测未进入 PriceSnapshot、OrderPlan、RiskCheck、ExecutionPreparation、Execution、OrderStatusSync 或 FillSync；
+回测未生成 CandidateOrderIntent、ApprovedOrderIntent、PreparedOrderIntent、OrderSubmissionAttempt 或 TradeFill。
+```
+
+抽样周期证据：
+
+```text
+StrategyBacktestPeriodResult ID：4553
+period_index：1
+analysis_close_time_utc：2026-06-16 00:00:00 UTC
+周期状态：completed
+市场环境：bearish_rebound
+选中策略：short_rebound_pressure
+策略方向：bearish
+目标仓位：-0.0032
+
+analysis_object_ids：
+market_snapshot_id：4553
+feature_set_id：4553
+atomic_signal_set_id：4553
+domain_signal_set_id：4553
+market_regime_snapshot_id：4553
+strategy_route_decision_id：4540
+strategy_signal_id：1412
+quality_result_id：1412
+decision_snapshot_id：1412
+```
+
+回测摘要：
+
+```text
+最终权益：10001.71519538268265242504593
+总收益：约 +0.0172%
+买入持有对照：约 -5.34%
+模拟交易次数：1
+策略出现次数：
+short_rebound_pressure：12
+long_pullback_support：7
+```
+
+验收结论：
+
+```text
+通过。
+
+当前可以确认：后台选择的独立策略路由方案，能够被正确纳入 StrategyAnalysisRelease，并在 StrategyBacktest 中驱动完整策略分析链路。
+
+当前可以确认：回测周期明细能够追溯到从市场快照到目标仓位的各层产出。
+
+当前可以确认：本次回测没有触发真实交易链路，也没有写入真实订单、风控、执行或成交对象。
+```
+
+本次不下结论的事项：
+
+```text
+不证明 short_rebound_pressure 或 long_pullback_support 的策略逻辑正确；
+不证明当前路由方案长期有效；
+不证明当前收益结果具备统计意义；
+不验收 OrderPlan 及后续真实交易链路；
+不启用真实交易。
+```

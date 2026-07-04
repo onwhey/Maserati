@@ -43,7 +43,7 @@ from apps.strategy_analysis.services.release import (
     upsert_release_item,
 )
 from apps.strategy_analysis.services.backtest import create_strategy_backtest_run, delete_strategy_backtest_run
-from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant
+from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant, delete_route_policy
 from apps.strategy_analysis.services.workspace import (
     generate_release_from_workspace,
     remove_workspace_item,
@@ -639,6 +639,24 @@ def strategy_route_policy_variant_create_view(request: HttpRequest) -> JsonRespo
         reason=str(body.get("reason") or "").strip(),
         trace_id=_trace_id(body, request, "strategy-route-policy-variant-create"),
         trigger_source="ops_console_strategy_route_policy_builder",
+    )
+    return _service_response(result)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_route_policy_delete_view(request: HttpRequest, route_policy_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="删除策略路由方案会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    result = delete_route_policy(
+        route_policy_id=route_policy_id,
+        operator_id=_operator_id(request),
+        reason=str(body.get("reason") or "").strip(),
+        trace_id=_trace_id(body, request, "strategy-route-policy-delete"),
+        trigger_source="ops_console_strategy_route_policy_delete",
     )
     return _service_response(result)
 

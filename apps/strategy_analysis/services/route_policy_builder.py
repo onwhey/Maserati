@@ -1,8 +1,8 @@
 """StrategyAnalysis 模块：策略路由方案组装服务。
 
-负责：基于既有 StrategyRoutePolicy 复制生成新的路由方案，并为每条规则绑定具体 StrategyDefinition。
+负责：基于既有 StrategyRoutePolicy 复制生成新的路由方案，并删除未被版本包或路由结果引用的路由方案。
 不负责：执行 StrategySignal 算法、生成目标仓位、生成订单、审批风控或提交交易。
-读写数据库：读取 StrategyRoutePolicy / StrategyRouteRule / StrategyDefinition，写入新的 Policy / Rule 与审计记录。
+读写数据库：读取 StrategyRoutePolicy / StrategyRouteRule / StrategyDefinition，写入或删除 Policy / Rule / WorkspaceItem 与审计记录。
 访问 Redis：不涉及。
 访问外部服务：不涉及。
 发送 Hermes：不涉及。
@@ -18,6 +18,7 @@ from typing import Any
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 
 from apps.audit.services import record_audit
@@ -31,8 +32,12 @@ from apps.strategy_analysis.definition_hashes import (
 )
 from apps.strategy_analysis.models import (
     DefinitionLifecycleStatus,
+    ReleaseItemComponentType,
+    StrategyAnalysisReleaseItem,
+    StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
     StrategyRouteAction,
+    StrategyRouteDecision,
     StrategyRouteFallbackPolicy,
     StrategyRoutePolicy,
     StrategyRouteRule,
@@ -319,5 +324,134 @@ def create_route_policy_variant(
             "policy_code": new_policy.policy_code,
             "policy_version": new_policy.policy_version,
             "rule_count": len(new_rules),
+        },
+    )
+
+
+def delete_route_policy(
+    *,
+    route_policy_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    """删除未被版本包或路由结果引用的路由方案及其规则。"""
+
+    cleaned_reason = reason.strip() or "后台删除策略路由方案"
+    try:
+        with transaction.atomic():
+            try:
+                policy = StrategyRoutePolicy.objects.select_for_update().get(id=route_policy_id)
+            except StrategyRoutePolicy.DoesNotExist:
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "route_policy_not_found",
+                    "策略路由方案不存在，不能删除",
+                    trace_id,
+                    trigger_source,
+                    {"route_policy_id": route_policy_id},
+                )
+
+            rules = list(policy.rules.select_for_update().order_by("id"))
+            rule_ids = [rule.id for rule in rules]
+            release_policy_item_count = StrategyAnalysisReleaseItem.objects.filter(
+                component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+                component_object_id=policy.id,
+            ).count()
+            release_rule_item_count = StrategyAnalysisReleaseItem.objects.filter(
+                component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+                component_object_id__in=rule_ids,
+            ).count()
+            decision_count = StrategyRouteDecision.objects.filter(strategy_route_policy=policy).count()
+            matched_rule_decision_count = (
+                StrategyRouteDecision.objects.filter(matched_strategy_route_rule_id__in=rule_ids).count()
+                if rule_ids
+                else 0
+            )
+            if release_policy_item_count or release_rule_item_count or decision_count or matched_rule_decision_count:
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "route_policy_delete_referenced",
+                    "策略路由方案已经被版本包或路由结果引用，不能直接删除",
+                    trace_id,
+                    trigger_source,
+                    {
+                        "route_policy_id": policy.id,
+                        "release_policy_item_count": release_policy_item_count,
+                        "release_rule_item_count": release_rule_item_count,
+                        "decision_count": decision_count,
+                        "matched_rule_decision_count": matched_rule_decision_count,
+                    },
+                )
+
+            workspace_policy_items = StrategyAnalysisWorkspaceItem.objects.filter(
+                component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+                component_object_id=policy.id,
+            )
+            workspace_rule_items = StrategyAnalysisWorkspaceItem.objects.filter(
+                component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+                component_object_id__in=rule_ids,
+            )
+            workspace_strategy_items = (
+                StrategyAnalysisWorkspaceItem.objects.filter(
+                    component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
+                    inclusion_managed=True,
+                )
+                if workspace_policy_items.exists()
+                else StrategyAnalysisWorkspaceItem.objects.none()
+            )
+            before = {
+                "route_policy_id": policy.id,
+                "policy_code": policy.policy_code,
+                "policy_version": policy.policy_version,
+                "display_name": policy.display_name,
+                "rule_count": len(rules),
+                "workspace_policy_item_count": workspace_policy_items.count(),
+                "workspace_rule_item_count": workspace_rule_items.count(),
+                "workspace_strategy_item_count": workspace_strategy_items.count(),
+            }
+            workspace_strategy_items.delete()
+            workspace_rule_items.delete()
+            workspace_policy_items.delete()
+            StrategyRouteRule.objects.filter(id__in=rule_ids).delete()
+            policy.delete()
+
+        if operator_id:
+            record_audit(
+                operator_id=operator_id,
+                operation_type="strategy_route_policy_delete",
+                target_object_type="StrategyRoutePolicy",
+                target_object_id=str(route_policy_id),
+                before_state_summary=before,
+                after_state_summary={},
+                reason=cleaned_reason,
+                evidence={"delete_scope": "route_policy_rules_and_workspace_selection"},
+                result="succeeded",
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+            )
+    except ProtectedError as exc:
+        return ServiceResult(
+            ResultStatus.BLOCKED,
+            "route_policy_delete_protected",
+            "策略路由方案存在受保护引用，不能直接删除",
+            trace_id,
+            trigger_source,
+            {
+                "route_policy_id": route_policy_id,
+                "protected_object_count": len(exc.protected_objects),
+            },
+        )
+
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "route_policy_deleted",
+        "策略路由方案已删除",
+        trace_id,
+        trigger_source,
+        {
+            "route_policy_id": route_policy_id,
+            "deleted": True,
         },
     )

@@ -51,13 +51,6 @@ function strategyLabel(strategy: StrategyOption) {
   return `${name} / ${strategy.strategy_version}`;
 }
 
-function selectedStrategyText(rule: RouteRuleOption) {
-  if (!rule.selected_strategy_definition_id) {
-    return "未绑定策略";
-  }
-  return `${text(rule.selected_strategy_display_name, rule.selected_strategy_code)} / ${rule.selected_strategy_version}`;
-}
-
 function ActionResult({ state }: { state: typeof initialStrategyReleaseActionState }) {
   if (!state.reason_code) {
     return null;
@@ -115,7 +108,7 @@ export function StrategyRoutingBuilder({
       <CardHeader>
         <CardTitle>创建新的策略路由方案</CardTitle>
         <CardDescription>
-          从已有方案复制一份，然后重新指定“每种市场环境交给哪个策略插件”。不会修改旧方案。
+          从已有方案复制一份，然后重新指定“每种市场环境交给哪个策略插件”。可以做纯保守、纯进攻，也可以做混合组合；不会修改旧方案。
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -142,58 +135,60 @@ export function StrategyRoutingBuilder({
             </div>
             <div className="space-y-2">
               <Label htmlFor="display_name">新方案名称</Label>
-              <Input id="display_name" name="display_name" placeholder="例如：【保守趋势】路由方案 v1" />
+              <Input id="display_name" name="display_name" placeholder="例如：【混合】牛市进攻、熊市保守 v1" />
             </div>
             <div className="space-y-2 lg:col-span-2">
               <Label htmlFor="description">说明</Label>
-              <Input id="description" name="description" placeholder="说明这套方案的交易性格和适用范围" />
+              <Input id="description" name="description" placeholder="说明这套路由方案如何把市场环境接到不同策略插件" />
             </div>
           </div>
 
           <div className="space-y-3">
-            <div>
-              <h3 className="font-medium">规则接线</h3>
-              <p className="text-sm text-muted-foreground">
-                左边是市场环境分支，右边选择这个分支要交给哪个策略处理。
-              </p>
-            </div>
+            <h3 className="font-medium">规则接线</h3>
             <div className="overflow-hidden rounded-xl border">
-              {(selectedPolicy?.rules ?? []).map((rule) => (
-                <div
-                  key={rule.id}
-                  className="grid gap-3 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-center"
-                >
-                  <div className="min-w-0 space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        优先级 {rule.priority}
-                      </span>
-                      <span className="font-medium">{text(rule.display_name, rule.rule_code)}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">{rule.rule_code}</div>
-                    <div className="text-sm text-muted-foreground">{text(rule.description, "暂无说明")}</div>
-                    <div className="text-xs text-muted-foreground">当前绑定：{selectedStrategyText(rule)}</div>
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor={`rule_${rule.id}`} className="text-xs">
-                      绑定策略
-                    </Label>
-                    <Select
-                      id={`rule_${rule.id}`}
-                      className="block w-full"
-                      value={String(bindings[String(rule.id)] ?? 0)}
-                      onChange={(event) => setRuleStrategy(rule.id, Number(event.currentTarget.value))}
-                    >
-                      <option value="0">请选择策略</option>
-                      {strategies.map((strategy) => (
-                        <option key={strategy.id} value={strategy.id}>
-                          {strategyLabel(strategy)}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </div>
-              ))}
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[920px] border-collapse text-sm">
+                  <thead className="bg-muted/70 text-xs text-muted-foreground">
+                    <tr className="border-b">
+                      <th className="w-[90px] px-3 py-2 text-left font-medium">优先级</th>
+                      <th className="w-[220px] px-3 py-2 text-left font-medium">市场环境</th>
+                      <th className="px-3 py-2 text-left font-medium">规则代码</th>
+                      <th className="w-[360px] px-3 py-2 text-left font-medium">绑定策略</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {(selectedPolicy?.rules ?? []).map((rule) => (
+                      <tr key={rule.id} className="align-middle">
+                        <td className="px-3 py-2 text-xs text-muted-foreground">{rule.priority}</td>
+                        <td className="px-3 py-2 font-medium text-foreground">
+                          {text(rule.display_name, rule.rule_code)}
+                        </td>
+                        <td className="px-3 py-2">
+                          <div className="max-w-[260px] truncate font-mono text-xs text-muted-foreground" title={rule.rule_code}>
+                            {rule.rule_code}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <Select
+                            id={`rule_${rule.id}`}
+                            aria-label={`${text(rule.display_name, rule.rule_code)} 绑定策略`}
+                            className="block w-full"
+                            value={String(bindings[String(rule.id)] ?? 0)}
+                            onChange={(event) => setRuleStrategy(rule.id, Number(event.currentTarget.value))}
+                          >
+                            <option value="0">请选择策略</option>
+                            {strategies.map((strategy) => (
+                              <option key={strategy.id} value={strategy.id}>
+                                {strategyLabel(strategy)}
+                              </option>
+                            ))}
+                          </Select>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
 

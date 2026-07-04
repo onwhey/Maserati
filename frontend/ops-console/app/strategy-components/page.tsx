@@ -18,6 +18,9 @@ type LayerSummary = {
 export const dynamic = "force-dynamic";
 
 function componentGroupKey(component: Record<string, unknown>) {
+  if (String(component.component_type ?? "") === "strategy_route_policy") {
+    return `${String(component.component_type)}:${String(component.component_object_id ?? "")}`;
+  }
   return `${String(component.component_type)}:${String(component.component_code)}`;
 }
 

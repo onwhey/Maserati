@@ -44,6 +44,20 @@ def test_seed_strategy_definitions_creates_p0_strategy_definitions() -> None:
         prediction_horizon=template.prediction_horizon,
     )
 
+    conservative_definition = StrategyDefinition.objects.get(
+        strategy_code="conservative_trend__bearish_rebound_wait_no_trade",
+        strategy_version="v1",
+    )
+    conservative_template = next(
+        item
+        for item in DEFAULT_STRATEGY_DEFINITIONS
+        if item.strategy_code == "conservative_trend__bearish_rebound_wait_no_trade"
+    )
+    assert conservative_definition.display_name == "【保守趋势】空头反弹等待不交易 v1"
+    assert conservative_definition.algorithm_name == "no_trade_strategy"
+    assert conservative_definition.params["template_label_zh"] == "保守趋势"
+    assert conservative_definition.params_hash == stable_hash(conservative_template.params)
+
 
 @pytest.mark.django_db
 def test_seed_strategy_definitions_is_idempotent() -> None:

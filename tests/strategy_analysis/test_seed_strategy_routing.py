@@ -6,6 +6,7 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
+from apps.audit.models import AuditRecord
 from apps.foundation.results import ResultStatus
 from apps.strategy_analysis.default_strategy_routing_definitions import (
     DEFAULT_STRATEGY_ROUTE_POLICY,
@@ -21,7 +22,7 @@ from apps.strategy_analysis.models import (
     StrategyRoutePolicy,
     StrategyRouteRule,
 )
-from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant
+from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant, delete_route_policy
 from apps.strategy_analysis.services.workspace import (
     _release_selections_from_workspace,
     get_or_create_default_workspace,
@@ -246,6 +247,70 @@ def test_select_route_policy_replaces_previous_route_policy_slice() -> None:
             flat=True,
         )
     ) == set(second_policy.rules.values_list("selected_strategy_definition_id", flat=True))
+
+
+@pytest.mark.django_db
+def test_delete_route_policy_removes_unreferenced_policy_rules_and_workspace_slice() -> None:
+    create_all_required_strategy_definitions()
+    replacement_strategy = create_strategy_definition("standard_trend__bearish_wait")
+    call_command("seed_strategy_routing", stdout=StringIO())
+    source_policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
+    source_rule = source_policy.rules.get(rule_code="bearish_trend_continuation_to_short_trend_following")
+    create_result = create_route_policy_variant(
+        source_policy_id=source_policy.id,
+        policy_version="",
+        display_name="待删除路由方案",
+        description="测试删除路由方案",
+        rule_strategy_bindings={source_rule.id: replacement_strategy.id},
+        operator_id="_pytest",
+        reason="测试创建待删除路由方案",
+        trace_id="trace_route_policy_delete_create",
+        trigger_source="pytest",
+    )
+    assert create_result.status == ResultStatus.SUCCEEDED
+    policy = StrategyRoutePolicy.objects.exclude(id=source_policy.id).get()
+    rule_ids = list(policy.rules.values_list("id", flat=True))
+
+    select_result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=policy.id,
+        is_included=True,
+        operator_id="_pytest",
+        reason="测试选择待删除路由方案",
+        trace_id="trace_route_policy_delete_select",
+        trigger_source="pytest",
+    )
+    assert select_result.status == ResultStatus.SUCCEEDED
+    assert StrategyAnalysisWorkspaceItem.objects.filter(
+        component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
+        inclusion_managed=True,
+    ).exists()
+
+    delete_result = delete_route_policy(
+        route_policy_id=policy.id,
+        operator_id="_pytest",
+        reason="测试删除路由方案",
+        trace_id="trace_route_policy_delete",
+        trigger_source="pytest",
+    )
+
+    assert delete_result.status == ResultStatus.SUCCEEDED
+    assert not StrategyRoutePolicy.objects.filter(id=policy.id).exists()
+    assert not StrategyRouteRule.objects.filter(id__in=rule_ids).exists()
+    assert not StrategyAnalysisWorkspaceItem.objects.filter(
+        component_type__in=(
+            ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+            ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+            ReleaseItemComponentType.STRATEGY_DEFINITION,
+        )
+    ).exists()
+    assert AuditRecord.objects.filter(
+        operation_type="strategy_route_policy_delete",
+        target_object_id=str(policy.id),
+    ).exists()
 
 
 @pytest.mark.django_db

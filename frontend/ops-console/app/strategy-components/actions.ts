@@ -232,3 +232,27 @@ export async function createStrategyRoutePolicyVariantAction(
   }
   return stateFromResult(result);
 }
+
+export async function deleteStrategyRoutePolicyAction(
+  _previousState: StrategyReleaseActionState,
+  formData: FormData
+): Promise<StrategyReleaseActionState> {
+  const routePolicyId = Number(formData.get("route_policy_id") ?? 0);
+  if (!routePolicyId) {
+    return {
+      ok: false,
+      reason_code: "route_policy_id_invalid",
+      message: "策略路由方案 ID 不合法。",
+      release_id: null
+    };
+  }
+
+  const result = await opsPost<Record<string, unknown>>(`/api/ops/strategy-routing/policies/${routePolicyId}/delete/`, {
+    confirm_write: true,
+    reason: requiredText(formData, "reason") || "后台删除策略路由方案"
+  });
+  if (result.ok) {
+    revalidateStrategyWorkspacePages("strategy-routing");
+  }
+  return stateFromResult(result);
+}

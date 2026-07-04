@@ -82,6 +82,7 @@ def _no_trade_template(
     *,
     reason_code: str,
     reason_summary: str,
+    template_label: str = "标准趋势",
 ) -> StrategyDefinitionTemplate:
     return _template(
         strategy_code,
@@ -90,7 +91,7 @@ def _no_trade_template(
         algorithm_name="no_trade_strategy",
         params={
             "prediction_horizon": P0_PREDICTION_HORIZON,
-            "template_label_zh": "标准趋势",
+            "template_label_zh": template_label,
             "no_trade_reason_code": reason_code,
             "no_trade_reason_summary_zh": reason_summary,
         },
@@ -117,6 +118,38 @@ DEFAULT_STRATEGY_DEFINITIONS: tuple[StrategyDefinitionTemplate, ...] = (
         "short_rebound_pressure",
         "空头反弹压制 v1",
         "用于大背景偏空下的反弹或低位区间压力侧环境，只输出 bearish / neutral 策略判断。",
+    ),
+    _no_trade_template(
+        "conservative_trend__bullish_pullback_wait_no_trade",
+        "【保守趋势】多头回调等待不交易 v1",
+        "用于多头背景下的回调环境；保守策略等待回调结束确认，策略层明确选择不交易。",
+        reason_code="conservative_bullish_pullback_wait_no_trade",
+        reason_summary="多头回调仍在进行或尚未确认结束，保守趋势模板不提前接回调。",
+        template_label="保守趋势",
+    ),
+    _no_trade_template(
+        "conservative_trend__bullish_high_range_wait_no_trade",
+        "【保守趋势】多头高位震荡等待不交易 v1",
+        "用于多头高位区间震荡环境；保守策略不在高位区间主动追多，策略层明确选择不交易。",
+        reason_code="conservative_bullish_high_range_wait_no_trade",
+        reason_summary="多头高位区间内趋势推进不清楚，保守趋势模板等待更明确的大级别延续。",
+        template_label="保守趋势",
+    ),
+    _no_trade_template(
+        "conservative_trend__bearish_rebound_wait_no_trade",
+        "【保守趋势】空头反弹等待不交易 v1",
+        "用于空头背景下的反弹环境；保守策略等待反弹结束确认，策略层明确选择不交易。",
+        reason_code="conservative_bearish_rebound_wait_no_trade",
+        reason_summary="空头反弹仍在进行或尚未确认结束，保守趋势模板不提前压反弹。",
+        template_label="保守趋势",
+    ),
+    _no_trade_template(
+        "conservative_trend__bearish_low_range_wait_no_trade",
+        "【保守趋势】空头低位震荡等待不交易 v1",
+        "用于空头低位区间震荡环境；保守策略不在低位区间主动追空，策略层明确选择不交易。",
+        reason_code="conservative_bearish_low_range_wait_no_trade",
+        reason_summary="空头低位区间内趋势推进不清楚，保守趋势模板等待更明确的大级别延续。",
+        template_label="保守趋势",
     ),
     _no_trade_template(
         "standard_trend__top_reversal_unconfirmed_no_trade",

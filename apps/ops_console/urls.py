@@ -38,6 +38,11 @@ urlpatterns = [
         views.strategy_route_policy_variant_create_view,
         name="strategy_route_policy_variant_create",
     ),
+    path(
+        "strategy-routing/policies/<int:route_policy_id>/delete/",
+        views.strategy_route_policy_delete_view,
+        name="strategy_route_policy_delete",
+    ),
     path("strategy-workspace/items/upsert/", views.strategy_workspace_item_upsert_view, name="strategy_workspace_item_upsert"),
     path("strategy-workspace/items/remove/", views.strategy_workspace_item_remove_view, name="strategy_workspace_item_remove"),
     path("strategy-workspace/generate-release/", views.strategy_workspace_generate_release_view, name="strategy_workspace_generate_release"),
