@@ -11,10 +11,13 @@ import { asRows } from "@/lib/ops-data";
 
 import { ComponentGroupList } from "../component-group-list";
 import { getStrategyComponentLayer, strategyComponentLayers } from "../layers";
+import { StrategyRoutingBuilder, type RoutePolicyOption, type StrategyOption } from "../strategy-routing-builder";
 
 type PageProps = {
   params: Promise<{ layer: string }>;
 };
+
+export const dynamic = "force-dynamic";
 
 async function fetchLayerComponents(componentTypes: string[]) {
   const results = await Promise.all(
@@ -35,6 +38,13 @@ async function fetchLayerComponents(componentTypes: string[]) {
   };
 }
 
+async function fetchStrategyRoutingBuilderOptions() {
+  return opsFetch<{
+    policies: RoutePolicyOption[];
+    strategies: StrategyOption[];
+  }>("/api/ops/strategy-routing/policies/");
+}
+
 export function generateStaticParams() {
   return strategyComponentLayers.map((layer) => ({ layer: layer.slug }));
 }
@@ -51,6 +61,10 @@ export default async function StrategyComponentLayerPage({ params }: PageProps) 
     return <ApiError reason={componentsResult.failed.reason_code} message={componentsResult.failed.message_zh} />;
   }
   const components = componentsResult.rows;
+  const routingBuilderResult = layer.slug === "strategy-routing" ? await fetchStrategyRoutingBuilderOptions() : null;
+  if (routingBuilderResult && !routingBuilderResult.ok) {
+    return <ApiError reason={routingBuilderResult.reason_code} message={routingBuilderResult.message_zh} />;
+  }
 
   return (
     <>
@@ -64,13 +78,24 @@ export default async function StrategyComponentLayerPage({ params }: PageProps) 
 
       <PageHeader title={layer.title} description={layer.description} />
 
+      {routingBuilderResult?.ok ? (
+        <div className="mb-6">
+          <StrategyRoutingBuilder
+            policies={routingBuilderResult.data?.policies ?? []}
+            strategies={routingBuilderResult.data?.strategies ?? []}
+          />
+        </div>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>{layer.title}管理</CardTitle>
           <CardDescription>
             {layer.slug === "features"
               ? "本页只选择特征版本；是否进入发布包由已纳入原子信号的依赖自动决定。"
-              : "本页选择组件版本，并决定是否纳入当前策略组合。"}
+              : layer.slug === "strategy-routing"
+                ? "策略路由是一整套行情到策略的分配方案；当前策略组合只能使用一个路由方案。"
+                : "本页选择组件版本，并决定是否纳入当前策略组合。"}
           </CardDescription>
         </CardHeader>
         <CardContent>

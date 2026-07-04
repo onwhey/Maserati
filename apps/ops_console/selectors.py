@@ -1491,3 +1491,56 @@ def list_strategy_workspace_components(params: Mapping[str, Any]) -> dict[str, A
         "items": rows,
         "pagination": {"limit": len(rows), "offset": 0, "total": len(rows)},
     }
+
+
+def list_strategy_route_policy_builder_options() -> dict[str, Any]:
+    policies = []
+    for policy in StrategyRoutePolicy.objects.filter(
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+    ).order_by("policy_code", "policy_version", "id"):
+        rules = []
+        for rule in policy.rules.select_related("selected_strategy_definition").order_by("priority", "rule_code", "id"):
+            selected = rule.selected_strategy_definition
+            rules.append(
+                {
+                    "id": rule.id,
+                    "rule_code": rule.rule_code,
+                    "display_name": rule.display_name,
+                    "description": rule.description,
+                    "priority": rule.priority,
+                    "action": rule.action,
+                    "match_conditions": _clean(rule.match_conditions),
+                    "selected_strategy_definition_id": selected.id if selected else None,
+                    "selected_strategy_code": selected.strategy_code if selected else "",
+                    "selected_strategy_version": selected.strategy_version if selected else "",
+                    "selected_strategy_display_name": selected.display_name if selected else "",
+                }
+            )
+        policies.append(
+            {
+                "id": policy.id,
+                "policy_code": policy.policy_code,
+                "policy_version": policy.policy_version,
+                "display_name": policy.display_name,
+                "description": policy.description,
+                "definition_hash": policy.definition_hash,
+                "rule_set_hash": policy.rule_set_hash,
+                "rules": rules,
+            }
+        )
+
+    strategies = [
+        {
+            "id": strategy.id,
+            "strategy_code": strategy.strategy_code,
+            "strategy_version": strategy.strategy_version,
+            "display_name": strategy.display_name,
+            "description": strategy.description,
+        }
+        for strategy in StrategyDefinition.objects.filter(
+            status=DefinitionLifecycleStatus.ACTIVE,
+            enabled=True,
+        ).order_by("strategy_code", "strategy_version", "id")
+    ]
+    return {"policies": policies, "strategies": strategies}

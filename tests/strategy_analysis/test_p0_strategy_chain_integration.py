@@ -16,6 +16,7 @@ from apps.strategy_analysis.definition_hashes import (
     market_regime_domain_membership_hash,
     strategy_definition_dependency_hash,
 )
+from apps.strategy_analysis.default_strategy_routing_definitions import DEFAULT_STRATEGY_ROUTE_POLICY
 from apps.strategy_analysis.models import (
     AnalysisObjectStatus,
     AtomicSignalDefinition,
@@ -216,7 +217,10 @@ def _create_default_release(case_key: str) -> StrategyAnalysisRelease:
         sort_order=10_000,
     )
 
-    policy = StrategyRoutePolicy.objects.get(policy_code="context_structure_strategy_routing", policy_version="v1")
+    policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
     _add_release_item(
         release,
         component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
@@ -691,7 +695,10 @@ def _run_p0_default_chain_case(
     assert regime.regime_code == expected_regime_code
 
     strategy_definition_hash = _definition_set_hash(release, ReleaseItemComponentType.STRATEGY_DEFINITION)
-    route_policy = StrategyRoutePolicy.objects.get(policy_code="context_structure_strategy_routing", policy_version="v1")
+    route_policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
     route_result = route_for_strategy_signal(
         market_regime_snapshot_id=regime.id,
         strategy_analysis_release_id=release.id,

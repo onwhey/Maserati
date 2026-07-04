@@ -34,12 +34,12 @@ export const strategyComponentLayers: StrategyComponentLayer[] = [
     slug: "strategy-routing",
     title: "策略路由",
     description: "管理策略路由策略和路由规则；路由只选择策略，不执行策略算法。",
-    componentTypes: ["strategy_route_policy", "strategy_route_rule"]
+    componentTypes: ["strategy_route_policy"]
   },
   {
     slug: "strategies",
     title: "策略",
-    description: "管理 StrategyDefinition 的具体算法版本和纳入状态。",
+    description: "管理 StrategyDefinition 的具体算法版本；是否进入版本包由策略路由规则绑定决定。",
     componentTypes: ["strategy_definition"]
   },
   {

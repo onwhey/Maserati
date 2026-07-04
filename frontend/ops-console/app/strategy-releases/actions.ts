@@ -3,6 +3,7 @@
 import { opsPost } from "@/lib/api/client";
 import type { OpsApiResponse } from "@/lib/api/types";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
 import type { StrategyReleaseActionState } from "./state";
 
@@ -243,4 +244,21 @@ export async function rollbackStrategyReleaseAction(
     revalidateStrategyReleasePages(id);
   }
   return stateFromResult(result);
+}
+
+export async function deleteStrategyReleaseAction(formData: FormData): Promise<void> {
+  const id = releaseId(formData);
+  if (!id) {
+    redirect("/strategy-releases?delete_error=strategy_release_id_invalid");
+  }
+  const result = await opsPost<Record<string, unknown>>(`/api/ops/strategy-releases/${id}/delete/`, {
+    confirm_write: true,
+    reason: requiredText(formData, "reason") || "删除非启用策略版本包"
+  });
+  if (!result.ok) {
+    redirect(`/strategy-releases?delete_error=${encodeURIComponent(result.reason_code)}`);
+  }
+  revalidatePath("/strategy-releases");
+  revalidatePath(`/strategy-releases/${id}`);
+  redirect(`/strategy-releases?deleted_release_id=${encodeURIComponent(String(id))}`);
 }

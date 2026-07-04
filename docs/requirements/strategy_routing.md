@@ -110,7 +110,7 @@ StrategyRouting 的业务关系是：
 多个 MarketRegimeSnapshot.regime_code 可以映射到同一个 StrategyDefinition；
 一个 MarketRegimeSnapshot 在一次正式路由中最多命中一个最终 StrategyDefinition；
 一个 StrategyDefinition 可以服务多个相近市场环境；
-不适合进入策略计算的市场环境必须通过显式 no_strategy Rule 表达。
+普通“不交易”场景也可以映射到一个显式不交易 StrategyDefinition，由 StrategySignal 输出 neutral。
 ```
 
 例如：
@@ -118,7 +118,7 @@ StrategyRouting 的业务关系是：
 ```text
 bullish_trend_continuation 可以映射到多头趋势策略；
 bullish_high_range 如果正式规则选择让同一策略进一步判断，也可以映射到多头回调支撑策略；
-high_risk_environment 可以通过显式 Rule 映射为 no_strategy。
+high_risk_environment 可以通过显式 Rule 映射到高风险环境不交易策略。
 ```
 
 这表示“多个市场环境可以对应一个策略”，不是“一个路由结果对应多个策略”。
@@ -130,7 +130,7 @@ high_risk_environment 可以通过显式 Rule 映射为 no_strategy。
 不输出策略权重；
 不做多策略投票；
 不做策略组合资金分配；
-不把 no_strategy 做成等待策略。
+不把“不交易”提前放到 MarketRegime；不交易应优先作为 StrategyDefinition 的策略结果表达。
 ```
 
 ### 2.2 P0 路由目标族
@@ -155,6 +155,7 @@ docs/requirements/strategy_signals/long_trend_following_v1.md
 docs/requirements/strategy_signals/long_pullback_support_v1.md
 docs/requirements/strategy_signals/short_trend_following_v1.md
 docs/requirements/strategy_signals/short_rebound_pressure_v1.md
+docs/requirements/strategy_signals/no_trade_strategy_v1.md
 ```
 
 `long_trend_following / v1` 可以作为“多头趋势策略”目标族下的具体 StrategyDefinition，用于承接：
@@ -197,18 +198,18 @@ P0 推荐映射方向：
 | bearish_breakdown | 空头趋势策略（short_trend_following / v1） | 价格有效向下跌破支撑结构，交给空头趋势策略以跌破模式进一步判断 |
 | bearish_rebound | 空头反弹压制策略（short_rebound_pressure / v1） | 大背景偏空但出现反弹，交给反弹压制策略判断压力位置、反弹动能和风险 |
 | bearish_low_range | 空头反弹压制策略（short_rebound_pressure / v1） | 大背景偏空的低位区间，策略内部继续判断是否靠近压力侧并具备压力优势 |
-| bullish_top_reversal_candidate | no_strategy | P0 不直接做顶部反转策略，除非后续新增并验证对应 StrategyDefinition |
-| bearish_bottom_reversal_candidate | no_strategy | P0 不直接做底部反转策略，除非后续新增并验证对应 StrategyDefinition |
-| neutral_range | no_strategy | 大背景无方向时，P0 不进入正式策略计算 |
-| high_risk_environment | no_strategy | 高风险环境不进入正式策略计算，除非后续新增专门策略并验证 |
-| unclear_environment | no_strategy | 不明确环境不进入正式策略计算 |
+| bullish_top_reversal_candidate | 顶部反转未确认不交易策略（standard_trend__top_reversal_unconfirmed_no_trade / v1） | P0 不抢顶部反转，由具体策略输出不交易 |
+| bearish_bottom_reversal_candidate | 底部反转未确认不交易策略（standard_trend__bottom_reversal_unconfirmed_no_trade / v1） | P0 不抢底部反转，由具体策略输出不交易 |
+| neutral_range | 无方向区间不交易策略（standard_trend__neutral_range_no_trade / v1） | 大背景无方向时，由具体策略输出不交易 |
+| high_risk_environment | 高风险环境不交易策略（standard_trend__high_risk_environment_no_trade / v1） | 高风险环境由具体策略输出不交易 |
+| unclear_environment | 不明确环境不交易策略（standard_trend__unclear_environment_no_trade / v1） | 市场环境不明确时，由具体策略输出不交易 |
 
 以上映射只能通过 StrategyRouteRule 配置表达，不得写入 StrategyRoutingService 的 if / elif。
 
 如果某个 regime_code 的粒度不足以安全区分策略目标，StrategyRouting 不得读取 DomainSignalValue 补判；应当选择以下方式之一：
 
 ```text
-在 RouteRule 中显式 no_strategy；
+在 RouteRule 中映射到具体不交易策略；
 补充更细粒度的 MarketRegime regime_code；
 让被选 StrategyDefinition 在 StrategySignal 阶段基于允许的 DomainSignalValue 输出 neutral 或低质量策略判断。
 ```
@@ -1657,9 +1658,9 @@ bullish_pullback 与 bullish_high_range 可以通过 Rule 选择 long_pullback_s
 bearish_trend_continuation 可以通过 Rule 选择 short_trend_following / v1；
 bearish_breakdown 可以通过 Rule 选择 short_trend_following / v1；
 bearish_rebound 与 bearish_low_range 可以通过 Rule 选择 short_rebound_pressure / v1；
-bullish_top_reversal_candidate 在没有专门 StrategyDefinition 时必须通过显式 Rule 进入 no_strategy；
-bearish_bottom_reversal_candidate 在没有专门 StrategyDefinition 时必须通过显式 Rule 进入 no_strategy；
-neutral_range、high_risk_environment、unclear_environment 必须通过显式 Rule 进入 no_strategy；
+bullish_top_reversal_candidate 可以通过 Rule 选择顶部反转未确认不交易策略；
+bearish_bottom_reversal_candidate 可以通过 Rule 选择底部反转未确认不交易策略；
+neutral_range、high_risk_environment、unclear_environment 应通过显式 Rule 选择对应的不交易 StrategyDefinition；
 上述映射均不得写入 StrategyRoutingService 主流程；
 如果 RouteRule 条件粒度不足，Service 不得读取 DomainSignalValue 补判。
 ```

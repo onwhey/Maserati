@@ -6,10 +6,12 @@ from .p0_trend_strategies import (
     ShortReboundPressureCalculator,
     ShortTrendFollowingCalculator,
 )
+from .no_trade_strategy import NoTradeStrategyCalculator
 
 __all__ = [
     "LongPullbackSupportCalculator",
     "LongTrendFollowingCalculator",
+    "NoTradeStrategyCalculator",
     "ShortReboundPressureCalculator",
     "ShortTrendFollowingCalculator",
 ]

@@ -226,11 +226,11 @@ position_policy / v1
 
 ```text
 StrategyRouteRule 只能选择版本包内冻结的 StrategyDefinition；
-P0 四个 StrategyDefinition 的 strategy_code、strategy_version、definition_hash、calculator 身份和文档证据必须全部进入 release_hash；
+P0 趋势策略和显式不交易 StrategyDefinition 的 strategy_code、strategy_version、definition_hash、calculator 身份和文档证据必须全部进入 release_hash；
 版本包恰好选择一个 DecisionPolicyDefinition，且对应 position_policy / v1；
 StrategySignal 输出合同必须与 StrategySignalQuality 和 position_policy / v1 兼容；
 StrategySignal.trade_price_condition 的结构必须与 OrderPlan 冻结价格条件合同兼容；
-未被 P0 覆盖的 MarketRegime regime_code 必须通过显式 RouteRule 进入 no_strategy，不得依赖隐式 fallback。
+常规不交易场景应通过显式 RouteRule 选择具体不交易 StrategyDefinition；只有真实没有可用策略定义的配置缺口，才允许进入 no_strategy，且不得依赖隐式 fallback。
 ```
 
 ### 5.2 后台组件管理与发布入口
@@ -266,6 +266,8 @@ StrategyAnalysisRelease 的正式候选版本包必须通过 OpsConsole 后台�
 ```
 
 发布层可以保留高级人工修正入口，但不得把“逐个从全量下拉框选择组件”作为主交互路径。任何高级修正入口都必须按层级、按组件类型、按依赖关系展示，不得让管理员在无上下文的混合列表中盲选。
+
+发布层可以提供版本包清理入口，但只允许删除当前未启用的 StrategyAnalysisRelease。当前启用版本包不得删除；删除不得替代失效、启用或回滚流程，不得触发交易，也不得影响已经开始的正式编排运行。
 
 一次发布包生成只需要填写一次发布原因。组件被自动纳入版本包时，不要求管理员为每一个 ReleaseItem 单独填写原因。组件管理层的版本切换或依赖关系变更可以独立写审计，但不得把每个自动收集组件都变成人工表单阻断点。
 
@@ -1037,6 +1039,7 @@ OpsConsole 负责：
 管理当前策略分析配置工作区；
 从当前配置工作区生成候选版本包；
 从历史版本包复制候选版本包；
+删除非当前启用版本包；
 执行依赖闭包预校验；
 冻结 draft 版本包；
 启动回测和查看验证证据；

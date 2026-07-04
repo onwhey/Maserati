@@ -11,8 +11,21 @@ import type { Paginated } from "@/lib/api/types";
 import { asRows } from "@/lib/ops-data";
 import { formatUtc } from "@/lib/utils";
 
-export default async function StrategyReleasesPage() {
+import { DeleteStrategyReleaseButton } from "./delete-release-button";
+
+type PageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function StrategyReleasesPage({ searchParams }: PageProps) {
   const releasesResult = await opsFetch<Paginated<Record<string, unknown>>>("/api/ops/strategy-releases/");
+  const params = searchParams ? await searchParams : {};
+  const deletedReleaseId = firstParam(params.deleted_release_id);
+  const deleteError = firstParam(params.delete_error);
 
   if (!releasesResult.ok) {
     return <ApiError reason={releasesResult.reason_code} message={releasesResult.message_zh} />;
@@ -32,6 +45,16 @@ export default async function StrategyReleasesPage() {
           <CardTitle>版本包列表</CardTitle>
         </CardHeader>
         <CardContent>
+          {deletedReleaseId ? (
+            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-900/60 dark:bg-emerald-950/30 dark:text-emerald-300">
+              已删除版本包 #{deletedReleaseId}。
+            </div>
+          ) : null}
+          {deleteError ? (
+            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+              删除失败：{deleteError}
+            </div>
+          ) : null}
           {releases.length ? (
             <SimpleTable
               rows={releases}
@@ -55,12 +78,19 @@ export default async function StrategyReleasesPage() {
                   key: "detail",
                   label: "操作",
                   render: (row) => (
-                    <Link
-                      className="inline-flex items-center rounded-md border px-3 py-1 text-sm text-foreground transition-colors hover:bg-muted"
-                      href={`/strategy-releases/${String(row.id)}`}
-                    >
-                      查看详情
-                    </Link>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Link
+                        className="inline-flex items-center rounded-md border px-3 py-1 text-sm text-foreground no-underline transition-colors hover:bg-muted"
+                        href={`/strategy-releases/${String(row.id)}`}
+                      >
+                        详情
+                      </Link>
+                      <DeleteStrategyReleaseButton
+                        releaseId={String(row.id)}
+                        releaseName={String(row.display_name || row.release_code || row.id)}
+                        disabled={Boolean(row.is_active)}
+                      />
+                    </div>
                   )
                 }
               ]}

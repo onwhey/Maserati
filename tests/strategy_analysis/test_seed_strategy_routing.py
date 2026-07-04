@@ -6,6 +6,7 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
+from apps.foundation.results import ResultStatus
 from apps.strategy_analysis.default_strategy_routing_definitions import (
     DEFAULT_STRATEGY_ROUTE_POLICY,
     DEFAULT_STRATEGY_ROUTE_RULES,
@@ -13,10 +14,18 @@ from apps.strategy_analysis.default_strategy_routing_definitions import (
 from apps.strategy_analysis.definition_hashes import normalize_domain_codes, strategy_definition_hash
 from apps.strategy_analysis.models import (
     DefinitionLifecycleStatus,
+    ReleaseItemComponentType,
+    StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
     StrategyRouteAction,
     StrategyRoutePolicy,
     StrategyRouteRule,
+)
+from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant
+from apps.strategy_analysis.services.workspace import (
+    _release_selections_from_workspace,
+    get_or_create_default_workspace,
+    upsert_workspace_item,
 )
 from apps.strategy_calculator.utils import stable_hash
 
@@ -26,7 +35,13 @@ REQUIRED_DOMAIN_CODES = normalize_domain_codes(
 )
 
 
-def create_strategy_definition(code: str, version: str = "v1") -> StrategyDefinition:
+def create_strategy_definition(
+    code: str,
+    version: str = "v1",
+    *,
+    allowed_domain_codes: tuple[str, ...] | list[str] = REQUIRED_DOMAIN_CODES,
+    required_domain_codes: tuple[str, ...] | list[str] = REQUIRED_DOMAIN_CODES,
+) -> StrategyDefinition:
     params_hash = stable_hash({})
     definition_hash = strategy_definition_hash(
         strategy_code=code,
@@ -36,8 +51,8 @@ def create_strategy_definition(code: str, version: str = "v1") -> StrategyDefini
         input_schema_version="1.0",
         output_schema_version="1.0",
         params_hash=params_hash,
-        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
-        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_domain_codes=tuple(allowed_domain_codes),
+        required_domain_codes=tuple(required_domain_codes),
         uses_input_weights=False,
         domain_input_weights={},
         prediction_horizon="next_1_to_3_closed_4h",
@@ -54,8 +69,8 @@ def create_strategy_definition(code: str, version: str = "v1") -> StrategyDefini
         params={},
         params_hash=params_hash,
         definition_hash=definition_hash,
-        allowed_domain_codes=list(REQUIRED_DOMAIN_CODES),
-        required_domain_codes=list(REQUIRED_DOMAIN_CODES),
+        allowed_domain_codes=list(allowed_domain_codes),
+        required_domain_codes=list(required_domain_codes),
         uses_input_weights=False,
         domain_input_weights={},
         prediction_horizon="next_1_to_3_closed_4h",
@@ -103,9 +118,9 @@ def test_seed_strategy_routing_creates_default_policy_and_rules() -> None:
     assert bullish_breakout.match_conditions == {"regime_codes": ["bullish_breakout"]}
     assert bullish_breakout.rule_hash != "pending"
 
-    no_strategy_rule = policy.rules.get(rule_code="neutral_range_no_strategy")
-    assert no_strategy_rule.action == StrategyRouteAction.NO_STRATEGY
-    assert no_strategy_rule.selected_strategy_definition_id is None
+    no_trade_rule = policy.rules.get(rule_code="neutral_range_to_standard_no_trade")
+    assert no_trade_rule.action == StrategyRouteAction.SELECT_STRATEGY
+    assert no_trade_rule.selected_strategy_definition_id == strategies["standard_trend__neutral_range_no_trade"].id
 
 
 @pytest.mark.django_db
@@ -133,3 +148,233 @@ def test_seed_strategy_routing_rejects_existing_rule_identity_conflict() -> None
 
     with pytest.raises(CommandError, match="StrategyRouteRule"):
         call_command("seed_strategy_routing", stdout=StringIO())
+
+
+@pytest.mark.django_db
+def test_create_route_policy_variant_rebinds_rule_without_mutating_source() -> None:
+    create_all_required_strategy_definitions()
+    replacement_strategy = create_strategy_definition("standard_trend__bearish_wait")
+    call_command("seed_strategy_routing", stdout=StringIO())
+    source_policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
+    source_rule = source_policy.rules.get(rule_code="bearish_trend_continuation_to_short_trend_following")
+    original_strategy_id = source_rule.selected_strategy_definition_id
+
+    result = create_route_policy_variant(
+        source_policy_id=source_policy.id,
+        policy_version="",
+        display_name="自定义等待路由 v1",
+        description="测试把下跌延续接到等待策略",
+        rule_strategy_bindings={source_rule.id: replacement_strategy.id},
+        operator_id="_pytest",
+        reason="测试创建自定义路由方案",
+        trace_id="trace_route_policy_variant_test",
+        trigger_source="pytest",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    new_policy = StrategyRoutePolicy.objects.exclude(id=source_policy.id).get()
+    assert new_policy.policy_code.startswith("custom_strategy_routing_")
+    assert new_policy.policy_code != source_policy.policy_code
+    assert new_policy.policy_version == "v1"
+    assert new_policy.id != source_policy.id
+    assert new_policy.definition_hash != "pending"
+    assert new_policy.rules.count() == source_policy.rules.count()
+    new_rule = new_policy.rules.get(rule_code=source_rule.rule_code)
+    assert new_rule.action == StrategyRouteAction.SELECT_STRATEGY
+    assert new_rule.selected_strategy_definition_id == replacement_strategy.id
+    source_rule.refresh_from_db()
+    assert source_rule.selected_strategy_definition_id == original_strategy_id
+
+
+@pytest.mark.django_db
+def test_select_route_policy_replaces_previous_route_policy_slice() -> None:
+    create_all_required_strategy_definitions()
+    replacement_strategy = create_strategy_definition("standard_trend__bearish_wait")
+    call_command("seed_strategy_routing", stdout=StringIO())
+    first_policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
+    first_rule = first_policy.rules.get(rule_code="bearish_trend_continuation_to_short_trend_following")
+    result = create_route_policy_variant(
+        source_policy_id=first_policy.id,
+        policy_version="",
+        display_name="第二套路由方案",
+        description="测试策略路由单选替换",
+        rule_strategy_bindings={first_rule.id: replacement_strategy.id},
+        operator_id="_pytest",
+        reason="测试策略路由单选替换",
+        trace_id="trace_route_policy_replace_create",
+        trigger_source="pytest",
+    )
+    assert result.status == ResultStatus.SUCCEEDED
+    second_policy = StrategyRoutePolicy.objects.exclude(id=first_policy.id).get()
+
+    first_select = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=first_policy.id,
+        is_included=True,
+        operator_id="_pytest",
+        reason="选择第一套路由方案",
+        trace_id="trace_route_policy_replace_first",
+        trigger_source="pytest",
+    )
+    assert first_select.status == ResultStatus.SUCCEEDED
+
+    second_select = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=second_policy.id,
+        is_included=True,
+        operator_id="_pytest",
+        reason="选择第二套路由方案",
+        trace_id="trace_route_policy_replace_second",
+        trigger_source="pytest",
+    )
+    assert second_select.status == ResultStatus.SUCCEEDED
+
+    included_items = StrategyAnalysisWorkspaceItem.objects.filter(is_included=True)
+    included_route_policies = included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY)
+    assert included_route_policies.count() == 1
+    assert included_route_policies.get().component_object_id == second_policy.id
+    assert included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE).count() == second_policy.rules.count()
+    assert set(
+        included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_DEFINITION).values_list(
+            "component_object_id",
+            flat=True,
+        )
+    ) == set(second_policy.rules.values_list("selected_strategy_definition_id", flat=True))
+
+
+@pytest.mark.django_db
+def test_select_route_policy_auto_includes_rules_and_bound_strategies() -> None:
+    create_all_required_strategy_definitions()
+    call_command("seed_strategy_routing", stdout=StringIO())
+    policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
+
+    result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=policy.id,
+        is_included=True,
+        operator_id="_pytest",
+        reason="测试纳入路由方案",
+        trace_id="trace_workspace_route_policy_test",
+        trigger_source="pytest",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    included_items = StrategyAnalysisWorkspaceItem.objects.filter(is_included=True)
+    assert included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY).count() == 1
+    assert included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE).count() == policy.rules.count()
+    included_strategy_codes = set(
+        included_items.filter(component_type=ReleaseItemComponentType.STRATEGY_DEFINITION).values_list(
+            "component_code",
+            flat=True,
+        )
+    )
+    expected_strategy_codes = set(
+        policy.rules.exclude(selected_strategy_definition=None).values_list(
+            "selected_strategy_definition__strategy_code",
+            flat=True,
+        )
+    )
+    assert included_strategy_codes == expected_strategy_codes
+
+    cancel_result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=policy.id,
+        is_included=False,
+        operator_id="_pytest",
+        reason="测试取消纳入路由方案",
+        trace_id="trace_workspace_route_policy_cancel_test",
+        trigger_source="pytest",
+    )
+
+    assert cancel_result.status == ResultStatus.SUCCEEDED
+    assert StrategyAnalysisWorkspaceItem.objects.filter(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_code=policy.policy_code,
+        is_included=True,
+    ).count() == 0
+    assert StrategyAnalysisWorkspaceItem.objects.filter(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+        is_included=True,
+    ).count() == 0
+
+
+@pytest.mark.django_db
+def test_release_selection_ignores_manually_included_strategy_not_bound_by_route_rule() -> None:
+    route_bound_strategy = create_strategy_definition("route_bound_strategy", required_domain_codes=())
+    manually_selected_strategy = create_strategy_definition("manual_extra_strategy", required_domain_codes=())
+    policy = StrategyRoutePolicy.objects.create(
+        policy_code="custom_policy",
+        policy_version="v1",
+        display_name="custom_policy",
+        description="custom_policy",
+        condition_schema_version="1.0",
+        rule_set_hash="rule-set-hash",
+        definition_hash="policy-hash",
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+    )
+    rule = StrategyRouteRule.objects.create(
+        strategy_route_policy=policy,
+        rule_code="route_to_bound_strategy",
+        display_name="route_to_bound_strategy",
+        description="route_to_bound_strategy",
+        priority=10,
+        action=StrategyRouteAction.SELECT_STRATEGY,
+        match_conditions={"regime_codes": ["custom_regime"]},
+        selected_strategy_definition=route_bound_strategy,
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
+        rule_hash="rule-hash",
+    )
+    result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+        component_object_id=policy.id,
+        is_included=True,
+        operator_id="_pytest",
+        reason="选择路由方案",
+        trace_id="trace_route_bound_release_selection",
+        trigger_source="pytest",
+    )
+    assert result.status == ResultStatus.SUCCEEDED
+    workspace = get_or_create_default_workspace(operator_id="_pytest")
+    StrategyAnalysisWorkspaceItem.objects.update_or_create(
+        workspace=workspace,
+        component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
+        component_code=manually_selected_strategy.strategy_code,
+        defaults={
+            "component_object_id": manually_selected_strategy.id,
+            "component_version": manually_selected_strategy.strategy_version,
+            "definition_hash": manually_selected_strategy.definition_hash,
+            "inclusion_managed": True,
+            "is_included": True,
+            "selection_reason": "模拟旧版手工纳入策略",
+            "updated_by": "_pytest",
+            "trace_id": "trace_route_bound_release_selection",
+            "trigger_source": "pytest",
+        },
+    )
+
+    selections, errors = _release_selections_from_workspace(workspace)
+
+    assert errors == []
+    strategy_selection_ids = {
+        selection.component_object_id
+        for selection in selections
+        if selection.component_type == ReleaseItemComponentType.STRATEGY_DEFINITION
+    }
+    assert route_bound_strategy.id in strategy_selection_ids
+    assert manually_selected_strategy.id not in strategy_selection_ids
+    assert rule.id in {
+        selection.component_object_id
+        for selection in selections
+        if selection.component_type == ReleaseItemComponentType.STRATEGY_ROUTE_RULE
+    }

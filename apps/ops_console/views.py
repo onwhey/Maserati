@@ -32,6 +32,7 @@ from apps.strategy_analysis.services.release import (
     copy_release_to_draft,
     create_draft_release,
     create_validation_evidence,
+    delete_release,
     freeze_release_for_validation,
     invalidate_release,
     prevalidate_release,
@@ -42,6 +43,7 @@ from apps.strategy_analysis.services.release import (
     upsert_release_item,
 )
 from apps.strategy_analysis.services.backtest import create_strategy_backtest_run, delete_strategy_backtest_run
+from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant
 from apps.strategy_analysis.services.workspace import (
     generate_release_from_workspace,
     remove_workspace_item,
@@ -60,6 +62,7 @@ from .selectors import (
     get_run_detail,
     get_runtime_guard_issue_detail,
     get_strategy_backtest_period_analysis_detail,
+    list_strategy_route_policy_builder_options,
     get_strategy_backtest_run_detail,
     list_alerts,
     list_audit_log,
@@ -572,6 +575,25 @@ def strategy_release_detail_view(_request: HttpRequest, release_id: int) -> Json
     return _handle_selector(get_strategy_release_detail, release_id)
 
 
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_release_delete_view(request: HttpRequest, release_id: int) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="删除策略版本包会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+
+    result = delete_release(
+        release_id=release_id,
+        operator_id=_operator_id(request),
+        reason=str(body.get("reason", "")).strip() or "删除非启用策略版本包",
+        trace_id=_trace_id(body, request, "strategy-release-delete"),
+        trigger_source="ops_console_strategy_release_delete",
+    )
+    return _service_response(result)
+
+
 @require_ops_permission("view_strategy_release")
 def strategy_release_components_view(request: HttpRequest) -> JsonResponse:
     return _handle_selector(list_strategy_release_components, request.GET)
@@ -585,6 +607,40 @@ def strategy_workspace_view(_request: HttpRequest) -> JsonResponse:
 @require_ops_permission("view_strategy_release")
 def strategy_workspace_components_view(request: HttpRequest) -> JsonResponse:
     return _handle_selector(list_strategy_workspace_components, request.GET)
+
+
+@require_ops_permission("view_strategy_release")
+def strategy_route_policy_builder_options_view(_request: HttpRequest) -> JsonResponse:
+    return _handle_selector(list_strategy_route_policy_builder_options)
+
+
+@require_ops_permission("edit_strategy_release", methods=("POST",))
+def strategy_route_policy_variant_create_view(request: HttpRequest) -> JsonResponse:
+    body, error = _json_object_body(request)
+    if error is not None:
+        return error
+    assert body is not None
+    if confirm_error := _confirm_write_error(body, message_zh="创建策略路由方案会写入数据库，必须显式 confirm_write=true。"):
+        return confirm_error
+    bindings = body.get("rule_strategy_bindings")
+    if not isinstance(bindings, dict):
+        return error_response(
+            reason_code="route_policy_rule_binding_invalid",
+            message_zh="路由规则绑定参数不合法。",
+            status=400,
+        )
+    result = create_route_policy_variant(
+        source_policy_id=int(body.get("source_policy_id") or 0),
+        policy_version=str(body.get("policy_version") or "").strip(),
+        display_name=str(body.get("display_name") or "").strip(),
+        description=str(body.get("description") or "").strip(),
+        rule_strategy_bindings=bindings,
+        operator_id=_operator_id(request),
+        reason=str(body.get("reason") or "").strip(),
+        trace_id=_trace_id(body, request, "strategy-route-policy-variant-create"),
+        trigger_source="ops_console_strategy_route_policy_builder",
+    )
+    return _service_response(result)
 
 
 @require_ops_permission("edit_strategy_release", methods=("POST",))

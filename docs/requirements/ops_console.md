@@ -112,6 +112,7 @@ OpsConsole 负责：
 冻结 StrategyAnalysisRelease；
 在批准 StrategyAnalysisRelease 时自动登记同版本包回测证据；
 批准、拒绝、失效和启用 StrategyAnalysisRelease；
+删除非当前启用的 StrategyAnalysisRelease；
 展示复盘数据导出入口与导出历史；
 展示订单、状态和成交详情；
 展示 RuntimeGuardIssue；
@@ -865,6 +866,7 @@ FeatureDefinition 由已纳入 AtomicSignal 的特征依赖自动反推；
 查看版本包 ReleaseItem 清单；
 从当前配置工作区生成 draft 版本包；
 从历史版本包复制生成新的 draft；
+删除非当前启用版本包；
 编辑 draft 的展示名称和说明；
 查看 draft 的依赖树；
 查看 draft 的缺失组件、不可用组件和指纹不一致组件；
@@ -932,6 +934,8 @@ calculator 不可解析的组件；
 启用只影响新开始的编排；
 回滚只能整包回滚，不允许局部回滚；
 失效 active 版本包后不得自动切换到其他版本包。
+
+删除版本包只允许作用于当前未启用的 StrategyAnalysisRelease；当前启用版本包不得删除。删除操作必须调用 StrategyAnalysisRelease service，写审计记录，不触发交易，不影响已经开始的正式编排运行。
 ```
 
 页面禁止：

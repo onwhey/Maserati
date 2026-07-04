@@ -11,6 +11,7 @@ from apps.foundation.results import ResultStatus
 from apps.market_data.domain import DATA_SOURCE_BINANCE_REST
 from apps.market_data.models import DataQualityResult, Kline, MarketSnapshot
 from apps.strategy_analysis.models import (
+    AnalysisObjectStatus,
     FeatureDefinition,
     FeatureSet,
     FeatureValue,
@@ -30,6 +31,7 @@ from apps.strategy_analysis.services.release import (
     calculate_definition_set_hash,
     calculate_release_hash,
     create_validation_evidence,
+    delete_release,
     freeze_release_for_validation,
 )
 from apps.strategy_calculator.contracts import CalculatorInput, CalculatorMetadata, CalculatorOutput, CalculatorType
@@ -73,6 +75,102 @@ def register_required_calculators() -> CalculatorRegistry:
     registry.register(FakeCalculator(CalculatorType.STRATEGY_SIGNAL, "fake_strategy"))
     registry.register(FakeCalculator(CalculatorType.DECISION_POLICY, "fake_decision"))
     return registry
+
+
+@pytest.mark.django_db
+def test_delete_release_removes_inactive_release_and_detaches_backtests() -> None:
+    release = StrategyAnalysisRelease.objects.create(release_code="delete_inactive_release", created_by="tester")
+    StrategyAnalysisReleaseItem.objects.create(
+        release=release,
+        component_type=ReleaseItemComponentType.FEATURE_DEFINITION,
+        component_object_id=1,
+        component_code="feature_for_delete",
+        definition_hash="feature_hash",
+        sort_order=10,
+    )
+    run = StrategyBacktestRun.objects.create(
+        run_key="delete-release-backtest",
+        strategy_analysis_release=release,
+        strategy_analysis_release_hash="release-hash",
+        start_analysis_close_time_utc=dt(2026, 1, 1),
+        end_analysis_close_time_utc=dt(2026, 1, 1),
+        initial_equity=Decimal("10000"),
+        fee_rate=Decimal("0.0004"),
+        business_request_prefix="delete-release-backtest",
+        trace_id="trace_delete_release",
+        trigger_source="test",
+    )
+
+    result = delete_release(
+        release_id=release.id,
+        operator_id="tester",
+        reason="测试删除非启用版本包",
+        trace_id="trace_delete_release",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    assert result.reason_code == "strategy_release_deleted"
+    assert not StrategyAnalysisRelease.objects.filter(id=release.id).exists()
+    assert not StrategyAnalysisReleaseItem.objects.filter(release_id=release.id).exists()
+    run.refresh_from_db()
+    assert run.strategy_analysis_release_id is None
+
+
+@pytest.mark.django_db
+def test_delete_release_blocks_current_active_release() -> None:
+    release = StrategyAnalysisRelease.objects.create(
+        release_code="delete_active_release",
+        approval_status=ReleaseApprovalStatus.APPROVED,
+        is_active=True,
+        active_slot=1,
+    )
+
+    result = delete_release(
+        release_id=release.id,
+        operator_id="tester",
+        reason="测试删除启用版本包",
+        trace_id="trace_delete_active_release",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.BLOCKED
+    assert result.reason_code == "strategy_release_active_delete_blocked"
+    assert StrategyAnalysisRelease.objects.filter(id=release.id).exists()
+
+
+@pytest.mark.django_db
+def test_delete_release_removes_release_analysis_facts() -> None:
+    market_snapshot = create_market_snapshot()
+    release = StrategyAnalysisRelease.objects.create(release_code="delete_release_with_analysis_facts")
+    feature_set = FeatureSet.objects.create(
+        feature_set_key="delete-release-feature-set",
+        business_request_key="delete-release-feature-set",
+        market_snapshot=market_snapshot,
+        strategy_analysis_release=release,
+        release_hash="release-hash",
+        status=AnalysisObjectStatus.CREATED,
+        is_usable=True,
+        allows_atomic_signal=True,
+        feature_schema_version="1.0",
+        definition_set_hash="definition-set-hash",
+        feature_count=0,
+        trace_id="trace_delete_release_with_analysis",
+        trigger_source="test",
+    )
+
+    result = delete_release(
+        release_id=release.id,
+        operator_id="tester",
+        reason="删除带下游分析事实的非启用版本包",
+        trace_id="trace_delete_release_with_analysis",
+        trigger_source="test",
+    )
+
+    assert result.status == ResultStatus.SUCCEEDED
+    assert result.reason_code == "strategy_release_deleted"
+    assert not StrategyAnalysisRelease.objects.filter(id=release.id).exists()
+    assert not FeatureSet.objects.filter(id=feature_set.id).exists()
 
 
 def create_kline(open_time: datetime, timeframe: str = "4h") -> Kline:

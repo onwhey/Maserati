@@ -5,6 +5,7 @@ from apps.strategy_calculator.contracts import CalculatorInput, CalculatorType
 from apps.strategy_calculator.strategy_signal import (
     LongPullbackSupportCalculator,
     LongTrendFollowingCalculator,
+    NoTradeStrategyCalculator,
     ShortReboundPressureCalculator,
     ShortTrendFollowingCalculator,
 )
@@ -255,3 +256,20 @@ def test_short_rebound_pressure_outputs_bearish_near_resistance_with_weakening_r
 
     assert values["direction"] == StrategySignalDirection.BEARISH
     assert values["trade_price_condition"]["condition_type"] == "rebound_pressure_price_zone"
+
+
+def test_no_trade_strategy_outputs_neutral_signal_with_full_domain_refs() -> None:
+    calculator = NoTradeStrategyCalculator()
+
+    output = calculator.calculate(
+        calculator_input("standard_trend__unclear_environment_no_trade", base_short_facts())
+    )
+    values = thaw_value(output.values)
+
+    assert values["direction"] == StrategySignalDirection.NEUTRAL
+    assert values["strength"] == 0
+    assert values["confidence"] == 1
+    assert values["trade_price_condition"] == {}
+    assert values["aggregation_snapshot"]["internal_mode"] == "explicit_no_trade"
+    assert values["aggregation_snapshot"]["final_direction"] == StrategySignalDirection.NEUTRAL
+    assert len(values["used_domain_signal_value_refs"]) == 6

@@ -20,6 +20,7 @@ from ..models import (
     StrategyAnalysisWorkspace,
     StrategyAnalysisWorkspaceItem,
     StrategyDefinition,
+    StrategyRouteAction,
     StrategyRoutePolicy,
     StrategyRouteRule,
 )
@@ -39,7 +40,6 @@ INCLUSION_MANAGED_COMPONENT_TYPES = {
     ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
     ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
     ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
-    ReleaseItemComponentType.STRATEGY_DEFINITION,
     ReleaseItemComponentType.STRATEGY_SIGNAL_QUALITY_RULE_SET,
     ReleaseItemComponentType.DECISION_POLICY_DEFINITION,
 }
@@ -193,6 +193,45 @@ def upsert_workspace_item(
 
     inclusion_managed = normalized_type in INCLUSION_MANAGED_COMPONENT_TYPES
     normalized_included = bool(is_included) if inclusion_managed else False
+    auto_included_components: list[tuple[ReleaseItemComponentType, Any]] = []
+    if normalized_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY and normalized_included:
+        policy: StrategyRoutePolicy = component
+        seen_auto_keys: set[tuple[ReleaseItemComponentType, str]] = set()
+        for rule in policy.rules.select_related("selected_strategy_definition").order_by("priority", "rule_code", "id"):
+            if not _component_is_selectable(ReleaseItemComponentType.STRATEGY_ROUTE_RULE, rule):
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "route_policy_rule_not_selectable",
+                    f"路由方案 {policy.policy_code}/{policy.policy_version} 包含不可用规则 {rule.rule_code}",
+                    trace_id,
+                    trigger_source,
+                )
+            if rule.action != StrategyRouteAction.SELECT_STRATEGY or rule.selected_strategy_definition is None:
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "route_policy_rule_strategy_missing",
+                    f"路由方案 {policy.policy_code}/{policy.policy_version} 的规则 {rule.rule_code} 没有绑定具体策略",
+                    trace_id,
+                    trigger_source,
+                )
+            selected_strategy = rule.selected_strategy_definition
+            if not _component_is_selectable(ReleaseItemComponentType.STRATEGY_DEFINITION, selected_strategy):
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "route_policy_strategy_not_selectable",
+                    f"路由规则 {rule.rule_code} 绑定的策略 {selected_strategy.strategy_code} 当前不可用",
+                    trace_id,
+                    trigger_source,
+                )
+            for auto_type, auto_component in (
+                (ReleaseItemComponentType.STRATEGY_ROUTE_RULE, rule),
+                (ReleaseItemComponentType.STRATEGY_DEFINITION, selected_strategy),
+            ):
+                auto_key = (auto_type, _component_code(auto_type, auto_component))
+                if auto_key in seen_auto_keys:
+                    continue
+                seen_auto_keys.add(auto_key)
+                auto_included_components.append((auto_type, auto_component))
     component_code = _component_code(normalized_type, component)
     defaults = {
         "component_object_id": component.id,
@@ -208,6 +247,19 @@ def upsert_workspace_item(
 
     with transaction.atomic():
         workspace = get_or_create_default_workspace(operator_id=operator_id)
+        route_replaced_item_ids: list[int] = []
+        if normalized_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY and normalized_included:
+            route_managed_types = (
+                ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
+                ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+                ReleaseItemComponentType.STRATEGY_DEFINITION,
+            )
+            route_items = StrategyAnalysisWorkspaceItem.objects.select_for_update().filter(
+                workspace=workspace,
+                component_type__in=route_managed_types,
+            )
+            route_replaced_item_ids = list(route_items.values_list("id", flat=True))
+            route_items.delete()
         existing = (
             StrategyAnalysisWorkspaceItem.objects.select_for_update()
             .filter(workspace=workspace, component_type=normalized_type, component_code=component_code)
@@ -229,6 +281,39 @@ def upsert_workspace_item(
             component_code=component_code,
             defaults=defaults,
         )
+        auto_item_ids: list[int] = []
+        for auto_type, auto_component in auto_included_components:
+            auto_code = _component_code(auto_type, auto_component)
+            auto_item, _auto_created = StrategyAnalysisWorkspaceItem.objects.update_or_create(
+                workspace=workspace,
+                component_type=auto_type,
+                component_code=auto_code,
+                defaults={
+                    "component_object_id": auto_component.id,
+                    "component_version": _component_version(auto_type, auto_component),
+                    "definition_hash": _component_definition_hash(auto_type, auto_component),
+                    "inclusion_managed": True,
+                    "is_included": True,
+                    "selection_reason": f"由路由方案 {component_code} 自动纳入",
+                    "updated_by": operator_id,
+                    "trace_id": trace_id,
+                    "trigger_source": trigger_source,
+                },
+            )
+            auto_item_ids.append(auto_item.id)
+        auto_removed_item_ids: list[int] = []
+        if normalized_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY and not normalized_included:
+            policy = component
+            rule_codes = [
+                _component_code(ReleaseItemComponentType.STRATEGY_ROUTE_RULE, rule)
+                for rule in policy.rules.order_by("id")
+            ]
+            auto_rule_items = workspace.items.filter(
+                component_type=ReleaseItemComponentType.STRATEGY_ROUTE_RULE,
+                component_code__in=rule_codes,
+            )
+            auto_removed_item_ids = list(auto_rule_items.values_list("id", flat=True))
+            auto_rule_items.delete()
         workspace.updated_by = operator_id
         workspace.save(update_fields=["updated_by", "updated_at_utc"])
         after = {
@@ -239,6 +324,9 @@ def upsert_workspace_item(
             "component_version": item.component_version,
             "inclusion_managed": item.inclusion_managed,
             "is_included": item.is_included,
+            "auto_included_item_ids": auto_item_ids,
+            "auto_removed_item_ids": auto_removed_item_ids,
+            "route_replaced_item_ids": route_replaced_item_ids,
         }
 
     _record_workspace_audit(
@@ -323,6 +411,7 @@ def _dependency_errors(
     *,
     included_by_type: dict[ReleaseItemComponentType, list[StrategyAnalysisWorkspaceItem]],
     loaded_components: dict[int, Any],
+    route_bound_strategy_definitions: dict[int, StrategyDefinition],
 ) -> list[str]:
     errors: list[str] = []
     included_atomic_codes = {
@@ -334,10 +423,9 @@ def _dependency_errors(
         for item in included_by_type.get(ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION, [])
     }
     included_strategy_codes = {
-        item.component_code
-        for item in included_by_type.get(ReleaseItemComponentType.STRATEGY_DEFINITION, [])
+        strategy.strategy_code
+        for strategy in route_bound_strategy_definitions.values()
     }
-
     for item in included_by_type.get(ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION, []):
         definition: DomainSignalDefinition = loaded_components[item.id]
         for code in normalize_atomic_signal_codes(definition.required_atomic_signal_codes, allow_empty=True):
@@ -350,11 +438,10 @@ def _dependency_errors(
             if code not in included_domain_codes:
                 errors.append(f"市场环境 {item.component_code} 缺少必需领域 {code}")
 
-    for item in included_by_type.get(ReleaseItemComponentType.STRATEGY_DEFINITION, []):
-        definition: StrategyDefinition = loaded_components[item.id]
+    for definition in route_bound_strategy_definitions.values():
         for code in normalize_domain_codes(definition.required_domain_codes, allow_empty=True):
             if code not in included_domain_codes:
-                errors.append(f"策略 {item.component_code} 缺少必需领域 {code}")
+                errors.append(f"策略 {definition.strategy_code} 缺少必需领域 {code}")
 
     for item in included_by_type.get(ReleaseItemComponentType.STRATEGY_ROUTE_RULE, []):
         definition: StrategyRouteRule = loaded_components[item.id]
@@ -371,6 +458,39 @@ def _dependency_errors(
     return errors
 
 
+def _route_bound_strategy_definitions(
+    *,
+    included_by_type: dict[ReleaseItemComponentType, list[StrategyAnalysisWorkspaceItem]],
+    loaded_components: dict[int, Any],
+) -> tuple[dict[int, StrategyDefinition], list[str]]:
+    strategies: dict[int, StrategyDefinition] = {}
+    errors: list[str] = []
+    for item in included_by_type.get(ReleaseItemComponentType.STRATEGY_ROUTE_RULE, []):
+        rule: StrategyRouteRule = loaded_components[item.id]
+        if rule.action != StrategyRouteAction.SELECT_STRATEGY:
+            continue
+        selected = rule.selected_strategy_definition
+        if selected is None:
+            errors.append(f"路由规则 {rule.rule_code} 没有绑定具体策略")
+            continue
+        if not _component_is_selectable(ReleaseItemComponentType.STRATEGY_DEFINITION, selected):
+            errors.append(f"路由规则 {rule.rule_code} 绑定的策略 {selected.strategy_code} 当前不可用")
+            continue
+        strategies[selected.id] = selected
+
+    for item in included_by_type.get(ReleaseItemComponentType.STRATEGY_ROUTE_POLICY, []):
+        policy: StrategyRoutePolicy = loaded_components[item.id]
+        fallback = policy.fallback_strategy_definition
+        if fallback is None:
+            continue
+        if not _component_is_selectable(ReleaseItemComponentType.STRATEGY_DEFINITION, fallback):
+            errors.append(f"路由方案 {policy.policy_code} fallback 策略 {fallback.strategy_code} 当前不可用")
+            continue
+        strategies[fallback.id] = fallback
+
+    return strategies, errors
+
+
 def _release_selections_from_workspace(
     workspace: StrategyAnalysisWorkspace,
 ) -> tuple[list[ReleaseComponentSelection], list[str]]:
@@ -384,7 +504,7 @@ def _release_selections_from_workspace(
     included_non_feature_items = [
         item
         for component_type in RELEASE_SORT_BASE
-        if component_type != ReleaseItemComponentType.FEATURE_DEFINITION
+        if component_type not in {ReleaseItemComponentType.FEATURE_DEFINITION, ReleaseItemComponentType.STRATEGY_DEFINITION}
         for item in sorted(included_by_type.get(component_type, []), key=lambda value: (value.component_code, value.id))
     ]
     if not included_non_feature_items:
@@ -400,6 +520,12 @@ def _release_selections_from_workspace(
 
     if errors:
         return [], errors
+
+    route_bound_strategies, route_strategy_errors = _route_bound_strategy_definitions(
+        included_by_type=included_by_type,
+        loaded_components=loaded_components,
+    )
+    errors.extend(route_strategy_errors)
 
     required_feature_codes: set[str] = set()
     for item in included_by_type.get(ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION, []):
@@ -419,20 +545,35 @@ def _release_selections_from_workspace(
             continue
         inferred_feature_items.append(feature_item)
 
-    errors.extend(_dependency_errors(included_by_type=included_by_type, loaded_components=loaded_components))
+    errors.extend(
+        _dependency_errors(
+            included_by_type=included_by_type,
+            loaded_components=loaded_components,
+            route_bound_strategy_definitions=route_bound_strategies,
+        )
+    )
     if errors:
         return [], errors
 
     selected_items = inferred_feature_items + included_non_feature_items
+    selected_specs = [
+        (_normalize_component_type(item.component_type), item.component_object_id)
+        for item in selected_items
+    ] + [
+        (ReleaseItemComponentType.STRATEGY_DEFINITION, strategy.id)
+        for strategy in sorted(
+            route_bound_strategies.values(),
+            key=lambda value: (value.strategy_code, value.strategy_version, value.id),
+        )
+    ]
     selections: list[ReleaseComponentSelection] = []
     order_offsets: dict[ReleaseItemComponentType, int] = {}
-    for item in selected_items:
-        component_type = _normalize_component_type(item.component_type)
+    for component_type, component_object_id in selected_specs:
         order_offsets[component_type] = order_offsets.get(component_type, 0) + 10
         selections.append(
             ReleaseComponentSelection(
                 component_type=component_type,
-                component_object_id=item.component_object_id,
+                component_object_id=component_object_id,
                 sort_order=RELEASE_SORT_BASE[component_type] + order_offsets[component_type],
             )
         )

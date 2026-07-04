@@ -1,6 +1,8 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { useRouter } from "next/navigation";
 
 import { EmptyState } from "@/components/ops/empty-state";
 import { StatusBadge } from "@/components/ops/status-badge";
@@ -9,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 
 import { bulkUpdateStrategyWorkspaceItemsAction } from "./actions";
-import { WorkspaceComponentActionForm } from "./forms";
+import { WorkspaceComponentActionForm, WorkspaceRoutePolicyRadioForm } from "./forms";
 import { initialStrategyReleaseActionState } from "../strategy-releases/state";
 
 type ComponentGroup = {
@@ -44,7 +46,16 @@ function componentGroupKey(component: Record<string, unknown>) {
   return `${String(component.component_type)}:${String(component.component_code)}`;
 }
 
-function groupComponentsByCode(components: Record<string, unknown>[]) {
+function groupComponentsByCode(components: Record<string, unknown>[], layerSlug?: string) {
+  if (layerSlug === "strategy-routing") {
+    return components.map((component) => ({
+      componentType: String(component.component_type ?? ""),
+      componentCode: String(component.component_code ?? ""),
+      displayName: String(component.display_name ?? ""),
+      selected: Boolean(component.workspace_is_selected_version) ? component : undefined,
+      items: [component]
+    }));
+  }
   const grouped = new Map<string, Record<string, unknown>[]>();
   for (const component of components) {
     const key = componentGroupKey(component);
@@ -97,7 +108,7 @@ function isGroupAdopted(group: ComponentGroup) {
   if (!group.selected) {
     return false;
   }
-  if (group.componentType === "feature_definition") {
+  if (group.componentType === "feature_definition" || group.componentType === "strategy_definition") {
     return true;
   }
   return Boolean(group.selected.workspace_is_included);
@@ -120,7 +131,7 @@ function selectOperationForGroup(group: ComponentGroup): BulkOperation | null {
     action: "upsert",
     component_type: String(target.component_type ?? ""),
     component_object_id: Number(target.component_object_id ?? 0),
-    is_included: group.componentType !== "feature_definition",
+    is_included: group.componentType !== "feature_definition" && group.componentType !== "strategy_definition",
     reason: `批量采用 ${group.componentType}/${group.componentCode}`
   };
 }
@@ -129,7 +140,7 @@ function cancelOperationForGroup(group: ComponentGroup): BulkOperation | null {
   if (!group.selected) {
     return null;
   }
-  if (group.componentType === "feature_definition") {
+  if (group.componentType === "feature_definition" || group.componentType === "strategy_definition") {
     return {
       action: "remove",
       item_id: Number(group.selected.workspace_item_id ?? 0),
@@ -167,18 +178,48 @@ function ActionResult({ state }: { state: typeof initialStrategyReleaseActionSta
   return <div className={state.ok ? "text-xs text-emerald-600" : "text-xs text-destructive"}>{state.message}</div>;
 }
 
+function BulkOperationForm({
+  action,
+  disabled,
+  layerSlug,
+  mode,
+  operations,
+  children
+}: {
+  action: (payload: FormData) => void;
+  disabled: boolean;
+  layerSlug: string;
+  mode: BulkMode;
+  operations: BulkOperation[];
+  children: ReactNode;
+}) {
+  return (
+    <form action={action}>
+      <input type="hidden" name="layer_path" value={layerSlug} />
+      <input type="hidden" name="bulk_mode" value={mode} />
+      <input type="hidden" name={`operations_${mode}`} value={JSON.stringify(operations)} />
+      <Button type="submit" variant="outline" disabled={disabled}>
+        {children}
+      </Button>
+    </form>
+  );
+}
+
 function WorkspaceState({ component }: { component: Record<string, unknown> }) {
+  const componentType = String(component.component_type ?? "");
   if (component.workspace_is_selected_version) {
+    const selectedDescription =
+      componentType === "strategy_definition"
+        ? "是否进入版本包由路由规则绑定决定"
+        : component.workspace_inclusion_managed
+          ? component.workspace_is_included
+            ? "已纳入当前组合"
+            : "未纳入当前组合"
+          : "Feature 由原子依赖反推";
     return (
       <div className="space-y-1">
         <StatusBadge value="已选择" />
-        <div className="text-xs text-muted-foreground">
-          {component.workspace_inclusion_managed
-            ? component.workspace_is_included
-              ? "已纳入当前组合"
-              : "未纳入当前组合"
-            : "Feature 由原子依赖反推"}
-        </div>
+        <div className="text-xs text-muted-foreground">{selectedDescription}</div>
       </div>
     );
   }
@@ -199,8 +240,10 @@ function GroupHeader({
   group: ComponentGroup;
   isFeature: boolean;
 }) {
+  const isStrategy = group.componentType === "strategy_definition";
   const selectedVersion = group.selected ? versionText(group.selected) : "";
   const selectedIncluded = Boolean(group.selected?.workspace_is_included);
+  const selectedTitle = isFeature ? "当前采用" : isStrategy ? "当前选择" : "当前版本";
   return (
     <summary className="cursor-pointer px-4 py-3 transition-colors hover:bg-muted/30">
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
@@ -218,9 +261,12 @@ function GroupHeader({
           {group.selected ? (
             <>
               <div>
-                {isFeature ? "当前采用" : "当前版本"}：<span className="font-medium text-foreground">{selectedVersion}</span>
+                {selectedTitle}：<span className="font-medium text-foreground">{selectedVersion}</span>
               </div>
-              {!isFeature ? <div>{selectedIncluded ? "已纳入当前组合" : "未纳入当前组合"}</div> : null}
+              {!isFeature && !isStrategy ? (
+                <div>{selectedIncluded ? "已纳入当前组合" : "未纳入当前组合"}</div>
+              ) : null}
+              {isStrategy ? <div>是否打包由路由规则绑定决定</div> : null}
             </>
           ) : (
             <div>未选择版本</div>
@@ -231,6 +277,123 @@ function GroupHeader({
   );
 }
 
+function GroupCard({
+  group,
+  isFeature,
+  children
+}: {
+  group: ComponentGroup;
+  isFeature: boolean;
+  children: ReactNode;
+}) {
+  const isRoutePolicy = group.componentType === "strategy_route_policy";
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="px-4 py-3">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
+          <div className="min-w-0 space-y-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-foreground">{displayText(group.componentCode)}</span>
+              <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {isRoutePolicy ? "独立路由方案" : `${group.items.length} 个版本`}
+              </span>
+            </div>
+            <div className="truncate text-sm text-muted-foreground">{displayText(group.displayName, "暂无展示名称")}</div>
+            <div className="text-xs text-muted-foreground">类型：{displayText(group.componentType)}</div>
+          </div>
+          <div className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            {group.selected ? (
+              <>
+                <div>
+                  {isRoutePolicy
+                    ? "当前使用"
+                    : group.componentType === "strategy_definition"
+                      ? "当前选择"
+                      : isFeature
+                        ? "当前采用"
+                        : "当前版本"}
+                  ：<span className="font-medium text-foreground">{versionText(group.selected)}</span>
+                </div>
+                {!isFeature && group.componentType !== "strategy_definition" && !isRoutePolicy ? (
+                  <div>{group.selected.workspace_is_included ? "已纳入当前组合" : "未纳入当前组合"}</div>
+                ) : null}
+              </>
+            ) : (
+              <div>{isRoutePolicy ? "未使用" : "未选择版本"}</div>
+            )}
+          </div>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ComponentVersionRows({
+  group,
+  layerSlug
+}: {
+  group: ComponentGroup;
+  layerSlug: string;
+}) {
+  if (layerSlug === "strategy-routing") {
+    return (
+      <div className="divide-y border-t">
+        {group.items.map((component, index) => (
+          <div
+            key={`${String(component.component_type)}:${String(component.component_object_id ?? index)}`}
+            className="grid gap-3 bg-background px-4 py-3 lg:grid-cols-[120px_minmax(0,1fr)_180px] lg:items-center"
+          >
+            <div className="flex items-center gap-2">
+              <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                {versionText(component)}
+              </span>
+              <StatusBadge value={component.status} />
+            </div>
+            <div className="min-w-0 space-y-1">
+              <div className="truncate text-sm text-muted-foreground">{displayText(component.description, "暂无说明")}</div>
+            </div>
+            <div className="lg:text-right">
+              <WorkspaceRoutePolicyRadioForm component={component} layerPath={layerSlug} />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="divide-y border-t">
+      {group.items.map((component, index) => (
+        <div
+          key={`${String(component.component_type)}:${String(component.component_object_id ?? index)}`}
+          className="grid gap-3 bg-background px-4 py-3 lg:grid-cols-[130px_minmax(0,1fr)_220px_180px] lg:items-center"
+        >
+          <div className="flex items-center gap-2">
+            <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+              {versionText(component)}
+            </span>
+            <StatusBadge value={component.status} />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <div className="truncate text-sm text-muted-foreground">{displayText(component.description, "暂无说明")}</div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              <span>算法：{displayText(component.algorithm_name)}</span>
+              <span>算法版本：{displayText(component.algorithm_version)}</span>
+            </div>
+          </div>
+          <div className="rounded-lg bg-muted/40 px-3 py-2">
+            <WorkspaceState component={component} />
+          </div>
+          <div className="lg:text-right">
+            <WorkspaceComponentActionForm component={component} layerPath={layerSlug} />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function ComponentGroupList({
   components,
   layerSlug
@@ -238,18 +401,27 @@ export function ComponentGroupList({
   components: Record<string, unknown>[];
   layerSlug: string;
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [adoptionFilter, setAdoptionFilter] = useState<AdoptionFilter>("all");
   const [bulkState, bulkAction, bulkPending] = useActionState(
     bulkUpdateStrategyWorkspaceItemsAction,
     initialStrategyReleaseActionState
   );
-  const groups = useMemo(() => groupComponentsByCode(components), [components]);
+  const isStrategyRouteLayer = layerSlug === "strategy-routing";
+  const groups = useMemo(() => groupComponentsByCode(components, layerSlug), [components, layerSlug]);
   const filteredGroups = useMemo(() => filterGroups(groups, query, adoptionFilter), [groups, query, adoptionFilter]);
   const selectOperations = useMemo(() => bulkOperations(filteredGroups, "select"), [filteredGroups]);
   const cancelOperations = useMemo(() => bulkOperations(filteredGroups, "cancel"), [filteredGroups]);
   const invertOperations = useMemo(() => bulkOperations(filteredGroups, "invert"), [filteredGroups]);
   const isFeatureLayer = layerSlug === "features";
+  const useFlatCards = isStrategyRouteLayer;
+
+  useEffect(() => {
+    if (bulkState.ok && bulkState.reason_code && bulkState.reason_code !== "strategy_workspace_bulk_noop") {
+      router.refresh();
+    }
+  }, [bulkState.ok, bulkState.reason_code, router]);
 
   return (
     <div className="space-y-4">
@@ -266,66 +438,62 @@ export function ComponentGroupList({
             <option value="not_adopted">未采用</option>
           </Select>
         </div>
-        <form action={bulkAction} className="flex flex-wrap items-center gap-2 xl:justify-end">
-          <input type="hidden" name="layer_path" value={layerSlug} />
-          <input type="hidden" name="operations_select" value={JSON.stringify(selectOperations)} />
-          <input type="hidden" name="operations_cancel" value={JSON.stringify(cancelOperations)} />
-          <input type="hidden" name="operations_invert" value={JSON.stringify(invertOperations)} />
-          <Button type="submit" name="bulk_mode" value="select" variant="outline" disabled={bulkPending}>
-            全选当前结果
-          </Button>
-          <Button type="submit" name="bulk_mode" value="cancel" variant="outline" disabled={bulkPending}>
-            取消当前结果
-          </Button>
-          <Button type="submit" name="bulk_mode" value="invert" variant="outline" disabled={bulkPending}>
-            反选当前结果
-          </Button>
-        </form>
+        {!isStrategyRouteLayer ? (
+          <div className="flex flex-wrap items-center gap-2 xl:justify-end">
+            <BulkOperationForm
+              action={bulkAction}
+              disabled={bulkPending}
+              layerSlug={layerSlug}
+              mode="select"
+              operations={selectOperations}
+            >
+              全选当前结果
+            </BulkOperationForm>
+            <BulkOperationForm
+              action={bulkAction}
+              disabled={bulkPending}
+              layerSlug={layerSlug}
+              mode="cancel"
+              operations={cancelOperations}
+            >
+              取消当前结果
+            </BulkOperationForm>
+            <BulkOperationForm
+              action={bulkAction}
+              disabled={bulkPending}
+              layerSlug={layerSlug}
+              mode="invert"
+              operations={invertOperations}
+            >
+              反选当前结果
+            </BulkOperationForm>
+          </div>
+        ) : null}
       </div>
       <ActionResult state={bulkState} />
 
       <div className="text-xs text-muted-foreground">
-        共 {groups.length} 个组件，当前显示 {filteredGroups.length} 个。
+        {isStrategyRouteLayer
+          ? `共计 ${groups.length} 个路由方案，当前显示 ${filteredGroups.length} 个。`
+          : `共计 ${groups.length} 个组件，当前显示 ${filteredGroups.length} 个。`}
       </div>
 
       {filteredGroups.length ? (
         <div className="space-y-3">
           {filteredGroups.map((group) => (
-            <details
-              key={`${group.componentType}:${group.componentCode}`}
-              className="overflow-hidden rounded-xl border bg-card"
-              open={Boolean(group.selected) || group.items.length <= 2}
-            >
-              <GroupHeader group={group} isFeature={isFeatureLayer} />
-              <div className="divide-y border-t">
-                {group.items.map((component, index) => (
-                  <div
-                    key={`${String(component.component_type)}:${String(component.component_object_id ?? index)}`}
-                    className="grid gap-3 bg-background px-4 py-3 lg:grid-cols-[130px_minmax(0,1fr)_220px_180px] lg:items-center"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                        {versionText(component)}
-                      </span>
-                      <StatusBadge value={component.status} />
-                    </div>
-                    <div className="min-w-0 space-y-1">
-                      <div className="truncate text-sm text-muted-foreground">{displayText(component.description, "暂无说明")}</div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>算法：{displayText(component.algorithm_name)}</span>
-                        <span>算法版本：{displayText(component.algorithm_version)}</span>
-                      </div>
-                    </div>
-                    <div className="rounded-lg bg-muted/40 px-3 py-2">
-                      <WorkspaceState component={component} />
-                    </div>
-                    <div className="lg:text-right">
-                      <WorkspaceComponentActionForm component={component} layerPath={layerSlug} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </details>
+            useFlatCards ? (
+              <GroupCard key={`${group.componentType}:${group.componentCode}`} group={group} isFeature={isFeatureLayer}>
+                <ComponentVersionRows group={group} layerSlug={layerSlug} />
+              </GroupCard>
+            ) : (
+              <details
+                key={`${group.componentType}:${group.componentCode}`}
+                className="overflow-hidden rounded-xl border bg-card"
+              >
+                <GroupHeader group={group} isFeature={isFeatureLayer} />
+                <ComponentVersionRows group={group} layerSlug={layerSlug} />
+              </details>
+            )
           ))}
         </div>
       ) : (

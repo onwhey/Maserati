@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +26,20 @@ function ActionResult({ state }: { state: typeof initialStrategyReleaseActionSta
   );
 }
 
+function generateReleaseCode() {
+  const now = new Date();
+  const timestamp = [
+    now.getUTCFullYear(),
+    String(now.getUTCMonth() + 1).padStart(2, "0"),
+    String(now.getUTCDate()).padStart(2, "0"),
+    String(now.getUTCHours()).padStart(2, "0"),
+    String(now.getUTCMinutes()).padStart(2, "0"),
+    String(now.getUTCSeconds()).padStart(2, "0")
+  ].join("");
+  const random = Math.random().toString(36).slice(2, 8);
+  return `strategy-release-${timestamp}-${random}`;
+}
+
 export function WorkspaceComponentActionForm({
   component,
   layerPath
@@ -44,16 +59,23 @@ export function WorkspaceComponentActionForm({
   const componentObjectId = String(component.component_object_id ?? "");
   const componentCode = String(component.component_code ?? "");
   const isFeature = componentType === "feature_definition";
+  const isStrategy = componentType === "strategy_definition";
   const isSelectedVersion = Boolean(component.workspace_is_selected_version);
   const workspaceItemId = Number(component.workspace_item_id ?? 0);
   const upsertFormRef = useRef<HTMLFormElement>(null);
   const removeFormRef = useRef<HTMLFormElement>(null);
   const pending = upsertPending || removePending;
-  const checked = isFeature ? isSelectedVersion : isSelectedVersion && Boolean(component.workspace_is_included);
-  const label = isFeature ? "采用此版本" : "纳入当前组合";
+  const checked = isFeature || isStrategy ? isSelectedVersion : isSelectedVersion && Boolean(component.workspace_is_included);
+  const [checkedState, setCheckedState] = useState(checked);
+  const label = isFeature ? "采用此版本" : isStrategy ? "选择此版本" : "纳入当前组合";
+
+  useEffect(() => {
+    setCheckedState(checked);
+  }, [checked]);
 
   function submitChange(checkedNow: boolean) {
-    if (isFeature && !checkedNow && isSelectedVersion && workspaceItemId) {
+    setCheckedState(checkedNow);
+    if ((isFeature || isStrategy) && !checkedNow && isSelectedVersion && workspaceItemId) {
       removeFormRef.current?.requestSubmit();
       return;
     }
@@ -71,7 +93,7 @@ export function WorkspaceComponentActionForm({
           <input
             type="checkbox"
             name="is_included"
-            defaultChecked={checked}
+            checked={checkedState}
             disabled={pending}
             onChange={(event) => submitChange(event.currentTarget.checked)}
           />
@@ -91,6 +113,58 @@ export function WorkspaceComponentActionForm({
   );
 }
 
+export function WorkspaceRoutePolicyRadioForm({
+  component,
+  layerPath
+}: {
+  component: Record<string, unknown>;
+  layerPath?: string;
+}) {
+  const router = useRouter();
+  const [upsertState, upsertAction, upsertPending] = useActionState(
+    upsertStrategyWorkspaceItemAction,
+    initialStrategyReleaseActionState
+  );
+  const componentType = String(component.component_type ?? "");
+  const componentObjectId = String(component.component_object_id ?? "");
+  const componentCode = String(component.component_code ?? "");
+  const checked = Boolean(component.workspace_is_selected_version) && Boolean(component.workspace_is_included);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    if (upsertState.ok && upsertState.reason_code) {
+      router.refresh();
+    }
+  }, [router, upsertState.ok, upsertState.reason_code]);
+
+  return (
+    <div className="space-y-1.5">
+      <form ref={formRef} action={upsertAction} className="flex flex-wrap items-center justify-end gap-2">
+        <input type="hidden" name="component_selection" value={`${componentType}|${componentObjectId}`} />
+        <input type="hidden" name="layer_path" value={layerPath ?? ""} />
+        <input type="hidden" name="reason" value={`选择 ${componentType}/${componentCode}`} />
+        <input type="hidden" name="confirm_write" value="on" />
+        <input type="hidden" name="is_included" value="on" />
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="radio"
+            name="strategy_route_policy_selection"
+            checked={checked}
+            disabled={upsertPending}
+            onChange={() => {
+              if (!checked) {
+                formRef.current?.requestSubmit();
+              }
+            }}
+          />
+          <span>{upsertPending ? "保存中..." : checked ? "当前使用" : "使用此路由"}</span>
+        </label>
+        <ActionResult state={upsertState} />
+      </form>
+    </div>
+  );
+}
+
 export function GenerateReleaseFromWorkspaceForm() {
   const [state, formAction, pending] = useActionState(
     generateStrategyReleaseFromWorkspaceAction,
@@ -100,6 +174,10 @@ export function GenerateReleaseFromWorkspaceForm() {
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
   const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    setReleaseCode(generateReleaseCode());
+  }, []);
 
   return (
     <Card>
@@ -115,9 +193,9 @@ export function GenerateReleaseFromWorkspaceForm() {
             <Input
               id="release_code"
               name="release_code"
-              placeholder="例如：strategy-release-p0-001"
+              placeholder="系统自动生成"
+              readOnly
               value={releaseCode}
-              onChange={(event) => setReleaseCode(event.currentTarget.value)}
             />
           </div>
           <div className="space-y-2">

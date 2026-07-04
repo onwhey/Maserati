@@ -7,6 +7,7 @@ from typing import Any, Iterable
 
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import IntegrityError, transaction
+from django.db.models import ProtectedError
 from django.utils import timezone
 
 from apps.alerts.models import AlertSeverity
@@ -50,6 +51,14 @@ from ..models import (
     ReleaseApprovalStatus,
     ReleaseItemComponentType,
     FeatureDefinition,
+    FeatureSet,
+    AtomicSignalSet,
+    DomainSignalSet,
+    MarketRegimeSnapshot,
+    StrategyRouteDecision,
+    StrategySignal,
+    StrategySignalQualityResult,
+    DecisionSnapshot,
     StrategyAnalysisRelease,
     StrategyAnalysisReleaseActivation,
     StrategyAnalysisReleaseApproval,
@@ -521,6 +530,115 @@ def copy_release_to_draft(
         trace_id,
         trigger_source,
         {"source_release_id": source.id, "release_id": draft.id},
+    )
+
+
+def _delete_release_analysis_facts(release: StrategyAnalysisRelease) -> dict[str, int]:
+    """删除由该版本包产生的策略分析事实，按下游到上游顺序清理以满足保护外键。"""
+    deleted_counts: dict[str, int] = {}
+    delete_plan = (
+        ("decision_snapshots", DecisionSnapshot.objects.filter(strategy_analysis_release=release)),
+        (
+            "strategy_signal_quality_results",
+            StrategySignalQualityResult.objects.filter(strategy_analysis_release=release),
+        ),
+        ("strategy_signals", StrategySignal.objects.filter(strategy_analysis_release=release)),
+        ("strategy_route_decisions", StrategyRouteDecision.objects.filter(strategy_analysis_release=release)),
+        ("market_regime_snapshots", MarketRegimeSnapshot.objects.filter(strategy_analysis_release=release)),
+        ("domain_signal_sets", DomainSignalSet.objects.filter(strategy_analysis_release=release)),
+        ("atomic_signal_sets", AtomicSignalSet.objects.filter(strategy_analysis_release=release)),
+        ("feature_sets", FeatureSet.objects.filter(strategy_analysis_release=release)),
+    )
+    for key, queryset in delete_plan:
+        deleted_count, _details = queryset.delete()
+        deleted_counts[key] = deleted_count
+    return deleted_counts
+
+
+def delete_release(
+    *,
+    release_id: int,
+    operator_id: str,
+    reason: str,
+    trace_id: str,
+    trigger_source: str,
+) -> ServiceResult:
+    try:
+        with transaction.atomic():
+            try:
+                release = StrategyAnalysisRelease.objects.select_for_update().get(id=release_id)
+            except StrategyAnalysisRelease.DoesNotExist:
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "strategy_release_not_found",
+                    "策略分析版本包不存在，不能删除",
+                    trace_id,
+                    trigger_source,
+                    {"release_id": release_id},
+                )
+            if release.is_active or release.active_slot is not None:
+                return ServiceResult(
+                    ResultStatus.BLOCKED,
+                    "strategy_release_active_delete_blocked",
+                    "当前启用版本包不能删除",
+                    trace_id,
+                    trigger_source,
+                    {"release_id": release.id, "is_active": release.is_active, "active_slot": release.active_slot},
+                )
+
+            before = {
+                **_release_summary(release),
+                "item_count": release.items.count(),
+                "validation_evidence_count": release.validation_evidence.count(),
+                "approval_count": release.approvals.count(),
+                "activation_count": release.activations.count(),
+                "backtest_run_count": release.backtest_runs.count(),
+                "feature_set_count": release.feature_sets.count(),
+                "atomic_signal_set_count": release.atomic_signal_sets.count(),
+                "domain_signal_set_count": release.domain_signal_sets.count(),
+                "market_regime_snapshot_count": release.market_regime_snapshots.count(),
+                "strategy_route_decision_count": release.strategy_route_decisions.count(),
+                "strategy_signal_count": release.strategy_signals.count(),
+                "strategy_signal_quality_result_count": release.strategy_signal_quality_results.count(),
+                "decision_snapshot_count": release.decision_snapshots.count(),
+            }
+            deleted_analysis_counts = _delete_release_analysis_facts(release)
+            _record_release_audit(
+                operation_type="strategy_release_delete",
+                release=release,
+                operator_id=operator_id,
+                reason=reason,
+                before_state=before,
+                after_state={},
+                evidence={
+                    "delete_scope": "release_children_backtest_links_and_strategy_analysis_facts",
+                    "deleted_analysis_counts": deleted_analysis_counts,
+                },
+                result="succeeded",
+                trace_id=trace_id,
+                trigger_source=trigger_source,
+            )
+            release.delete()
+    except ProtectedError as exc:
+        return ServiceResult(
+            ResultStatus.BLOCKED,
+            "strategy_release_delete_protected",
+            "策略版本包已有受保护的下游业务事实引用，不能直接删除",
+            trace_id,
+            trigger_source,
+            {
+                "release_id": release_id,
+                "protected_object_count": len(exc.protected_objects),
+            },
+        )
+
+    return ServiceResult(
+        ResultStatus.SUCCEEDED,
+        "strategy_release_deleted",
+        "策略分析版本包已删除",
+        trace_id,
+        trigger_source,
+        {"release_id": release_id, "deleted": True},
     )
 
 

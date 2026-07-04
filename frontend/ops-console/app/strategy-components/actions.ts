@@ -195,3 +195,40 @@ export async function generateStrategyReleaseFromWorkspaceAction(
   }
   return stateFromResult(result);
 }
+
+export async function createStrategyRoutePolicyVariantAction(
+  _previousState: StrategyReleaseActionState,
+  formData: FormData
+): Promise<StrategyReleaseActionState> {
+  const rawBindings = requiredText(formData, "rule_strategy_bindings");
+  let ruleStrategyBindings: Record<string, number> = {};
+  try {
+    const parsed: unknown = JSON.parse(rawBindings || "{}");
+    if (isRecord(parsed)) {
+      ruleStrategyBindings = Object.fromEntries(
+        Object.entries(parsed).map(([ruleId, strategyId]) => [ruleId, Number(strategyId ?? 0)])
+      );
+    }
+  } catch {
+    return {
+      ok: false,
+      reason_code: "route_policy_rule_binding_invalid",
+      message: "路由规则绑定参数不合法。",
+      release_id: null
+    };
+  }
+
+  const result = await opsPost<Record<string, unknown>>("/api/ops/strategy-routing/policies/create-variant/", {
+    confirm_write: confirmWrite(formData),
+    source_policy_id: Number(formData.get("source_policy_id") ?? 0),
+    policy_version: requiredText(formData, "policy_version"),
+    display_name: requiredText(formData, "display_name"),
+    description: requiredText(formData, "description"),
+    reason: requiredText(formData, "reason"),
+    rule_strategy_bindings: ruleStrategyBindings
+  });
+  if (result.ok) {
+    revalidateStrategyWorkspacePages("strategy-routing");
+  }
+  return stateFromResult(result);
+}

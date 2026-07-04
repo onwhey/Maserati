@@ -21,6 +21,7 @@ class StrategyAnalysisConfig(AppConfig):
         from apps.strategy_calculator.strategy_signal import (
             LongPullbackSupportCalculator,
             LongTrendFollowingCalculator,
+            NoTradeStrategyCalculator,
             ShortReboundPressureCalculator,
             ShortTrendFollowingCalculator,
         )
@@ -36,6 +37,7 @@ class StrategyAnalysisConfig(AppConfig):
             LongPullbackSupportCalculator(),
             ShortTrendFollowingCalculator(),
             ShortReboundPressureCalculator(),
+            NoTradeStrategyCalculator(),
             PositionPolicyCalculator(),
         ):
             try:
