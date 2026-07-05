@@ -248,6 +248,7 @@ def upsert_workspace_item(
     with transaction.atomic():
         workspace = get_or_create_default_workspace(operator_id=operator_id)
         route_replaced_item_ids: list[int] = []
+        market_regime_replaced_item_ids: list[int] = []
         if normalized_type == ReleaseItemComponentType.STRATEGY_ROUTE_POLICY and normalized_included:
             route_managed_types = (
                 ReleaseItemComponentType.STRATEGY_ROUTE_POLICY,
@@ -260,6 +261,13 @@ def upsert_workspace_item(
             )
             route_replaced_item_ids = list(route_items.values_list("id", flat=True))
             route_items.delete()
+        if normalized_type == ReleaseItemComponentType.MARKET_REGIME_DEFINITION and normalized_included:
+            market_regime_items = StrategyAnalysisWorkspaceItem.objects.select_for_update().filter(
+                workspace=workspace,
+                component_type=ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
+            )
+            market_regime_replaced_item_ids = list(market_regime_items.values_list("id", flat=True))
+            market_regime_items.delete()
         existing = (
             StrategyAnalysisWorkspaceItem.objects.select_for_update()
             .filter(workspace=workspace, component_type=normalized_type, component_code=component_code)
@@ -327,6 +335,7 @@ def upsert_workspace_item(
             "auto_included_item_ids": auto_item_ids,
             "auto_removed_item_ids": auto_removed_item_ids,
             "route_replaced_item_ids": route_replaced_item_ids,
+            "market_regime_replaced_item_ids": market_regime_replaced_item_ids,
         }
 
     _record_workspace_audit(

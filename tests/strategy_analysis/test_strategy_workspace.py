@@ -9,6 +9,7 @@ from apps.strategy_analysis.models import (
     AtomicSignalOutputType,
     DefinitionLifecycleStatus,
     FeatureDefinition,
+    MarketRegimeDefinition,
     ReleaseItemComponentType,
     StrategyAnalysisReleaseItem,
     StrategyAnalysisWorkspaceItem,
@@ -52,6 +53,26 @@ def create_atomic(code: str, *, feature_codes: list[str]) -> AtomicSignalDefinit
         is_required=False,
         depends_on_feature_codes=feature_codes,
         output_type=AtomicSignalOutputType.BOOLEAN,
+    )
+
+
+def create_market_regime_definition(code: str, *, algorithm_version: str) -> MarketRegimeDefinition:
+    return MarketRegimeDefinition.objects.create(
+        definition_code=code,
+        display_name=code,
+        description=f"{code} definition",
+        algorithm_name="fake_market_regime",
+        algorithm_version=algorithm_version,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={},
+        params_hash=stable_hash({"params": code}),
+        definition_hash=stable_hash({"market_regime": code, "algorithm_version": algorithm_version}),
+        allowed_domain_codes=["trend"],
+        required_domain_codes=["trend"],
+        allowed_regime_codes=["bullish_trend_continuation"],
+        status=DefinitionLifecycleStatus.ACTIVE,
+        enabled=True,
     )
 
 
@@ -101,6 +122,39 @@ def test_workspace_generates_release_with_features_inferred_from_included_atomic
     assert [(item.component_type, item.component_code) for item in items] == [
         (ReleaseItemComponentType.FEATURE_DEFINITION, "feature_shared"),
         (ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION, "atomic_uses_feature"),
+    ]
+
+
+def test_workspace_market_regime_selection_replaces_previous_definition() -> None:
+    first = create_market_regime_definition("context_structure_regime_v1", algorithm_version="v1")
+    second = create_market_regime_definition("context_structure_regime_v2", algorithm_version="v2")
+
+    first_result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
+        component_object_id=first.id,
+        is_included=True,
+        operator_id="tester",
+        reason="select market regime v1",
+        trace_id="trace-workspace-market-regime-v1",
+        trigger_source="test",
+    )
+    second_result = upsert_workspace_item(
+        component_type=ReleaseItemComponentType.MARKET_REGIME_DEFINITION,
+        component_object_id=second.id,
+        is_included=True,
+        operator_id="tester",
+        reason="select market regime v2",
+        trace_id="trace-workspace-market-regime-v2",
+        trigger_source="test",
+    )
+
+    assert first_result.status == ResultStatus.SUCCEEDED
+    assert second_result.status == ResultStatus.SUCCEEDED
+    items = StrategyAnalysisWorkspaceItem.objects.filter(
+        component_type=ReleaseItemComponentType.MARKET_REGIME_DEFINITION
+    )
+    assert list(items.values_list("component_code", "component_version", "is_included")) == [
+        ("context_structure_regime_v2", "v2", True)
     ]
 
 

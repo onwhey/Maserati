@@ -6,6 +6,7 @@ from decimal import Decimal
 from apps.strategy_calculator.contracts import CalculationStatus, CalculatorInput, CalculatorType
 from apps.strategy_calculator.market_regime.context_structure_regime import (
     ContextStructureRegimeCalculator,
+    ContextStructureRegimeV2Calculator,
     REGIME_CODES,
     REQUIRED_DOMAIN_CODES,
 )
@@ -25,7 +26,7 @@ def domain_value(value_id: int, code: str, direction: str, state_code: str, stre
     }
 
 
-def calculate(*, overrides: dict[str, dict] | None = None, params: dict | None = None):
+def calculate(*, overrides: dict[str, dict] | None = None, params: dict | None = None, calculator=None):
     facts = {
         "market_context": domain_value(1, "market_context", "bullish", "market_context_high_zone"),
         "trend": domain_value(2, "trend", "bullish", "trend_1d_bullish_4h_aligned"),
@@ -49,7 +50,7 @@ def calculate(*, overrides: dict[str, dict] | None = None, params: dict | None =
             "allowed_regime_codes": list(REGIME_CODES),
         },
     )
-    return ContextStructureRegimeCalculator().calculate(input_dto)
+    return (calculator or ContextStructureRegimeCalculator()).calculate(input_dto)
 
 
 def test_context_structure_regime_outputs_bullish_trend_continuation_with_complete_scores() -> None:
@@ -160,3 +161,54 @@ def test_context_structure_regime_rejects_incomplete_domain_inputs() -> None:
 
     assert output.calculation_status == CalculationStatus.FAILED
     assert output.error_code == "context_structure_regime_required_domain_missing"
+
+
+def test_context_structure_regime_v2_selects_bearish_rebound_in_same_family_transition() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV2Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_neutral_4h_bullish",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "volatility": {
+                "state_code": "volatility_low",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_resistance_minor_unclear",
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_rebound"
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v2"
+
+
+def test_context_structure_regime_v2_keeps_unclear_when_risk_is_unclear() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV2Calculator(),
+        overrides={
+            "risk_state": {
+                "state_code": "risk_unclear",
+                "strength": Decimal("1"),
+            }
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "unclear_environment"

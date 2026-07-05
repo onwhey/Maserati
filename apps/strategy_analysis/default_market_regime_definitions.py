@@ -36,10 +36,11 @@ class MarketRegimeDefinitionTemplate:
 DEFAULT_MARKET_REGIME_DEFINITIONS: tuple[MarketRegimeDefinitionTemplate, ...] = (
     MarketRegimeDefinitionTemplate(
         definition_code="context_structure_regime_v1",
-        display_name="大背景结构市场环境 v1",
+        display_name="【保守型】大背景结构市场环境 v1",
         description=(
             "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
-            "识别当前市场环境。该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
+            "识别当前市场环境。该定义偏保守，遇到大背景、趋势、动能、结构冲突时更倾向输出不明确环境。"
+            "该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
         ),
         algorithm_name="context_structure_regime",
         algorithm_version="v1",
@@ -48,6 +49,27 @@ DEFAULT_MARKET_REGIME_DEFINITIONS: tuple[MarketRegimeDefinitionTemplate, ...] = 
         params={
             "min_regime_score": "0.55",
             "min_classification_margin": "0.10",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v2",
+        display_name="【敏捷型】大背景结构市场环境 v2",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "识别当前市场环境。该定义保留大背景约束，但更早承认短周期反弹、回调和同方向家族内的阶段切换，"
+            "减少长时间不明确环境。该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v2",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
         },
         allowed_domain_codes=REQUIRED_DOMAIN_CODES,
         required_domain_codes=REQUIRED_DOMAIN_CODES,

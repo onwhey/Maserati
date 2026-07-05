@@ -491,7 +491,7 @@ class HttpBinancePublicMarketGateway:
 
         LOGGER.warning(
             "Binance public gateway failed: %s",
-            sanitize_mapping({"operation": effective_operation, "error": last_error, "params": params}),
+            str(sanitize_mapping({"operation": effective_operation, "error": last_error, "params": params})),
         )
         return failure_result(
             operation=effective_operation,

@@ -79,6 +79,7 @@ class ContextStructureRegimeCalculator:
         algorithm_requirement_document_path="docs/requirements/market_regime/context_structure_regime_v1.md",
         implementation_document_path="docs/implementation/market_regime/context_structure_regime__v1.md",
     )
+    evidence_type = "context_structure_regime_v1"
 
     def calculate(self, calculation_input: CalculatorInput) -> CalculatorOutput:
         values = dict(calculation_input.values)
@@ -87,7 +88,7 @@ class ContextStructureRegimeCalculator:
         if set(allowed_regime_codes) != set(REGIME_CODES):
             return self._failed(
                 "context_structure_regime_allowed_codes_invalid",
-                "context_structure_regime/v1 必须使用文档登记的完整 regime_code 集合。",
+                f"context_structure_regime/{self.metadata.algorithm_version} 必须使用文档登记的完整 regime_code 集合。",
             )
         domain_values = values.get("domain_values")
         if not isinstance(domain_values, (list, tuple)):
@@ -110,7 +111,7 @@ class ContextStructureRegimeCalculator:
             },
             evidence_items=(
                 {
-                    "type": "context_structure_regime_v1",
+                    "type": self.evidence_type,
                     "selected_regime_code": classification.regime_code,
                     "decision_reason": classification.decision_reason,
                     "competitors": [
@@ -515,10 +516,9 @@ class ContextStructureRegimeCalculator:
             f"主要竞争候选：{competitors or '无'}。该结论只描述市场环境，不生成策略、目标仓位或订单动作。"
         )
 
-    @staticmethod
-    def _failed(error_code: str, error_message: str) -> CalculatorOutput:
+    def _failed(self, error_code: str, error_message: str) -> CalculatorOutput:
         return CalculatorOutput.failed(
-            output_schema_version=ContextStructureRegimeCalculator.metadata.output_schema_version,
+            output_schema_version=self.metadata.output_schema_version,
             error_code=error_code,
             error_message=error_message,
         )
@@ -566,3 +566,191 @@ class ContextStructureRegimeCalculator:
     @classmethod
     def _cap(cls, value: Decimal) -> Decimal:
         return cls._round_score(max(Decimal("0"), min(Decimal("1"), value)))
+
+
+class ContextStructureRegimeV2Calculator(ContextStructureRegimeCalculator):
+    """MarketRegime 模块：context_structure_regime/v2 市场环境分类 calculator。
+
+    负责：复用六个领域事实，输出更敏捷但仍不越权的市场环境分类。
+    不负责：计算特征、读取原子信号、选择策略、生成交易信号、生成目标仓位或订单动作。
+    读写数据库：不涉及。
+    访问 Redis：不涉及。
+    访问外部服务：不涉及。
+    发送 Hermes：不涉及。
+    调用大模型：不涉及。
+    涉及交易执行：不涉及。
+    允许真实交易：否。
+    """
+
+    metadata = CalculatorMetadata(
+        algorithm_name="context_structure_regime",
+        algorithm_version="v2",
+        calculator_type=CalculatorType.MARKET_REGIME,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/market_regime/context_structure_regime_v2.md",
+        implementation_document_path="docs/implementation/market_regime/context_structure_regime__v2.md",
+    )
+    evidence_type = "context_structure_regime_v2"
+
+    def _classify(self, *, facts: dict[str, DomainFact], params: Mapping[str, Any]) -> ClassificationResult:
+        scores = {code: Decimal("0") for code in REGIME_CODES}
+        risk = facts["risk_state"]
+        self._score_regular_candidates(scores=scores, facts=facts)
+        if risk.state_code == "risk_high_signal_unreliable":
+            scores["high_risk_environment"] = Decimal("1.00")
+            return self._select(
+                regime_code="high_risk_environment",
+                scores=scores,
+                decision_reason="risk_state 明确提示普通环境分类可靠性显著下降，优先归为高风险环境。",
+            )
+        if risk.state_code == "risk_unclear":
+            scores["unclear_environment"] = max(scores["unclear_environment"], Decimal("0.80"))
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="risk_state 本身不明确，不能伪装成普通多头、空头或震荡环境。",
+            )
+
+        ordered = self._ordered_scores(scores)
+        top_code, top_score = ordered[0]
+        second_code, second_score = ordered[1] if len(ordered) > 1 else ("", Decimal("0"))
+        priority_code = self._priority_regime_code(scores=scores, facts=facts, top_code=top_code)
+        if priority_code:
+            return self._select(
+                regime_code=priority_code,
+                scores=scores,
+                decision_reason=f"{priority_code} 满足专门优先级规则，优先于同方向普通趋势环境。",
+            )
+
+        min_score = self._decimal_param(params, "min_regime_score", Decimal("0.50"))
+        min_margin = self._decimal_param(params, "min_classification_margin", Decimal("0.05"))
+        transition_floor = self._decimal_param(params, "transition_floor_score", Decimal("0.50"))
+        if top_score < min_score:
+            transition_code = self._transition_regime_code(scores=scores, facts=facts, floor=transition_floor)
+            if transition_code:
+                return self._select(
+                    regime_code=transition_code,
+                    scores=scores,
+                    decision_reason=(
+                        "v2 在大背景和风险清晰时，允许已持续出现的短周期反弹/回调先形成具体环境，"
+                        "不因普通候选总分略低而长期停放在不明确环境。"
+                    ),
+                )
+            scores["unclear_environment"] = max(scores["unclear_environment"], top_score)
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="最高候选分数不足，输出不明确环境。",
+            )
+        if top_score - second_score < min_margin:
+            responsive_code = self._responsive_tie_break_code(
+                scores=scores,
+                facts=facts,
+                top_code=top_code,
+                second_code=second_code,
+                floor=transition_floor,
+            )
+            if responsive_code:
+                return self._select(
+                    regime_code=responsive_code,
+                    scores=scores,
+                    decision_reason=(
+                        "v2 识别到主要候选属于同一大方向家族或明确短周期修复阶段，"
+                        "优先输出更具体的市场环境，而不是长期输出不明确环境。"
+                    ),
+                )
+            scores["unclear_environment"] = max(scores["unclear_environment"], top_score)
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="主要候选之间差距过小且无法稳定收敛到同一市场家族，输出不明确环境。",
+            )
+        return self._select(
+            regime_code=top_code,
+            scores=scores,
+            decision_reason="普通候选分数满足 v2 最低分与最小差距要求。",
+        )
+
+    def _responsive_tie_break_code(
+        self,
+        *,
+        scores: Mapping[str, Decimal],
+        facts: dict[str, DomainFact],
+        top_code: str,
+        second_code: str,
+        floor: Decimal,
+    ) -> str:
+        transition_code = self._transition_regime_code(scores=scores, facts=facts, floor=floor)
+        if transition_code:
+            return transition_code
+        top_family = self._regime_family(top_code)
+        second_family = self._regime_family(second_code)
+        if (
+            top_family in {"bullish", "bearish"}
+            and top_family == second_family
+            and scores[top_code] >= floor
+        ):
+            return top_code
+        return ""
+
+    def _transition_regime_code(
+        self,
+        *,
+        scores: Mapping[str, Decimal],
+        facts: dict[str, DomainFact],
+        floor: Decimal,
+    ) -> str:
+        context = facts["market_context"]
+        trend = facts["trend"]
+        momentum = facts["momentum"]
+        if context.direction == "bearish" and self._short_cycle_repairing_against_context(
+            trend=trend, momentum=momentum, context_direction="bearish"
+        ):
+            return self._best_above_floor(scores, floor, ("bearish_rebound", "bearish_low_range"))
+        if context.direction == "bullish" and self._short_cycle_repairing_against_context(
+            trend=trend, momentum=momentum, context_direction="bullish"
+        ):
+            return self._best_above_floor(scores, floor, ("bullish_pullback", "bullish_high_range"))
+        return ""
+
+    @staticmethod
+    def _short_cycle_repairing_against_context(
+        *,
+        trend: DomainFact,
+        momentum: DomainFact,
+        context_direction: str,
+    ) -> bool:
+        opposite = "bullish" if context_direction == "bearish" else "bearish"
+        trend_token_matches = (
+            "rebound" in trend.state_code
+            if context_direction == "bearish"
+            else "pullback" in trend.state_code
+        )
+        return (
+            opposite in trend.state_code
+            or opposite in momentum.state_code
+            or momentum.direction == opposite
+            or trend_token_matches
+        )
+
+    @staticmethod
+    def _best_above_floor(scores: Mapping[str, Decimal], floor: Decimal, codes: tuple[str, ...]) -> str:
+        eligible = [(code, scores[code]) for code in codes if scores[code] >= floor]
+        if not eligible:
+            return ""
+        return max(eligible, key=lambda item: item[1])[0]
+
+    @staticmethod
+    def _regime_family(regime_code: str) -> str:
+        if regime_code.startswith("bullish_"):
+            return "bullish"
+        if regime_code.startswith("bearish_"):
+            return "bearish"
+        if regime_code == "neutral_range":
+            return "neutral"
+        if regime_code == "high_risk_environment":
+            return "risk"
+        return "unclear"

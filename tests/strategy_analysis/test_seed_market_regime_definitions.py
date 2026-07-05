@@ -13,15 +13,15 @@ from apps.strategy_calculator.market_regime.context_structure_regime import REGI
 def test_seed_market_regime_definitions_creates_default_definition() -> None:
     call_command("seed_market_regime_definitions")
 
-    definition = MarketRegimeDefinition.objects.get(definition_code="context_structure_regime_v1")
-    template = DEFAULT_MARKET_REGIME_DEFINITIONS[0]
-    assert definition.status == DefinitionLifecycleStatus.ACTIVE
-    assert definition.enabled is True
-    assert definition.algorithm_name == template.algorithm_name
-    assert definition.algorithm_version == template.algorithm_version
-    assert tuple(definition.allowed_domain_codes) == normalize_domain_codes(REQUIRED_DOMAIN_CODES)
-    assert tuple(definition.required_domain_codes) == normalize_domain_codes(REQUIRED_DOMAIN_CODES)
-    assert tuple(definition.allowed_regime_codes) == normalize_regime_codes(REGIME_CODES)
+    for template in DEFAULT_MARKET_REGIME_DEFINITIONS:
+        definition = MarketRegimeDefinition.objects.get(definition_code=template.definition_code)
+        assert definition.status == DefinitionLifecycleStatus.ACTIVE
+        assert definition.enabled is True
+        assert definition.algorithm_name == template.algorithm_name
+        assert definition.algorithm_version == template.algorithm_version
+        assert tuple(definition.allowed_domain_codes) == normalize_domain_codes(REQUIRED_DOMAIN_CODES)
+        assert tuple(definition.required_domain_codes) == normalize_domain_codes(REQUIRED_DOMAIN_CODES)
+        assert tuple(definition.allowed_regime_codes) == normalize_regime_codes(REGIME_CODES)
 
 
 @pytest.mark.django_db
@@ -29,4 +29,4 @@ def test_seed_market_regime_definitions_is_idempotent() -> None:
     call_command("seed_market_regime_definitions")
     call_command("seed_market_regime_definitions")
 
-    assert MarketRegimeDefinition.objects.count() == 1
+    assert MarketRegimeDefinition.objects.count() == len(DEFAULT_MARKET_REGIME_DEFINITIONS)

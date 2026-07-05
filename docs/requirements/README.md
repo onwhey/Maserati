@@ -55,6 +55,8 @@ feature_layer.md
 atomic_signals.md
 domain_signals.md
 market_regime.md
+market_regime/context_structure_regime_v1.md
+market_regime/context_structure_regime_v2.md
 strategy_routing.md
 strategy_signals.md
 strategy_signal_quality.md

@@ -60,6 +60,7 @@ export function WorkspaceComponentActionForm({
   const componentCode = String(component.component_code ?? "");
   const isFeature = componentType === "feature_definition";
   const isStrategy = componentType === "strategy_definition";
+  const isMarketRegime = componentType === "market_regime_definition";
   const isSelectedVersion = Boolean(component.workspace_is_selected_version);
   const workspaceItemId = Number(component.workspace_item_id ?? 0);
   const upsertFormRef = useRef<HTMLFormElement>(null);
@@ -67,7 +68,15 @@ export function WorkspaceComponentActionForm({
   const pending = upsertPending || removePending;
   const checked = isFeature || isStrategy ? isSelectedVersion : isSelectedVersion && Boolean(component.workspace_is_included);
   const [checkedState, setCheckedState] = useState(checked);
-  const label = isFeature ? "采用此版本" : isStrategy ? "选择此版本" : "纳入当前组合";
+  const label = isFeature
+    ? "采用此版本"
+    : isStrategy
+      ? "选择此版本"
+      : isMarketRegime
+        ? checked
+          ? "当前使用"
+          : "使用此算法"
+        : "纳入当前组合";
 
   useEffect(() => {
     setCheckedState(checked);
@@ -91,7 +100,7 @@ export function WorkspaceComponentActionForm({
         <input type="hidden" name="confirm_write" value="on" />
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           <input
-            type="checkbox"
+            type={isMarketRegime ? "radio" : "checkbox"}
             name="is_included"
             checked={checkedState}
             disabled={pending}
@@ -158,6 +167,63 @@ export function WorkspaceRoutePolicyRadioForm({
             }}
           />
           <span>{upsertPending ? "保存中..." : checked ? "当前使用" : "使用此路由"}</span>
+        </label>
+        <ActionResult state={upsertState} />
+      </form>
+    </div>
+  );
+}
+
+export function WorkspaceSingleChoiceComponentRadioForm({
+  checked,
+  checkedLabel = "当前使用",
+  component,
+  layerPath,
+  uncheckedLabel = "使用此项"
+}: {
+  checked: boolean;
+  checkedLabel?: string;
+  component: Record<string, unknown>;
+  layerPath?: string;
+  uncheckedLabel?: string;
+}) {
+  const router = useRouter();
+  const [upsertState, upsertAction, upsertPending] = useActionState(
+    upsertStrategyWorkspaceItemAction,
+    initialStrategyReleaseActionState
+  );
+  const componentType = String(component.component_type ?? "");
+  const componentObjectId = String(component.component_object_id ?? "");
+  const componentCode = String(component.component_code ?? "");
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useEffect(() => {
+    if (upsertState.ok && upsertState.reason_code) {
+      router.refresh();
+    }
+  }, [router, upsertState.ok, upsertState.reason_code]);
+
+  return (
+    <div className="space-y-1.5">
+      <form ref={formRef} action={upsertAction} className="flex flex-wrap items-center justify-end gap-2">
+        <input type="hidden" name="component_selection" value={`${componentType}|${componentObjectId}`} />
+        <input type="hidden" name="layer_path" value={layerPath ?? ""} />
+        <input type="hidden" name="reason" value={`选择 ${componentType}/${componentCode}`} />
+        <input type="hidden" name="confirm_write" value="on" />
+        <input type="hidden" name="is_included" value="on" />
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="radio"
+            name={`${componentType}_single_choice`}
+            checked={checked}
+            disabled={upsertPending}
+            onChange={() => {
+              if (!checked) {
+                formRef.current?.requestSubmit();
+              }
+            }}
+          />
+          <span>{upsertPending ? "保存中..." : checked ? checkedLabel : uncheckedLabel}</span>
         </label>
         <ActionResult state={upsertState} />
       </form>

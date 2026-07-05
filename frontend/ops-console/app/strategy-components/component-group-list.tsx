@@ -13,7 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 
 import { bulkUpdateStrategyWorkspaceItemsAction, deleteStrategyRoutePolicyAction } from "./actions";
-import { WorkspaceComponentActionForm, WorkspaceRoutePolicyRadioForm } from "./forms";
+import {
+  WorkspaceComponentActionForm,
+  WorkspaceRoutePolicyRadioForm,
+  WorkspaceSingleChoiceComponentRadioForm
+} from "./forms";
 import { initialStrategyReleaseActionState } from "../strategy-releases/state";
 
 type ComponentGroup = {
@@ -463,6 +467,103 @@ function StrategyCompactTable({ groups }: { groups: ComponentGroup[] }) {
   );
 }
 
+function MarketRegimeCompactTable({
+  groups,
+  layerSlug
+}: {
+  groups: ComponentGroup[];
+  layerSlug: string;
+}) {
+  const rows = groups.flatMap((group) =>
+    [...group.items]
+      .sort((left, right) => versionSortValue(left) - versionSortValue(right))
+      .map((component, index) => ({ group, component, index }))
+  );
+  const selectedRow = [...rows]
+    .reverse()
+    .find(({ component }) => Boolean(component.workspace_is_selected_version) && Boolean(component.workspace_is_included));
+  const selectedObjectId = selectedRow ? String(selectedRow.component.component_object_id ?? "") : "";
+
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1180px] border-collapse text-sm text-foreground/85">
+          <thead className="bg-muted/70 text-xs text-muted-foreground">
+            <tr className="border-b">
+              <th className="w-[260px] px-3 py-2 text-left font-medium">市场环境定义</th>
+              <th className="w-[260px] px-3 py-2 text-left font-medium">定义代码</th>
+              <th className="w-[90px] px-3 py-2 text-left font-medium">版本</th>
+              <th className="px-3 py-2 text-left font-medium">说明</th>
+              <th className="w-[170px] px-3 py-2 text-left font-medium">算法</th>
+              <th className="w-[170px] px-3 py-2 text-left font-medium">当前组合</th>
+              <th className="w-[170px] px-3 py-2 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {rows.map(({ group, component, index }) => {
+              const code = displayText(component.component_code, group.componentCode);
+              const isCurrent = selectedObjectId === String(component.component_object_id ?? "");
+              const algorithm = [
+                displayText(component.algorithm_name),
+                displayText(component.algorithm_version)
+              ]
+                .filter((value) => value !== "-")
+                .join(" / ");
+
+              return (
+                <tr
+                  key={`${String(component.component_type)}:${String(component.component_object_id ?? index)}`}
+                  className="align-middle"
+                >
+                  <td className="px-3 py-2">
+                    <div className="font-medium text-foreground">
+                      {displayText(component.display_name, group.displayName || group.componentCode)}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="max-w-[240px] truncate font-mono text-xs text-foreground/65" title={code}>
+                      {code}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className="rounded-md bg-background/80 px-2 py-0.5 text-xs text-foreground/70">
+                      {versionText(component)}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-foreground/75">
+                    <div className="line-clamp-2">{displayText(component.description, "暂无说明")}</div>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-foreground/65">
+                    <div className="truncate" title={algorithm || "-"}>
+                      {algorithm || "-"}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    {isCurrent ? (
+                      <StatusBadge value="当前已使用" />
+                    ) : (
+                      <span className="text-xs text-muted-foreground">未使用</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <WorkspaceSingleChoiceComponentRadioForm
+                      checked={isCurrent}
+                      checkedLabel="当前已使用"
+                      component={component}
+                      layerPath={layerSlug}
+                      uncheckedLabel="使用此算法"
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function DeleteRoutePolicyButton({ component }: { component: Record<string, unknown> }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -636,7 +737,8 @@ export function ComponentGroupList({
   );
   const isStrategyRouteLayer = layerSlug === "strategy-routing";
   const isStrategyLayer = layerSlug === "strategies";
-  const isReadOnlyLayer = isStrategyRouteLayer || isStrategyLayer;
+  const isMarketRegimeLayer = layerSlug === "market-regime";
+  const isReadOnlyLayer = isStrategyRouteLayer || isStrategyLayer || isMarketRegimeLayer;
   const groups = useMemo(() => groupComponentsByCode(components, layerSlug), [components, layerSlug]);
   const filteredGroups = useMemo(() => filterGroups(groups, query, adoptionFilter), [groups, query, adoptionFilter]);
   const selectOperations = useMemo(() => bulkOperations(filteredGroups, "select"), [filteredGroups]);
@@ -710,6 +812,8 @@ export function ComponentGroupList({
       {filteredGroups.length ? (
         isStrategyLayer ? (
           <StrategyCompactTable groups={filteredGroups} />
+        ) : isMarketRegimeLayer ? (
+          <MarketRegimeCompactTable groups={filteredGroups} layerSlug={layerSlug} />
         ) : (
           <div className="space-y-3">
             {filteredGroups.map((group) => (
