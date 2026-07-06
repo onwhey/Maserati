@@ -41,6 +41,15 @@ feature_code + is_not_null
 gt / gte / lt / lte / eq / ne / abs_gte / abs_lte
 ```
 
+支持的文本运算：
+
+```text
+text_eq / text_ne
+```
+
+文本运算只用于已经由 FeatureLayer 输出的离散状态值，例如历史大结构区角色。
+它不做模糊匹配，不做自然语言理解，不根据文本生成交易动作。
+
 `aggregation` 支持：
 
 ```text
@@ -55,6 +64,8 @@ any：任一条件成立即成立。
 只有 `is_null` / `is_not_null` 会直接判断 null 状态。
 
 这用于支撑压力缺失、区间不可用等结构类原子信号。
+
+文本条件遇到 `FeatureValue.value = null` 时，条件结果为 `false`。
 
 ## 4. 输出
 
@@ -131,6 +142,20 @@ structure_minor_support_lower_4h_120
 structure_minor_support_upper_4h_120
 structure_minor_resistance_lower_4h_120
 structure_minor_resistance_upper_4h_120
+```
+
+历史大结构区原子信号可以覆盖 `include_feature_values`，只携带 720 根 1d 回看的历史大结构区特征快照：
+
+```text
+structure_historical_major_zone_lower_1d_720
+structure_historical_major_zone_upper_1d_720
+structure_historical_major_zone_origin_type_1d_720
+structure_historical_major_zone_covered_bars_1d_720
+structure_historical_major_zone_test_count_1d_720
+structure_historical_major_zone_last_reaction_at_utc_1d_720
+structure_historical_major_zone_last_reaction_pct_1d_720
+structure_historical_major_zone_role_1d_720
+structure_historical_major_distance_to_zone_pct_1d_720
 ```
 
 输出示例：

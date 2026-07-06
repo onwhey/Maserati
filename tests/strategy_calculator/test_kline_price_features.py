@@ -31,7 +31,12 @@ def _bars(count: int, *, start_close: Decimal = Decimal("100"), step: Decimal = 
     return bars
 
 
-def _input(params: dict[str, object], *, bars_4h: list[dict[str, str]] | None = None) -> CalculatorInput:
+def _input(
+    params: dict[str, object],
+    *,
+    bars_4h: list[dict[str, str]] | None = None,
+    bars_1d: list[dict[str, str]] | None = None,
+) -> CalculatorInput:
     return CalculatorInput(
         calculator_type=CalculatorType.FEATURE_LAYER,
         input_schema_version="1.0",
@@ -42,16 +47,32 @@ def _input(params: dict[str, object], *, bars_4h: list[dict[str, str]] | None = 
             "market_snapshot": {
                 "analysis_close_time_utc": datetime(2026, 1, 2, tzinfo=UTC).isoformat(),
                 "4h": bars_4h or _bars(10),
-                "1d": _bars(10),
+                "1d": bars_1d or _bars(10),
             }
         },
     )
 
 
-def _value(params: dict[str, object], *, bars_4h: list[dict[str, str]] | None = None) -> Decimal:
-    output = KlinePriceFeatureCalculator().calculate(_input(params, bars_4h=bars_4h))
+def _raw_value(
+    params: dict[str, object],
+    *,
+    bars_4h: list[dict[str, str]] | None = None,
+    bars_1d: list[dict[str, str]] | None = None,
+) -> object:
+    output = KlinePriceFeatureCalculator().calculate(_input(params, bars_4h=bars_4h, bars_1d=bars_1d))
     assert output.calculation_status == CalculationStatus.SUCCEEDED
     return thaw_value(output.values)["value"]
+
+
+def _value(
+    params: dict[str, object],
+    *,
+    bars_4h: list[dict[str, str]] | None = None,
+    bars_1d: list[dict[str, str]] | None = None,
+) -> Decimal:
+    value = _raw_value(params, bars_4h=bars_4h, bars_1d=bars_1d)
+    assert isinstance(value, Decimal)
+    return value
 
 
 def test_kline_price_features_calculates_sma_and_distance() -> None:
@@ -150,6 +171,49 @@ def test_kline_price_features_calculates_structure_zone_metrics() -> None:
     assert support_touch_count >= Decimal("2")
     assert resistance_touch_count >= Decimal("2")
     assert range_position is not None
+
+
+def test_kline_price_features_calculates_historical_major_structure_zone() -> None:
+    bars = _bars(30, start_close=Decimal("100"), step=Decimal("0"))
+    for idx, bar in enumerate(bars):
+        bar["high"] = str(Decimal("103") + Decimal(idx % 3) / Decimal("10"))
+        bar["low"] = str(Decimal("92") + Decimal(idx % 4) / Decimal("10"))
+        bar["close"] = "100"
+        bar["open"] = "100"
+    for idx in (6, 14, 22):
+        bars[idx]["high"] = "120"
+        bars[idx + 1]["close"] = "100"
+        bars[idx + 1]["low"] = "99"
+    bars[-1]["close"] = "90"
+    bars[-1]["open"] = "91"
+    bars[-1]["high"] = "92"
+    bars[-1]["low"] = "88"
+
+    common = {
+        "operation": "historical_structure_zone_metric",
+        "timeframe": "1d",
+        "window": 30,
+        "swing_left_right": 1,
+        "default_min_half_width_pct": "0.02",
+        "confirmation_window": 2,
+        "min_reaction_pct": "0.10",
+        "min_touch_count": 2,
+        "min_zone_score": "0",
+        "max_distance_to_zone_pct": "0.50",
+    }
+
+    lower = _value({**common, "metric": "zone_lower"}, bars_1d=bars)
+    upper = _value({**common, "metric": "zone_upper"}, bars_1d=bars)
+    test_count = _value({**common, "metric": "test_count"}, bars_1d=bars)
+    role = _raw_value({**common, "metric": "role"}, bars_1d=bars)
+    origin_type = _raw_value({**common, "metric": "origin_type"}, bars_1d=bars)
+    distance = _value({**common, "metric": "distance_to_zone_pct"}, bars_1d=bars)
+
+    assert lower < Decimal("120") < upper
+    assert test_count >= Decimal("3")
+    assert role == "resistance_like"
+    assert origin_type == "historical_resistance"
+    assert distance > Decimal("0")
 
 
 def test_kline_price_features_fails_when_window_is_insufficient() -> None:

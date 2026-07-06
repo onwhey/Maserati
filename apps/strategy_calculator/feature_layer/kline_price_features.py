@@ -40,6 +40,18 @@ class StructureZone:
     touch_count: int
     score: Decimal
     last_touch_index: int
+    first_touch_index: int = -1
+    avg_reaction: Decimal = Decimal("0")
+
+
+@dataclass(frozen=True)
+class HistoricalStructureZone:
+    zone: StructureZone
+    origin_type: str
+    role: str
+    distance_to_zone_pct: Decimal
+    covered_bars: int
+    last_reaction_at_utc: str
 
 
 @dataclass(frozen=True)
@@ -98,8 +110,8 @@ class KlinePriceFeatureCalculator:
             },
         )
 
-    def _dispatch(self, *, operation: str, bars: list[KlineBar], params: dict[str, Any]) -> Decimal:
-        handlers: dict[str, Callable[[list[KlineBar], dict[str, Any]], Decimal]] = {
+    def _dispatch(self, *, operation: str, bars: list[KlineBar], params: dict[str, Any]) -> Any:
+        handlers: dict[str, Callable[[list[KlineBar], dict[str, Any]], Any]] = {
             "latest_close": self._latest_close,
             "latest_volume": self._latest_volume,
             "volume_sma": self._volume_sma,
@@ -160,6 +172,7 @@ class KlinePriceFeatureCalculator:
             "lower_high_count": self._lower_high_count,
             "lower_low_count": self._lower_low_count,
             "structure_zone_metric": self._structure_zone_metric,
+            "historical_structure_zone_metric": self._historical_structure_zone_metric,
         }
         handler = handlers.get(operation)
         if handler is None:
@@ -510,6 +523,38 @@ class KlinePriceFeatureCalculator:
             return _safe_div(support.lower - latest_close, latest_close, "latest_close_non_positive") if support else None
         raise FeatureCalculationError("feature_params_invalid", f"不支持的 structure metric：{metric}")
 
+    def _historical_structure_zone_metric(self, bars: list[KlineBar], params: dict[str, Any]) -> Decimal | str | None:
+        metric = str(params.get("metric") or "").strip()
+        if not metric:
+            raise FeatureCalculationError("feature_params_invalid", "参数 metric 不能为空")
+        historical_zone = _build_historical_structure_zone(bars, params)
+        if historical_zone is None:
+            if metric in {"origin_type", "role", "last_reaction_at_utc"}:
+                return ""
+            if metric in {"covered_bars", "test_count"}:
+                return Decimal("0")
+            return None
+        zone = historical_zone.zone
+        if metric == "zone_lower":
+            return zone.lower
+        if metric == "zone_upper":
+            return zone.upper
+        if metric == "origin_type":
+            return historical_zone.origin_type
+        if metric == "covered_bars":
+            return Decimal(historical_zone.covered_bars)
+        if metric == "test_count":
+            return Decimal(zone.touch_count)
+        if metric == "last_reaction_at_utc":
+            return historical_zone.last_reaction_at_utc
+        if metric == "last_reaction_pct":
+            return zone.avg_reaction
+        if metric == "role":
+            return historical_zone.role
+        if metric == "distance_to_zone_pct":
+            return historical_zone.distance_to_zone_pct
+        raise FeatureCalculationError("feature_params_invalid", f"不支持的 historical structure metric：{metric}")
+
     def _bars_since_rolling_high(self, bars: list[KlineBar], params: dict[str, Any]) -> list[KlineBar]:
         window_bars = _window_for_reference(bars, params)
         high = max(bar.high for bar in window_bars)
@@ -711,6 +756,82 @@ def _build_structure_snapshot(bars: list[KlineBar], params: dict[str, Any]) -> S
     return StructureSnapshot(latest_close=latest_close, support=support, resistance=resistance)
 
 
+def _build_historical_structure_zone(bars: list[KlineBar], params: dict[str, Any]) -> HistoricalStructureZone | None:
+    window = _positive_int(params, "window")
+    source = _tail(bars, window)
+    latest_close = source[-1].close
+    reference = source[:-1]
+    swing_left_right = _positive_int(params, "swing_left_right")
+    if len(reference) < swing_left_right * 2 + 1:
+        raise FeatureCalculationError("structure_insufficient_reference_window", "历史结构参考窗口不足")
+    half_width = _structure_zone_half_width(source, params)
+    min_touch_count = int(params.get("min_touch_count") or 2)
+    min_zone_score = Decimal(str(params.get("min_zone_score", "0")))
+    max_distance_to_zone_pct = Decimal(str(params.get("max_distance_to_zone_pct", "0.50")))
+    support_zones = _structure_zones(
+        reference=reference,
+        side="support",
+        swing_left_right=swing_left_right,
+        half_width_pct=half_width,
+        params=params,
+    )
+    resistance_zones = _structure_zones(
+        reference=reference,
+        side="resistance",
+        swing_left_right=swing_left_right,
+        half_width_pct=half_width,
+        params=params,
+    )
+    candidates: list[tuple[HistoricalStructureZone, Decimal, Decimal, Decimal, Decimal, Decimal]] = []
+    for origin_type, zones in (("historical_support", support_zones), ("historical_resistance", resistance_zones)):
+        for zone in zones:
+            if zone.touch_count < min_touch_count or zone.score < min_zone_score:
+                continue
+            distance = _distance_to_zone_pct(latest_close=latest_close, lower=zone.lower, upper=zone.upper)
+            if distance > max_distance_to_zone_pct:
+                continue
+            covered_bars = zone.last_touch_index - zone.first_touch_index + 1 if zone.first_touch_index >= 0 else 0
+            historical_zone = HistoricalStructureZone(
+                zone=zone,
+                origin_type=origin_type,
+                role=_historical_zone_role(latest_close=latest_close, lower=zone.lower, upper=zone.upper),
+                distance_to_zone_pct=distance,
+                covered_bars=covered_bars,
+                last_reaction_at_utc=reference[zone.last_touch_index].close_time_utc if 0 <= zone.last_touch_index < len(reference) else "",
+            )
+            candidates.append(
+                (
+                    historical_zone,
+                    Decimal(zone.touch_count),
+                    Decimal(covered_bars),
+                    zone.avg_reaction,
+                    Decimal("0") - distance,
+                    zone.score,
+                )
+            )
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[1:])[0]
+
+
+def _distance_to_zone_pct(*, latest_close: Decimal, lower: Decimal, upper: Decimal) -> Decimal:
+    if lower <= latest_close <= upper:
+        return Decimal("0")
+    if latest_close < lower:
+        return _safe_div(lower - latest_close, latest_close, "latest_close_non_positive")
+    return _safe_div(latest_close - upper, latest_close, "latest_close_non_positive")
+
+
+def _historical_zone_role(*, latest_close: Decimal, lower: Decimal, upper: Decimal) -> str:
+    if lower <= latest_close <= upper:
+        return "role_flip_candidate"
+    if latest_close > upper:
+        return "support_like"
+    if latest_close < lower:
+        return "resistance_like"
+    return "unclear"
+
+
 def _structure_zone_half_width(bars: list[KlineBar], params: dict[str, Any]) -> Decimal:
     default_min_half_width_pct = Decimal(str(params.get("default_min_half_width_pct", "0.006")))
     ranges = [_safe_div(bar.high - bar.low, bar.close, "latest_close_non_positive") for bar in bars]
@@ -745,7 +866,7 @@ def _structure_zones(
         center = Decimal(str(median(prices)))
         lower = min(prices) * (Decimal("1") - half_width_pct)
         upper = max(prices) * (Decimal("1") + half_width_pct)
-        touch_count, avg_reaction, last_touch_index = _zone_touch_stats(
+        touch_count, avg_reaction, first_touch_index, last_touch_index = _zone_touch_stats(
             reference=reference,
             side=side,
             lower=lower,
@@ -767,6 +888,8 @@ def _structure_zones(
                 touch_count=touch_count,
                 score=score,
                 last_touch_index=last_touch_index,
+                first_touch_index=first_touch_index,
+                avg_reaction=avg_reaction,
             )
         )
     return zones
@@ -796,10 +919,11 @@ def _zone_touch_stats(
     lower: Decimal,
     upper: Decimal,
     params: dict[str, Any],
-) -> tuple[int, Decimal, int]:
+) -> tuple[int, Decimal, int, int]:
     confirmation_window = int(params.get("confirmation_window") or 3)
     min_reaction_pct = Decimal(str(params.get("min_reaction_pct", "0.015")))
     reactions: list[Decimal] = []
+    first_touch_index = -1
     last_touch_index = -1
     for idx, bar in enumerate(reference):
         future = reference[idx + 1 : idx + 1 + confirmation_window]
@@ -809,13 +933,17 @@ def _zone_touch_stats(
             reaction = _safe_div(max(item.close for item in future) - bar.low, bar.low, "support_touch_low_non_positive")
             if reaction >= min_reaction_pct:
                 reactions.append(reaction)
+                if first_touch_index < 0:
+                    first_touch_index = idx
                 last_touch_index = idx
         if side == "resistance" and lower <= bar.high <= upper:
             reaction = _safe_div(bar.high - min(item.close for item in future), bar.high, "resistance_touch_high_non_positive")
             if reaction >= min_reaction_pct:
                 reactions.append(reaction)
+                if first_touch_index < 0:
+                    first_touch_index = idx
                 last_touch_index = idx
-    return len(reactions), _mean(reactions) if reactions else Decimal("0"), last_touch_index
+    return len(reactions), _mean(reactions) if reactions else Decimal("0"), first_touch_index, last_touch_index
 
 
 def _zone_score(

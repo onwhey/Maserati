@@ -41,6 +41,7 @@ def _feature(
     display_name: str | None = None,
     description: str | None = None,
     input_timeframes: tuple[str, ...] | None = None,
+    value_type: str = FeatureValueType.DECIMAL,
     **params: Any,
 ) -> FeatureDefinitionTemplate:
     frozen_params = {
@@ -54,6 +55,7 @@ def _feature(
         description=description or f"{feature_code} 默认特征定义。",
         params=frozen_params,
         input_timeframes=input_timeframes or (timeframe,),
+        value_type=value_type,
     )
 
 
@@ -72,6 +74,33 @@ def _structure_metric(feature_code: str, *, timeframe: str, window: int, metric:
         min_reaction_pct="0.015" if is_major else "0.008",
         min_touch_count=1,
         min_zone_score="0",
+    )
+
+
+def _historical_major_structure_metric(
+    feature_code: str,
+    *,
+    metric: str,
+    value_type: str = FeatureValueType.DECIMAL,
+    nullable: bool = True,
+) -> FeatureDefinitionTemplate:
+    return _feature(
+        feature_code,
+        operation="historical_structure_zone_metric",
+        timeframe="1d",
+        window=720,
+        metric=metric,
+        nullable=nullable,
+        value_type=value_type,
+        swing_left_right=3,
+        default_min_half_width_pct="0.012",
+        confirmation_window=10,
+        min_reaction_pct="0.030",
+        min_touch_count=2,
+        min_zone_score="0",
+        max_distance_to_zone_pct="0.50",
+        display_name=feature_code,
+        description="Structure v2 候选：1d 历史大结构区相关基础事实。",
     )
 
 
@@ -238,6 +267,16 @@ DEFAULT_FEATURE_DEFINITIONS: tuple[FeatureDefinitionTemplate, ...] = (
     _structure_metric("structure_major_breakdown_below_support_pct_1d_365", timeframe="1d", window=365, metric="breakdown_below_support_pct", nullable=True),
     _structure_metric("structure_minor_breakout_above_resistance_pct_4h_120", timeframe="4h", window=120, metric="breakout_above_resistance_pct", nullable=True),
     _structure_metric("structure_minor_breakdown_below_support_pct_4h_120", timeframe="4h", window=120, metric="breakdown_below_support_pct", nullable=True),
+    # structure v2 candidate：历史大结构区事实
+    _historical_major_structure_metric("structure_historical_major_zone_lower_1d_720", metric="zone_lower"),
+    _historical_major_structure_metric("structure_historical_major_zone_upper_1d_720", metric="zone_upper"),
+    _historical_major_structure_metric("structure_historical_major_zone_origin_type_1d_720", metric="origin_type", value_type=FeatureValueType.TEXT),
+    _historical_major_structure_metric("structure_historical_major_zone_covered_bars_1d_720", metric="covered_bars", nullable=False),
+    _historical_major_structure_metric("structure_historical_major_zone_test_count_1d_720", metric="test_count", nullable=False),
+    _historical_major_structure_metric("structure_historical_major_zone_last_reaction_at_utc_1d_720", metric="last_reaction_at_utc", value_type=FeatureValueType.TEXT),
+    _historical_major_structure_metric("structure_historical_major_zone_last_reaction_pct_1d_720", metric="last_reaction_pct"),
+    _historical_major_structure_metric("structure_historical_major_zone_role_1d_720", metric="role", value_type=FeatureValueType.TEXT),
+    _historical_major_structure_metric("structure_historical_major_distance_to_zone_pct_1d_720", metric="distance_to_zone_pct"),
 )
 
 

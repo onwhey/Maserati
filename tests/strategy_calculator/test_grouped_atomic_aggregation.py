@@ -137,6 +137,153 @@ def test_grouped_atomic_structure_carries_support_and_resistance_zones_in_summar
     assert summary["current_zone_position"] == "near_support"
 
 
+def test_grouped_atomic_structure_keeps_far_historical_reference_out_of_evidence_text() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_lower_half",
+            "structure_minor_range_middle",
+            "structure_historical_major_zone_valid",
+            "structure_historical_major_near_zone",
+            "structure_historical_major_support_like",
+            "structure_historical_major_resistance_like",
+            "structure_historical_major_role_flip_candidate",
+            "structure_historical_major_far_from_zone",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+    historical_snapshot = {
+        "condition_met": True,
+        "feature_values": {
+            "structure_historical_major_zone_lower_1d_720": {
+                "feature_value_id": 11,
+                "value": "54000",
+                "value_type": "decimal",
+            },
+            "structure_historical_major_zone_upper_1d_720": {
+                "feature_value_id": 12,
+                "value": "63000",
+                "value_type": "decimal",
+            },
+            "structure_historical_major_zone_role_1d_720": {
+                "feature_value_id": 13,
+                "value": "support_like",
+                "value_type": "text",
+            },
+            "structure_historical_major_distance_to_zone_pct_1d_720": {
+                "feature_value_id": 14,
+                "value": "0.39",
+                "value_type": "decimal",
+            },
+            "structure_historical_major_zone_test_count_1d_720": {
+                "feature_value_id": 15,
+                "value": "106",
+                "value_type": "integer",
+            },
+        },
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_lower_half"),
+                _atomic("structure_minor_range_middle"),
+                _atomic("structure_historical_major_zone_valid", value_json=historical_snapshot),
+                _atomic("structure_historical_major_near_zone", value_json={"condition_met": False}),
+                _atomic("structure_historical_major_support_like", value_json={"condition_met": True}),
+                _atomic("structure_historical_major_resistance_like", value_json={"condition_met": False}),
+                _atomic("structure_historical_major_role_flip_candidate", value_json={"condition_met": False}),
+                _atomic("structure_historical_major_far_from_zone", value_json={"condition_met": True}),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    reference = summary["historical_major_reference"]
+    assert output.values["state_code"] == "structure_major_lower_half_minor_range_middle"
+    assert reference["is_valid"] is True
+    assert reference["is_far"] is True
+    assert reference["role_zh"] == "更像长周期支撑"
+    assert reference["zone"] == {"lower": "54000", "upper": "63000"}
+    assert reference["should_mention_in_evidence"] is False
+    assert "720 天历史大结构参考位" not in output.values["evidence_text_zh"]
+
+
+def test_grouped_atomic_structure_mentions_near_historical_reference_without_changing_state() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_lower_half",
+            "structure_minor_range_middle",
+            "structure_historical_major_zone_valid",
+            "structure_historical_major_near_zone",
+            "structure_historical_major_support_like",
+            "structure_historical_major_resistance_like",
+            "structure_historical_major_role_flip_candidate",
+            "structure_historical_major_far_from_zone",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+    historical_snapshot = {
+        "condition_met": True,
+        "feature_values": {
+            "structure_historical_major_zone_lower_1d_720": {
+                "feature_value_id": 21,
+                "value": "58000",
+                "value_type": "decimal",
+            },
+            "structure_historical_major_zone_upper_1d_720": {
+                "feature_value_id": 22,
+                "value": "74000",
+                "value_type": "decimal",
+            },
+            "structure_historical_major_zone_role_1d_720": {
+                "feature_value_id": 23,
+                "value": "support_like",
+                "value_type": "text",
+            },
+            "structure_historical_major_distance_to_zone_pct_1d_720": {
+                "feature_value_id": 24,
+                "value": "0.02",
+                "value_type": "decimal",
+            },
+        },
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_lower_half"),
+                _atomic("structure_minor_range_middle"),
+                _atomic("structure_historical_major_zone_valid", value_json=historical_snapshot),
+                _atomic("structure_historical_major_near_zone", value_json={"condition_met": True}),
+                _atomic("structure_historical_major_support_like", value_json={"condition_met": True}),
+                _atomic("structure_historical_major_resistance_like", value_json={"condition_met": False}),
+                _atomic("structure_historical_major_role_flip_candidate", value_json={"condition_met": False}),
+                _atomic("structure_historical_major_far_from_zone", value_json={"condition_met": False}),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    reference = summary["historical_major_reference"]
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_major_lower_half_minor_range_middle"
+    assert reference["is_valid"] is True
+    assert reference["is_near"] is True
+    assert reference["should_mention_in_evidence"] is True
+    assert "720 天历史大结构参考位" in output.values["evidence_text_zh"]
+    assert "长周期支撑" in output.values["evidence_text_zh"]
+
+
 def test_grouped_atomic_structure_records_minor_conflict_as_market_fact() -> None:
     calculator = GroupedAtomicAggregationCalculator()
     params = {

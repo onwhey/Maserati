@@ -42,6 +42,10 @@ class AtomicConditionCalculator:
         "abs_gte": lambda left, right: abs(left) >= right,
         "abs_lte": lambda left, right: abs(left) <= right,
     }
+    _TEXT_OPERATORS: dict[str, Callable[[str, str], bool]] = {
+        "text_eq": lambda left, right: left == right,
+        "text_ne": lambda left, right: left != right,
+    }
     _OPERATOR_TEXT = {
         "gt": "大于",
         "gte": "大于或等于",
@@ -51,6 +55,8 @@ class AtomicConditionCalculator:
         "ne": "不等于",
         "abs_gte": "绝对值大于或等于",
         "abs_lte": "绝对值小于或等于",
+        "text_eq": "文本等于",
+        "text_ne": "文本不等于",
         "is_null": "为空",
         "is_not_null": "不为空",
     }
@@ -134,6 +140,15 @@ class AtomicConditionCalculator:
             return self._condition_result(condition, item, left_raw is None, right_value=None)
         if operator_code == "is_not_null":
             return self._condition_result(condition, item, left_raw is not None, right_value=None)
+        if operator_code in self._TEXT_OPERATORS:
+            if "value" not in condition:
+                return self._condition_error("atomic_condition_value_invalid", "文本条件缺少 value")
+            right_text = str(condition.get("value"))
+            if left_raw is None:
+                return self._condition_result(condition, item, False, right_value=right_text, left_value=None)
+            left_text = str(left_raw)
+            result = self._TEXT_OPERATORS[operator_code](left_text, right_text)
+            return self._condition_result(condition, item, result, right_value=right_text, left_value=left_text)
         if operator_code not in self._OPERATORS:
             return self._condition_error("atomic_condition_operator_invalid", f"不支持的 operator: {operator_code}")
         if left_raw is None:
@@ -258,8 +273,8 @@ class AtomicConditionCalculator:
         item: Mapping[str, Any],
         result: bool,
         *,
-        right_value: Decimal | None,
-        left_value: Decimal | None | object = ...,
+        right_value: Any | None,
+        left_value: Any = ...,
     ) -> dict[str, Any]:
         feature_code = str(condition["feature_code"])
         operator_code = str(condition["operator"])

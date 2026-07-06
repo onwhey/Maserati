@@ -95,6 +95,30 @@ def test_atomic_condition_is_null_condition_matches_nullable_feature() -> None:
     assert output.values["strength"] == Decimal("1")
 
 
+def test_atomic_condition_supports_text_equality_condition() -> None:
+    output = AtomicConditionCalculator().calculate(
+        calculation_input(
+            params={
+                "conditions": [{"feature_code": "structure_historical_major_zone_role_1d_720", "operator": "text_eq", "value": "support_like"}],
+                "label_zh": "1d 历史大结构区当前更像支撑",
+            },
+            feature_values={
+                "structure_historical_major_zone_role_1d_720": {
+                    "feature_value_id": 1,
+                    "value": "support_like",
+                    "value_type": "text",
+                },
+            },
+            default_direction="neutral",
+        )
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["value"] is True
+    assert output.values["direction"] == "neutral"
+    assert output.evidence_items[0]["conditions"][0]["right_value"] == "support_like"
+
+
 def test_atomic_condition_right_feature_null_makes_numeric_condition_false() -> None:
     output = AtomicConditionCalculator().calculate(
         calculation_input(

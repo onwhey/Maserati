@@ -31,6 +31,18 @@ STRUCTURE_ZONE_FEATURE_CODES: tuple[str, ...] = (
     "structure_minor_resistance_upper_4h_120",
 )
 
+HISTORICAL_MAJOR_STRUCTURE_FEATURE_CODES: tuple[str, ...] = (
+    "structure_historical_major_zone_lower_1d_720",
+    "structure_historical_major_zone_upper_1d_720",
+    "structure_historical_major_zone_origin_type_1d_720",
+    "structure_historical_major_zone_covered_bars_1d_720",
+    "structure_historical_major_zone_test_count_1d_720",
+    "structure_historical_major_zone_last_reaction_at_utc_1d_720",
+    "structure_historical_major_zone_last_reaction_pct_1d_720",
+    "structure_historical_major_zone_role_1d_720",
+    "structure_historical_major_distance_to_zone_pct_1d_720",
+)
+
 
 @dataclass(frozen=True)
 class AtomicSignalDefinitionTemplate:
@@ -112,6 +124,34 @@ def _atomic(
         params=params,
         output_type=output_type,
         is_required=is_required,
+    )
+
+
+def _historical_structure_atomic(
+    signal_code: str,
+    *,
+    conditions: Iterable[Mapping[str, Any]],
+    label_zh: str,
+    aggregation: str = "all",
+    extra_params: Mapping[str, Any] | None = None,
+) -> AtomicSignalDefinitionTemplate:
+    payload = {
+        "structure_signal_family": "historical_major_zone",
+        "historical_structure_signal": signal_code,
+    }
+    merged_extra_params = {
+        "include_feature_values": list(HISTORICAL_MAJOR_STRUCTURE_FEATURE_CODES),
+        "json_payload": payload,
+        **dict(extra_params or {}),
+    }
+    return _atomic(
+        signal_code,
+        category="structure",
+        direction=AtomicSignalDirection.NEUTRAL,
+        conditions=conditions,
+        label_zh=label_zh,
+        aggregation=aggregation,
+        extra_params=merged_extra_params,
     )
 
 
@@ -492,6 +532,73 @@ def _structure() -> tuple[AtomicSignalDefinitionTemplate, ...]:
         _atomic("structure_minor_breakdown_down", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_minor_breakdown_below_support_pct_4h_120", "gte", "0.004")], label_zh="当前收盘跌破 4h 小支撑区"),
         _atomic("structure_major_unclear", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_major_support_lower_1d_365", "is_null"), _c(major_support, "is_null"), _c(major_resistance, "is_null"), _c("structure_major_resistance_upper_1d_365", "is_null"), _c("structure_major_range_width_pct_1d_365", "is_null"), _c(major_support, "gte", right_feature_code=major_resistance)], label_zh="1d 大结构缺少可用支撑或压力", aggregation="any"),
         _atomic("structure_minor_unclear", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_minor_support_lower_4h_120", "is_null"), _c(minor_support, "is_null"), _c(minor_resistance, "is_null"), _c("structure_minor_resistance_upper_4h_120", "is_null"), _c("structure_minor_range_width_pct_4h_120", "is_null"), _c(minor_support, "gte", right_feature_code=minor_resistance)], label_zh="4h 小结构缺少可用支撑或压力", aggregation="any"),
+        _historical_structure_atomic(
+            "structure_historical_major_zone_valid",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_test_count_1d_720", "gte", "2"),
+                _c("structure_historical_major_zone_covered_bars_1d_720", "gte", "60"),
+                _c("structure_historical_major_zone_last_reaction_pct_1d_720", "gte", "0.03"),
+            ],
+            label_zh="1d 历史大结构区具备基本解释力",
+        ),
+        _historical_structure_atomic(
+            "structure_historical_major_near_zone",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "is_not_null"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "lte", "0.03"),
+            ],
+            label_zh="当前价格接近 1d 历史大结构区",
+        ),
+        _historical_structure_atomic(
+            "structure_historical_major_support_like",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_covered_bars_1d_720", "gte", "60"),
+                _c("structure_historical_major_zone_role_1d_720", "text_eq", "support_like"),
+                _c("structure_historical_major_zone_test_count_1d_720", "gte", "2"),
+                _c("structure_historical_major_zone_last_reaction_pct_1d_720", "gte", "0.03"),
+            ],
+            label_zh="1d 历史大结构区当前更像支撑",
+        ),
+        _historical_structure_atomic(
+            "structure_historical_major_resistance_like",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_covered_bars_1d_720", "gte", "60"),
+                _c("structure_historical_major_zone_role_1d_720", "text_eq", "resistance_like"),
+                _c("structure_historical_major_zone_test_count_1d_720", "gte", "2"),
+                _c("structure_historical_major_zone_last_reaction_pct_1d_720", "gte", "0.03"),
+            ],
+            label_zh="1d 历史大结构区当前更像压力",
+        ),
+        _historical_structure_atomic(
+            "structure_historical_major_role_flip_candidate",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_test_count_1d_720", "gte", "2"),
+                _c("structure_historical_major_zone_role_1d_720", "text_eq", "role_flip_candidate"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "is_not_null"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "lte", "0.01"),
+            ],
+            label_zh="当前位于 1d 历史大结构区内部，具备角色互换观察价值",
+        ),
+        _historical_structure_atomic(
+            "structure_historical_major_far_from_zone",
+            conditions=[
+                _c("structure_historical_major_zone_lower_1d_720", "is_not_null"),
+                _c("structure_historical_major_zone_upper_1d_720", "is_not_null"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "is_not_null"),
+                _c("structure_historical_major_distance_to_zone_pct_1d_720", "gte", "0.12"),
+            ],
+            label_zh="当前价格明显远离 1d 历史大结构区",
+        ),
     )
 
 

@@ -409,3 +409,8 @@ def test_seed_atomic_signal_definitions_is_idempotent() -> None:
     assert AtomicSignalDefinition.objects.filter(signal_code="trend_1d_ma_bullish_alignment").exists()
     assert AtomicSignalDefinition.objects.filter(signal_code="structure_minor_near_support").exists()
     assert AtomicSignalDefinition.objects.filter(signal_code="risk_long_exposure_shock_down").exists()
+    historical = AtomicSignalDefinition.objects.get(signal_code="structure_historical_major_support_like")
+    assert historical.output_type == AtomicSignalOutputType.JSON
+    assert "structure_historical_major_zone_role_1d_720" in historical.depends_on_feature_codes
+    assert "structure_historical_major_zone_test_count_1d_720" in historical.depends_on_feature_codes
+    assert "structure_major_support_upper_1d_365" not in historical.depends_on_feature_codes

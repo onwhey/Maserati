@@ -754,3 +754,117 @@ class ContextStructureRegimeV2Calculator(ContextStructureRegimeCalculator):
         if regime_code == "high_risk_environment":
             return "risk"
         return "unclear"
+
+
+class ContextStructureRegimeV3Calculator(ContextStructureRegimeV2Calculator):
+    """MarketRegime 模块：context_structure_regime/v3 市场环境分类 calculator。
+
+    负责：在 v2 已改善熊市反弹识别的基础上，补充多头高位/回调转弱识别。
+    不负责：计算特征、读取原子信号、选择策略、生成交易信号、生成目标仓位或订单动作。
+    读写数据库：不涉及。
+    访问 Redis：不涉及。
+    访问外部服务：不涉及。
+    发送 Hermes：不涉及。
+    调用大模型：不涉及。
+    涉及交易执行：不涉及。
+    允许真实交易：否。
+    """
+
+    metadata = CalculatorMetadata(
+        algorithm_name="context_structure_regime",
+        algorithm_version="v3",
+        calculator_type=CalculatorType.MARKET_REGIME,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/market_regime/context_structure_regime_v3.md",
+        implementation_document_path="docs/implementation/market_regime/context_structure_regime__v3.md",
+    )
+    evidence_type = "context_structure_regime_v3"
+
+    def _score_regular_candidates(self, *, scores: dict[str, Decimal], facts: dict[str, DomainFact]) -> None:
+        super()._score_regular_candidates(scores=scores, facts=facts)
+        self._apply_bullish_weakening_adjustments(scores=scores, facts=facts)
+
+    def _apply_bullish_weakening_adjustments(
+        self,
+        *,
+        scores: dict[str, Decimal],
+        facts: dict[str, DomainFact],
+    ) -> None:
+        context = facts["market_context"]
+        if context.direction != "bullish":
+            return
+
+        trend = facts["trend"]
+        momentum = facts["momentum"]
+        volatility = facts["volatility"]
+        structure = facts["structure"]
+        pressure = self._bullish_weakening_pressure(
+            trend=trend,
+            momentum=momentum,
+            volatility=volatility,
+            structure=structure,
+        )
+        if pressure <= Decimal("0"):
+            return
+
+        if self._trend_has_bearish_primary(trend):
+            scores["bullish_trend_continuation"] = min(scores["bullish_trend_continuation"], Decimal("0.35"))
+            scores["bullish_pullback"] = min(scores["bullish_pullback"], Decimal("0.52"))
+            scores["bullish_high_range"] = min(scores["bullish_high_range"], Decimal("0.55"))
+        elif self._trend_has_bearish_short_cycle(trend) or momentum.direction == "bearish":
+            scores["bullish_trend_continuation"] = min(scores["bullish_trend_continuation"], Decimal("0.45"))
+
+        top_reversal_boost = pressure
+        if "high" in context.state_code or "upper" in structure.state_code or "resistance" in structure.state_code:
+            top_reversal_boost += Decimal("0.08")
+        if "conflicted" in structure.state_code:
+            top_reversal_boost += Decimal("0.06")
+
+        scores["bullish_top_reversal_candidate"] = self._cap(
+            scores["bullish_top_reversal_candidate"] + top_reversal_boost
+        )
+
+        if volatility.state_code == "volatility_extreme":
+            scores["unclear_environment"] = max(scores["unclear_environment"], Decimal("0.45"))
+
+    @staticmethod
+    def _trend_has_bearish_primary(trend: DomainFact) -> bool:
+        return trend.direction == "bearish" or "1d_bearish" in trend.state_code
+
+    @staticmethod
+    def _trend_has_bearish_short_cycle(trend: DomainFact) -> bool:
+        return "4h_bearish" in trend.state_code or "minor_bearish" in trend.state_code
+
+    def _bullish_weakening_pressure(
+        self,
+        *,
+        trend: DomainFact,
+        momentum: DomainFact,
+        volatility: DomainFact,
+        structure: DomainFact,
+    ) -> Decimal:
+        pressure = Decimal("0")
+        if self._trend_has_bearish_primary(trend):
+            pressure += Decimal("0.22")
+        elif self._trend_has_bearish_short_cycle(trend):
+            pressure += Decimal("0.12")
+
+        if "aligned" in trend.state_code and trend.direction == "bearish":
+            pressure += Decimal("0.08")
+        if "rebound" in trend.state_code and self._trend_has_bearish_primary(trend):
+            pressure += Decimal("0.05")
+        if momentum.direction == "bearish":
+            pressure += Decimal("0.12")
+        if "strengthening" in momentum.state_code and momentum.direction == "bearish":
+            pressure += Decimal("0.06")
+        if volatility.state_code == "volatility_high":
+            pressure += Decimal("0.08")
+        elif volatility.state_code == "volatility_extreme":
+            pressure += Decimal("0.12")
+        if "breakdown" in structure.state_code:
+            pressure += Decimal("0.10")
+
+        return min(Decimal("0.45"), pressure)

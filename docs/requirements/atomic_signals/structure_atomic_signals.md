@@ -414,6 +414,85 @@ support zone 缺失；
 
 `unclear` 不是看多或看空，也不是交易阻断。下游应把它当作结构证据不足。
 
+### 8.7 Structure v2 候选：历史大结构区原子信号
+
+本节定义 Structure v2 后续需要补充的候选 AtomicSignalDefinition。
+
+这些原子信号只消费 FeatureLayer 已经输出的历史大结构区事实，不重新读取 K 线，不重新寻找支撑压力，不重新计算历史结构区。
+
+它们解决的问题是：
+
+```text
+当前价格是否接近一个横跨较长历史周期的大结构区；
+这个历史大结构区当前更像支撑、压力，还是处在角色互换位置；
+这个结构区是否有足够历史测试次数和反应幅度；
+价格是否已经明显远离该结构区。
+```
+
+这些信号仍然只描述结构事实，不判断牛熊，不选择策略，不生成仓位或订单。
+
+候选 AtomicSignalDefinition：
+
+| SignalCode | 业务问题 | 默认方向 | 必需 FeatureValue |
+|---|---|---|---|
+| structure_historical_major_zone_valid | 是否识别到一个有基本解释力的 1d 历史大结构区 | neutral | structure_historical_major_zone_lower_1d_720、structure_historical_major_zone_upper_1d_720、structure_historical_major_zone_test_count_1d_720、structure_historical_major_zone_covered_bars_1d_720、structure_historical_major_zone_last_reaction_pct_1d_720 |
+| structure_historical_major_near_zone | 当前价格是否接近 1d 历史大结构区 | neutral | structure_historical_major_distance_to_zone_pct_1d_720、structure_historical_major_zone_lower_1d_720、structure_historical_major_zone_upper_1d_720 |
+| structure_historical_major_support_like | 历史大结构区当前是否更像支撑 | neutral | structure_historical_major_zone_role_1d_720、structure_historical_major_zone_test_count_1d_720、structure_historical_major_zone_last_reaction_pct_1d_720 |
+| structure_historical_major_resistance_like | 历史大结构区当前是否更像压力 | neutral | structure_historical_major_zone_role_1d_720、structure_historical_major_zone_test_count_1d_720、structure_historical_major_zone_last_reaction_pct_1d_720 |
+| structure_historical_major_role_flip_candidate | 当前价格是否处在历史大结构区内部，存在支撑压力角色互换观察价值 | neutral | structure_historical_major_zone_role_1d_720、structure_historical_major_distance_to_zone_pct_1d_720 |
+| structure_historical_major_far_from_zone | 当前价格是否已经明显远离历史大结构区 | neutral | structure_historical_major_distance_to_zone_pct_1d_720 |
+
+建议初始判断口径：
+
+```text
+historical_major_zone_valid =
+  zone_lower 不为空
+  AND zone_upper 不为空
+  AND test_count >= 2
+  AND covered_bars >= 60
+  AND last_reaction_pct >= 0.030
+
+historical_major_near_zone =
+  distance_to_zone_pct 不为空
+  AND distance_to_zone_pct <= 0.030
+
+historical_major_support_like =
+  historical_major_zone_valid 成立所需事实满足
+  AND role = support_like
+
+historical_major_resistance_like =
+  historical_major_zone_valid 成立所需事实满足
+  AND role = resistance_like
+
+historical_major_role_flip_candidate =
+  role = role_flip_candidate
+  AND distance_to_zone_pct 不为空
+  AND distance_to_zone_pct <= 0.010
+
+historical_major_far_from_zone =
+  distance_to_zone_pct 不为空
+  AND distance_to_zone_pct >= 0.120
+```
+
+注意：
+
+```text
+support_like 只表示“当前价格在历史区上方，该区更像下方支撑”；
+resistance_like 只表示“当前价格在历史区下方，该区更像上方压力”；
+role_flip_candidate 只表示“当前价格正在历史结构区内部或附近，角色可能需要下游继续观察”；
+far_from_zone 只表示“这个历史大结构区对当前价格的直接解释力下降”。
+```
+
+不得把这些原子信号解释成：
+
+```text
+到了支撑就开多；
+到了压力就开空；
+角色互换一定成功；
+远离结构区就没有风险；
+历史大结构区有效就必须改变 MarketRegime。
+```
+
 ## 9. null 处理
 
 如果必需 FeatureValue 为 null：
@@ -473,6 +552,19 @@ calculator 已注册；
 
 没有被版本包选择的 Structure AtomicSignalDefinition，即使已经 active，也不得进入正式 AtomicSignalSet。
 
+FeatureDefinition 不应作为人工直接拼装的交易组件进入版本包。
+
+版本包中的 FeatureDefinition 应由已纳入的 AtomicSignalDefinition 的 `depends_on_feature_codes` 反推进入。
+
+因此：
+
+```text
+没有被任何已纳入 AtomicSignalDefinition 依赖的 FeatureDefinition，不应默认进入 StrategyAnalysisRelease；
+AtomicSignalDefinition 依赖了某个 FeatureDefinition 时，版本包生成必须带入该 FeatureDefinition 的具体版本；
+如果 AtomicSignalDefinition 依赖的 FeatureDefinition 没有可用具体版本，版本包生成应阻断，而不是静默缺失或临时补算；
+FeatureDefinition 是否可用，不等于它会自动参与正式运行。
+```
+
 ## 12. 测试要求
 
 至少覆盖：
@@ -487,6 +579,9 @@ calculator 已注册；
 FeatureValue failed 时原子信号 failed；
 null 不被当成 0；
 突破判断使用 FeatureLayer 已排除当前 K 线的参考区；
+历史大结构区 Feature 没有被任何原子信号依赖时，不进入版本包；
+历史大结构区原子信号被纳入版本包时，依赖的 720 根 1d 历史结构特征必须被自动带入版本包；
+历史大结构区原子信号只读取 FeatureValue，不读取 Kline 或 FeatureLayer calculator；
 evidence_text_zh 不包含交易建议。
 ```
 

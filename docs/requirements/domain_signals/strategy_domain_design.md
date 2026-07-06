@@ -980,6 +980,7 @@ docs/requirements/domain_signals/trend_domain_signals_v1.md
 docs/requirements/domain_signals/momentum_domain_signals_v1.md
 docs/requirements/domain_signals/volatility_domain_signals_v1.md
 docs/requirements/domain_signals/structure_domain_signals_v1.md
+docs/requirements/domain_signals/structure_domain_signals_v2.md
 docs/requirements/domain_signals/risk_state_domain_signals_v1.md
 docs/requirements/market_regime/context_structure_regime_v1.md
 docs/requirements/strategy_signals/long_trend_following_v1.md

@@ -7,6 +7,7 @@ from apps.strategy_calculator.contracts import CalculationStatus, CalculatorInpu
 from apps.strategy_calculator.market_regime.context_structure_regime import (
     ContextStructureRegimeCalculator,
     ContextStructureRegimeV2Calculator,
+    ContextStructureRegimeV3Calculator,
     REGIME_CODES,
     REQUIRED_DOMAIN_CODES,
 )
@@ -212,3 +213,76 @@ def test_context_structure_regime_v2_keeps_unclear_when_risk_is_unclear() -> Non
 
     assert output.calculation_status == CalculationStatus.SUCCEEDED
     assert output.values["regime_code"] == "unclear_environment"
+
+
+def test_context_structure_regime_v3_preserves_bearish_rebound_recognition() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV3Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_neutral_4h_bullish",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "volatility": {
+                "state_code": "volatility_low",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_resistance_minor_unclear",
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_rebound"
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v3"
+
+
+def test_context_structure_regime_v3_does_not_force_bullish_continuation_after_primary_trend_turns_bearish() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV3Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bullish",
+                "state_code": "market_context_high_zone",
+            },
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_rebound",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "volatility": {
+                "state_code": "volatility_high",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_resistance_minor_unclear",
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_top_reversal_candidate"
+    assert output.values["regime_scores"]["bullish_trend_continuation"] <= Decimal("0.3500")
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v3"

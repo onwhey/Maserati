@@ -107,6 +107,7 @@ higher_low_count
 lower_high_count
 lower_low_count
 structure_zone_metric
+historical_structure_zone_metric
 ```
 
 这些 operation 覆盖 market_context、trend、momentum、volatility、risk_state 和 structure 第一批基础特征所需的计算口径。
@@ -212,6 +213,35 @@ breakdown_below_support_pct
 ```
 
 如果对应支撑区或压力区不存在，且 FeatureDefinition.params.nullable = true，则该特征允许成功输出 null，并由 FeatureValue.numeric_value 保存为空。
+
+historical structure zone metric：
+
+```text
+取最近 window 根 1d 已收盘 K 线；
+最新一根 K 线只用于当前位置，不参与历史结构区 swing 点识别；
+分别识别历史支撑候选区和历史压力候选区；
+用触碰次数、触碰跨度、反应幅度、距离当前价格和区间分数选择最具解释力的历史大结构区；
+历史大结构区输出为价格带，不输出单点价格线；
+当前价格在历史区上方时，role = support_like；
+当前价格在历史区下方时，role = resistance_like；
+当前价格位于历史区内部时，role = role_flip_candidate。
+```
+
+`historical_structure_zone_metric` 通过 `params.metric` 输出单个事实，例如：
+
+```text
+zone_lower
+zone_upper
+origin_type
+covered_bars
+test_count
+last_reaction_at_utc
+last_reaction_pct
+role
+distance_to_zone_pct
+```
+
+这些输出只表达历史结构区事实，不判断结构保持、结构受压、结构破坏或结构修复，也不生成交易动作。
 
 ## 6. 不可计算处理
 

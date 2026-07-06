@@ -75,4 +75,26 @@ DEFAULT_MARKET_REGIME_DEFINITIONS: tuple[MarketRegimeDefinitionTemplate, ...] = 
         required_domain_codes=REQUIRED_DOMAIN_CODES,
         allowed_regime_codes=REGIME_CODES,
     ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v3",
+        display_name="【均衡型】大背景结构市场环境 v3",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "识别当前市场环境。该定义继承 v2 对熊市反弹和低位震荡的敏捷识别，同时修正牛市或高位背景下"
+            "对转弱、顶部反转候选和深度回调识别过慢的问题。该定义只输出市场环境，不选择策略、"
+            "不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v3",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
 )

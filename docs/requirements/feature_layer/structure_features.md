@@ -517,6 +517,182 @@ breakdown_below_support_pct = (support_lower - latest_close) / latest_close
 
 这些特征只表达突破或跌破幅度，不判断突破是否有效，也不生成交易动作。
 
+### 13.6 Structure v2 候选扩展特征
+
+本节定义 Structure v2 后续需要补充的候选 FeatureDefinition。
+
+这些特征的目的不是替代现有支撑压力区，而是在现有结构事实上补充：
+
+```text
+历史大结构区；
+结构连续性；
+收回 / 跌回 / 假突破；
+反抽 / 回踩确认。
+```
+
+这些特征仍然只输出客观数值事实，不判断市场环境，不选择策略，不输出交易动作。
+
+当前阶段已先落地“历史大结构区”第一批 FeatureDefinition；结构连续性、收回 / 跌回 / 假突破、反抽 / 回踩确认仍属于后续候选，不代表默认进入任何 StrategyAnalysisRelease。
+
+#### 13.6.1 历史大结构区特征
+
+历史大结构区指曾经长期定义过市场结构的价格带。
+
+它通常来自：
+
+```text
+前期大震荡区间的上沿；
+前期大震荡区间的下沿；
+长期多次冲击失败的历史压力区；
+长期多次下探有效的历史支撑区；
+突破后曾经从压力转为支撑的区域；
+跌破后曾经从支撑转为压力的区域。
+```
+
+历史大结构区必须表达为价格带，不得表达为单点价格。
+
+候选 FeatureDefinition：
+
+| FeatureCode | 含义 | 输出类型 | warmup |
+|---|---|---|---:|
+| structure_historical_major_zone_lower_1d_720 | 1d 历史大结构区下沿 | decimal/null | 720 |
+| structure_historical_major_zone_upper_1d_720 | 1d 历史大结构区上沿 | decimal/null | 720 |
+| structure_historical_major_zone_origin_type_1d_720 | 历史大结构区来源类型：历史区间上沿、历史区间下沿、历史压力、历史支撑、角色互换区 | string/null | 720 |
+| structure_historical_major_zone_covered_bars_1d_720 | 该历史大结构区覆盖或影响过的 1d K 线数量；未识别到时为 0 | integer | 720 |
+| structure_historical_major_zone_test_count_1d_720 | 该历史大结构区被有效测试的次数；未识别到时为 0 | integer | 720 |
+| structure_historical_major_zone_last_reaction_at_utc_1d_720 | 最近一次有效反应时间 | datetime/null | 720 |
+| structure_historical_major_zone_last_reaction_pct_1d_720 | 最近一次触碰后的有效反应幅度 | decimal/null | 720 |
+| structure_historical_major_zone_role_1d_720 | 当前更像支撑、压力、角色互换区或失效区 | string/null | 720 |
+| structure_historical_major_distance_to_zone_pct_1d_720 | 当前收盘价距离历史大结构区最近边界的百分比 | decimal/null | 720 |
+
+`structure_historical_major_zone_role_1d_720` 只表达结构角色，不表达交易动作。
+
+允许值建议：
+
+```text
+support_like；
+resistance_like；
+role_flip_candidate；
+invalid_or_inactive；
+unclear。
+```
+
+后台展示时必须翻译成中文。
+
+示例：
+
+```text
+support_like = 更像历史大支撑；
+resistance_like = 更像历史大压力；
+role_flip_candidate = 可能发生支撑压力角色互换；
+invalid_or_inactive = 当前暂不具备结构解释力；
+unclear = 证据不足。
+```
+
+禁止把历史大结构区写成“历史压力线 = 73303.58”。
+
+正确表达应是：
+
+```text
+历史大压力区：70,000 ~ 74,000；
+来源：前期大震荡区间上沿；
+覆盖：约数百根 1d K；
+角色：当前更像压力或角色互换区。
+```
+
+#### 13.6.2 结构连续性特征
+
+结构连续性特征用于回答：
+
+```text
+当前上涨结构是否仍然保持；
+当前下跌结构是否仍然保持；
+是否跌破上一重要低点；
+是否突破上一重要高点。
+```
+
+候选 FeatureDefinition：
+
+| FeatureCode | 含义 | 输出类型 | warmup |
+|---|---|---|---:|
+| structure_major_previous_significant_low_1d_365 | 1d 上一重要低点 | decimal/null | 365 |
+| structure_major_previous_significant_high_1d_365 | 1d 上一重要高点 | decimal/null | 365 |
+| structure_major_distance_to_previous_low_pct_1d_365 | 当前收盘价距离上一重要低点百分比 | decimal/null | 365 |
+| structure_major_distance_to_previous_high_pct_1d_365 | 当前收盘价距离上一重要高点百分比 | decimal/null | 365 |
+| structure_major_break_below_previous_low_pct_1d_365 | 当前收盘价跌破上一重要低点的幅度 | decimal/null | 365 |
+| structure_major_break_above_previous_high_pct_1d_365 | 当前收盘价突破上一重要高点的幅度 | decimal/null | 365 |
+| structure_minor_previous_significant_low_4h_120 | 4h 上一重要低点 | decimal/null | 120 |
+| structure_minor_previous_significant_high_4h_120 | 4h 上一重要高点 | decimal/null | 120 |
+| structure_minor_break_below_previous_low_pct_4h_120 | 当前收盘价跌破 4h 上一重要低点的幅度 | decimal/null | 120 |
+| structure_minor_break_above_previous_high_pct_4h_120 | 当前收盘价突破 4h 上一重要高点的幅度 | decimal/null | 120 |
+
+FeatureLayer 只输出这些点位和距离。
+
+是否构成“多头结构保持”“空头结构保持”“结构破坏候选”，由 AtomicSignal / DomainSignal 判断。
+
+#### 13.6.3 收回 / 跌回 / 假突破特征
+
+这类特征用于区分：
+
+```text
+真实跌破；
+短暂刺破后收回；
+真实突破；
+短暂冲高后跌回。
+```
+
+候选 FeatureDefinition：
+
+| FeatureCode | 含义 | 输出类型 | warmup |
+|---|---|---|---:|
+| structure_major_bars_since_support_breakdown_1d_365 | 1d 大支撑跌破后经过的已收盘周期数 | integer/null | 365 |
+| structure_major_reclaim_above_broken_support_pct_1d_365 | 跌破大支撑后重新收回支撑区的幅度 | decimal/null | 365 |
+| structure_major_bars_since_resistance_breakout_1d_365 | 1d 大压力突破后经过的已收盘周期数 | integer/null | 365 |
+| structure_major_fall_back_below_broken_resistance_pct_1d_365 | 突破大压力后重新跌回压力区的幅度 | decimal/null | 365 |
+| structure_minor_bars_since_support_breakdown_4h_120 | 4h 小支撑跌破后经过的已收盘周期数 | integer/null | 120 |
+| structure_minor_reclaim_above_broken_support_pct_4h_120 | 跌破小支撑后重新收回支撑区的幅度 | decimal/null | 120 |
+| structure_minor_bars_since_resistance_breakout_4h_120 | 4h 小压力突破后经过的已收盘周期数 | integer/null | 120 |
+| structure_minor_fall_back_below_broken_resistance_pct_4h_120 | 突破小压力后重新跌回压力区的幅度 | decimal/null | 120 |
+
+这些特征只表达“是否有收回 / 跌回的数值证据”。
+
+不得在 FeatureLayer 中写：
+
+```text
+假突破成立；
+假跌破成立；
+应该忽略这次突破；
+应该立刻改变市场环境。
+```
+
+#### 13.6.4 反抽 / 回踩确认特征
+
+这类特征用于回答：
+
+```text
+跌破支撑后，反抽原支撑是否失败；
+突破压力后，回踩原压力是否有效；
+原支撑是否开始表现为压力；
+原压力是否开始表现为支撑。
+```
+
+候选 FeatureDefinition：
+
+| FeatureCode | 含义 | 输出类型 | warmup |
+|---|---|---|---:|
+| structure_major_retest_broken_support_distance_pct_1d_365 | 跌破大支撑后反抽原支撑区的距离 | decimal/null | 365 |
+| structure_major_retest_broken_support_rejection_pct_1d_365 | 反抽原大支撑失败后的回落幅度 | decimal/null | 365 |
+| structure_major_pullback_to_broken_resistance_distance_pct_1d_365 | 突破大压力后回踩原压力区的距离 | decimal/null | 365 |
+| structure_major_pullback_to_broken_resistance_hold_pct_1d_365 | 回踩原大压力有效后的反弹幅度 | decimal/null | 365 |
+| structure_minor_retest_broken_support_distance_pct_4h_120 | 跌破小支撑后反抽原支撑区的距离 | decimal/null | 120 |
+| structure_minor_retest_broken_support_rejection_pct_4h_120 | 反抽原小支撑失败后的回落幅度 | decimal/null | 120 |
+| structure_minor_pullback_to_broken_resistance_distance_pct_4h_120 | 突破小压力后回踩原压力区的距离 | decimal/null | 120 |
+| structure_minor_pullback_to_broken_resistance_hold_pct_4h_120 | 回踩原小压力有效后的反弹幅度 | decimal/null | 120 |
+
+这类特征只表达“反抽 / 回踩过程中的数值事实”。
+
+是否形成“原支撑转压力”或“原压力转支撑”，由 AtomicSignal / DomainSignal 判断。
+
 ## 14. null 与失败规则
 
 如果窗口不足：
@@ -603,6 +779,8 @@ calculator 已注册；
 突破压力时参考压力不包含当前 K 线；
 跌破支撑时参考支撑不包含当前 K 线；
 重复计算同一 FeatureSet 结果幂等。
+历史大结构区输出为价格带而不是单点；
+Structure v2 扩展特征只输出数值事实，不输出结构语义或交易动作。
 ```
 
 ## 18. 明确禁止
@@ -615,7 +793,9 @@ calculator 已注册；
 让 FeatureLayer 判断跌破支撑后的仓位处理；
 用当前 K 线参与突破参考区计算；
 只输出单点支撑或单点压力；
+把历史大结构区输出成单点价格线；
 把 1d 大结构和 4h 小结构强行合并成一个价格带；
+让 FeatureLayer 直接判断结构保持、结构受压、结构破坏或结构修复；
 把完整 K 线窗口写入 FeatureValue；
 读取 PriceSnapshot、账户、订单或成交；
 访问 Binance 或调用大模型；

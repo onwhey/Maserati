@@ -60,6 +60,8 @@ class GroupedAtomicAggregationCalculator:
             return self._failed("domain_type_unsupported", f"不支持的领域聚合类型：{domain_type}")
         if result.get("error_code"):
             return self._failed(str(result["error_code"]), str(result["error_message"]))
+        if domain_type == "structure":
+            self._append_structure_historical_evidence(result)
 
         direction = str(result["direction"])
         state_code = str(result["state_code"])
@@ -327,6 +329,9 @@ class GroupedAtomicAggregationCalculator:
             major_state=major_state,
             minor_state=minor_state,
         )
+        historical_major_reference = self._structure_historical_major_reference(
+            values_by_code=payload["values_by_code"],
+        )
         return {
             "direction": direction,
             "state_code": state_code,
@@ -350,6 +355,7 @@ class GroupedAtomicAggregationCalculator:
                 "major_conflict": major_conflict,
                 "minor_conflict": minor_conflict,
                 **zone_summary,
+                "historical_major_reference": historical_major_reference,
             },
             "evidence_text_zh": (
                 f"structure 领域聚合完成：1d 大结构为 {major_state}，4h 小结构为 {minor_state}，"
@@ -670,6 +676,125 @@ class GroupedAtomicAggregationCalculator:
         }
         summary.update({key: value for key, value in optional_values.items() if value is not None})
         return summary
+
+    def _structure_historical_major_reference(
+        self,
+        *,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        feature_values = self._structure_feature_values(values_by_code)
+        zone = self._structure_zone(
+            feature_values,
+            lower_code="structure_historical_major_zone_lower_1d_720",
+            upper_code="structure_historical_major_zone_upper_1d_720",
+        )
+        zone_valid = self._atomic_condition_met(values_by_code, "structure_historical_major_zone_valid")
+        near_zone = self._atomic_condition_met(values_by_code, "structure_historical_major_near_zone")
+        far_from_zone = self._atomic_condition_met(values_by_code, "structure_historical_major_far_from_zone")
+        support_like = self._atomic_condition_met(values_by_code, "structure_historical_major_support_like")
+        resistance_like = self._atomic_condition_met(values_by_code, "structure_historical_major_resistance_like")
+        role_flip_candidate = self._atomic_condition_met(
+            values_by_code,
+            "structure_historical_major_role_flip_candidate",
+        )
+        role = str(feature_values.get("structure_historical_major_zone_role_1d_720") or "").strip()
+        if not role:
+            if role_flip_candidate:
+                role = "role_flip_candidate"
+            elif support_like:
+                role = "support_like"
+            elif resistance_like:
+                role = "resistance_like"
+            else:
+                role = "unclear"
+
+        is_valid = bool(zone_valid and zone)
+        reference = {
+            "is_valid": is_valid,
+            "zone": zone,
+            "origin_type": self._optional_text(feature_values.get("structure_historical_major_zone_origin_type_1d_720")),
+            "role": role,
+            "role_zh": self._structure_historical_role_zh(role),
+            "distance_to_zone_pct": self._optional_text(
+                feature_values.get("structure_historical_major_distance_to_zone_pct_1d_720")
+            ),
+            "covered_bars": self._optional_text(feature_values.get("structure_historical_major_zone_covered_bars_1d_720")),
+            "test_count": self._optional_text(feature_values.get("structure_historical_major_zone_test_count_1d_720")),
+            "last_reaction_at_utc": self._optional_text(
+                feature_values.get("structure_historical_major_zone_last_reaction_at_utc_1d_720")
+            ),
+            "last_reaction_pct": self._optional_text(
+                feature_values.get("structure_historical_major_zone_last_reaction_pct_1d_720")
+            ),
+            "is_near": bool(near_zone),
+            "is_far": bool(far_from_zone),
+            "is_role_flip_candidate": bool(role_flip_candidate),
+        }
+        reference["summary_zh"] = self._structure_historical_summary_zh(reference)
+        reference["should_mention_in_evidence"] = bool(
+            is_valid and (reference["is_near"] or reference["is_role_flip_candidate"])
+        )
+        return reference
+
+    @staticmethod
+    def _atomic_condition_met(values_by_code: Mapping[str, Mapping[str, Any]], signal_code: str) -> bool:
+        item = values_by_code.get(signal_code)
+        return isinstance(item, Mapping) and GroupedAtomicAggregationCalculator._is_active_atomic(item)
+
+    @staticmethod
+    def _optional_text(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _structure_historical_role_zh(role: str) -> str:
+        mapping = {
+            "support_like": "更像长周期支撑",
+            "resistance_like": "更像长周期压力",
+            "role_flip_candidate": "支撑压力角色互换观察位",
+            "unclear": "角色不明确",
+        }
+        return mapping.get(role, "角色不明确")
+
+    @staticmethod
+    def _structure_historical_summary_zh(reference: Mapping[str, Any]) -> str:
+        if not reference.get("is_valid"):
+            return "未识别到有效的 720 天历史大结构参考位。"
+        role_zh = str(reference.get("role_zh") or "角色不明确")
+        if reference.get("is_role_flip_candidate"):
+            return (
+                f"当前价格处在 720 天历史大结构参考位附近，{role_zh}；"
+                "该事实只提示长周期支撑压力可能发生角色互换，不生成交易动作。"
+            )
+        if reference.get("is_near"):
+            return (
+                f"当前价格接近 720 天历史大结构参考位，该区域{role_zh}；"
+                "该事实只作为价格结构参考，不生成交易动作。"
+            )
+        if reference.get("is_far"):
+            return (
+                f"存在有效的 720 天历史大结构参考位，该区域{role_zh}，但当前价格明显远离该区域；"
+                "当前周期只作远端背景参考。"
+            )
+        return (
+            f"存在有效的 720 天历史大结构参考位，该区域{role_zh}；"
+            "当前周期只作结构背景参考。"
+        )
+
+    @staticmethod
+    def _append_structure_historical_evidence(result: dict[str, Any]) -> None:
+        summary = result.get("summary")
+        if not isinstance(summary, Mapping):
+            return
+        reference = summary.get("historical_major_reference")
+        if not isinstance(reference, Mapping) or not reference.get("should_mention_in_evidence"):
+            return
+        summary_text = str(reference.get("summary_zh") or "").strip()
+        if not summary_text:
+            return
+        result["evidence_text_zh"] = f"{str(result.get('evidence_text_zh') or '').strip()} {summary_text}".strip()
 
     @staticmethod
     def _structure_feature_values(values_by_code: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
