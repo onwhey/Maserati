@@ -2646,3 +2646,698 @@ class ContextStructureRegimeV6Calculator(ContextStructureRegimeCalculator):
             f"选择原因：{classification.decision_reason}"
             f"主要竞争候选：{competitors or '无'}。该结论只描述市场环境，不生成策略、目标仓位或订单动作。"
         )
+
+
+class ContextStructureRegimeV61Calculator(ContextStructureRegimeV6Calculator):
+    """MarketRegime 模块：context_structure_regime/v6.1 市场环境分类 calculator。
+
+    负责：消费六个领域事实和 Structure v3 结构位置证据，输出更稳定的市场环境分类。
+    不负责：计算特征、读取原子信号、选择策略、生成交易信号、生成目标仓位或订单动作。
+    读写数据库：不涉及。
+    访问 Redis：不涉及。
+    访问外部服务：不涉及。
+    发送 Hermes：不涉及。
+    调用大模型：不涉及。
+    涉及交易执行：不涉及。
+    允许真实交易：否。
+    """
+
+    metadata = CalculatorMetadata(
+        algorithm_name="context_structure_regime",
+        algorithm_version="v6.1",
+        calculator_type=CalculatorType.MARKET_REGIME,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/market_regime/context_structure_regime_v6_1.md",
+        implementation_document_path="docs/implementation/market_regime/context_structure_regime__v6_1.md",
+    )
+    evidence_type = "context_structure_regime_v6_1"
+
+    def _classify_v6(
+        self,
+        *,
+        facts: dict[str, DomainFact],
+        params: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+    ) -> ClassificationResult:
+        """v6.1 分类入口。
+
+        继承 v6 的输入契约和基础打分，但最终选择规则改为：
+        - 风险优先；
+        - 确认突破/跌破才强切换；
+        - 候选状态只进入同方向主环境内部解释；
+        - 支撑压力夹层优先保持主环境，不因为单根 4h 频繁跳变。
+        """
+
+        scores = {code: Decimal("0") for code in REGIME_CODES}
+        self._score_v6_candidates(scores=scores, facts=facts, structure_context=structure_context)
+
+        risk = facts["risk_state"]
+        if risk.state_code == "risk_high_signal_unreliable":
+            scores["high_risk_environment"] = Decimal("1.00")
+            return self._select(
+                regime_code="high_risk_environment",
+                scores=scores,
+                decision_reason="risk_state 明确提示普通环境分类可靠性显著下降，优先归为高风险环境。",
+            )
+        if risk.state_code == "risk_unclear":
+            scores["unclear_environment"] = max(scores["unclear_environment"], Decimal("0.80"))
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="risk_state 本身不明确，不能伪装成普通多头、空头或震荡环境。",
+            )
+
+        stable_code, stable_reason = self._v61_stable_regime_code(
+            scores=scores,
+            facts=facts,
+            structure_context=structure_context,
+        )
+        if stable_code:
+            return self._select(regime_code=stable_code, scores=scores, decision_reason=stable_reason)
+
+        return self._v61_fallback_select(scores=scores, params=params, structure_context=structure_context)
+
+    def _v61_stable_regime_code(
+        self,
+        *,
+        scores: Mapping[str, Decimal],
+        facts: dict[str, DomainFact],
+        structure_context: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        context = facts["market_context"]
+        trend = facts["trend"]
+        momentum = facts["momentum"]
+
+        if structure_context["support_breakdown_confirmed"]:
+            code = self._best_above_floor_v6(
+                scores,
+                Decimal("0.5600"),
+                ("bearish_breakdown", "bearish_trend_continuation", "unclear_environment"),
+            )
+            if code:
+                return code, "v6.1 只在支撑确认跌破后，才允许向空头跌破/空头延续强切换。"
+
+        if structure_context["resistance_breakout_confirmed"]:
+            code = self._best_above_floor_v6(
+                scores,
+                Decimal("0.5600"),
+                ("bullish_breakout", "bullish_trend_continuation", "unclear_environment"),
+            )
+            if code:
+                return code, "v6.1 只在压力确认突破后，才允许向多头突破/多头延续强切换。"
+
+        if context.direction == "bullish":
+            return self._v61_bullish_context_code(
+                scores=scores,
+                trend=trend,
+                momentum=momentum,
+                structure_context=structure_context,
+            )
+
+        if context.direction == "bearish":
+            return self._v61_bearish_context_code(
+                scores=scores,
+                trend=trend,
+                momentum=momentum,
+                structure_context=structure_context,
+            )
+
+        if structure_context["support_resistance_sandwich"]:
+            code = self._best_above_floor_v6(
+                scores,
+                Decimal("0.5000"),
+                ("neutral_range", "unclear_environment"),
+            )
+            if code:
+                return code, "v6.1 在背景不明确且处于支撑压力夹层时，优先保持中性/不明确环境。"
+        return "", ""
+
+    def _v61_bullish_context_code(
+        self,
+        *,
+        scores: Mapping[str, Decimal],
+        trend: DomainFact,
+        momentum: DomainFact,
+        structure_context: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        bearish_pressure = self._v61_has_pressure(
+            trend=trend,
+            momentum=momentum,
+            pressure_direction="bearish",
+        )
+        if structure_context["support_breakdown_candidate"]:
+            codes = (
+                "bullish_top_reversal_candidate",
+                "bullish_high_range",
+                "bullish_pullback",
+                "unclear_environment",
+            )
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 将支撑跌破候选视为多头环境内部风险提示，不直接切到空头跌破。"
+
+        if structure_context["resistance_breakout_candidate"]:
+            codes = (
+                "bullish_high_range",
+                "bullish_top_reversal_candidate",
+                "bullish_trend_continuation",
+                "unclear_environment",
+            )
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 将压力突破候选视为多头环境内部上沿观察，不直接当作确认突破。"
+
+        if structure_context["resistance_active"] or structure_context["support_resistance_sandwich"]:
+            if bearish_pressure:
+                codes = ("bullish_top_reversal_candidate", "bullish_high_range", "unclear_environment")
+                reason = "v6.1 在多头背景下把压力/夹层与转弱证据解释为多头结构受压，而不是频繁切换。"
+            else:
+                codes = ("bullish_high_range", "bullish_top_reversal_candidate", "bullish_pullback")
+                reason = "v6.1 在多头背景下把压力/夹层解释为高位震荡内部位置，保持主环境稳定。"
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, reason
+
+        if structure_context["support_active"]:
+            codes = ("bullish_pullback", "bullish_high_range", "bullish_trend_continuation")
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 在多头背景下把有效支撑解释为回调/承接位置，而不是单边切换。"
+
+        code = self._best_above_floor_v6(
+            scores,
+            Decimal("0.5000"),
+            ("bullish_trend_continuation", "bullish_high_range", "bullish_pullback", "unclear_environment"),
+        )
+        if code:
+            return code, "v6.1 在缺少确认破坏时保持多头主环境。"
+        return "", ""
+
+    def _v61_bearish_context_code(
+        self,
+        *,
+        scores: Mapping[str, Decimal],
+        trend: DomainFact,
+        momentum: DomainFact,
+        structure_context: Mapping[str, Any],
+    ) -> tuple[str, str]:
+        bullish_pressure = self._v61_has_pressure(
+            trend=trend,
+            momentum=momentum,
+            pressure_direction="bullish",
+        )
+        if structure_context["resistance_breakout_candidate"]:
+            codes = (
+                "bearish_bottom_reversal_candidate",
+                "bearish_low_range",
+                "bearish_rebound",
+                "unclear_environment",
+            )
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 将压力突破候选视为空头环境内部修复风险提示，不直接切到多头突破。"
+
+        if structure_context["support_breakdown_candidate"]:
+            codes = (
+                "bearish_low_range",
+                "bearish_trend_continuation",
+                "bearish_rebound",
+                "unclear_environment",
+            )
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 将支撑跌破候选视为空头环境内部下沿风险提示，不直接当作确认跌破。"
+
+        if structure_context["support_active"] or structure_context["support_resistance_sandwich"]:
+            if bullish_pressure:
+                codes = ("bearish_bottom_reversal_candidate", "bearish_low_range", "unclear_environment")
+                reason = "v6.1 在空头背景下把支撑/夹层与修复证据解释为低位结构受压，而不是直接切多。"
+            else:
+                codes = ("bearish_low_range", "bearish_bottom_reversal_candidate", "bearish_rebound")
+                reason = "v6.1 在空头背景下把支撑/夹层解释为低位震荡内部位置，保持主环境稳定。"
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, reason
+
+        if structure_context["resistance_active"]:
+            codes = ("bearish_rebound", "bearish_low_range", "bearish_trend_continuation")
+            code = self._best_above_floor_v6(scores, Decimal("0.5000"), codes)
+            if code:
+                return code, "v6.1 在空头背景下把有效压力解释为空头反弹位置，而不是单边切换。"
+
+        code = self._best_above_floor_v6(
+            scores,
+            Decimal("0.5000"),
+            ("bearish_trend_continuation", "bearish_low_range", "bearish_rebound", "unclear_environment"),
+        )
+        if code:
+            return code, "v6.1 在缺少确认修复时保持空头主环境。"
+        return "", ""
+
+    def _v61_fallback_select(
+        self,
+        *,
+        scores: dict[str, Decimal],
+        params: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+    ) -> ClassificationResult:
+        ordered = self._ordered_scores(scores)
+        top_code, top_score = ordered[0]
+        second_code, second_score = ordered[1] if len(ordered) > 1 else ("", Decimal("0"))
+        min_score = self._decimal_param(params, "min_regime_score", Decimal("0.50"))
+        min_margin = self._decimal_param(params, "min_classification_margin", Decimal("0.05"))
+        if top_score < min_score:
+            scores["unclear_environment"] = max(scores["unclear_environment"], top_score)
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="最高候选分数不足，v6.1 输出不明确环境。",
+            )
+        if top_score - second_score < min_margin:
+            if self._regime_family_v6(top_code) == self._regime_family_v6(second_code) and top_score >= Decimal("0.50"):
+                return self._select(
+                    regime_code=top_code,
+                    scores=scores,
+                    decision_reason="v6.1 保留同方向家族内最高分候选，避免跨方向噪声切换。",
+                )
+            if structure_context["support_resistance_sandwich"]:
+                scores["neutral_range"] = max(scores["neutral_range"], top_score)
+                return self._select(
+                    regime_code="neutral_range",
+                    scores=scores,
+                    decision_reason="主要候选差距过小且处于支撑压力夹层，v6.1 优先输出震荡环境。",
+                )
+            scores["unclear_environment"] = max(scores["unclear_environment"], top_score)
+            return self._select(
+                regime_code="unclear_environment",
+                scores=scores,
+                decision_reason="主要候选差距过小，v6.1 不用噪声强行切换主环境。",
+            )
+        return self._select(
+            regime_code=top_code,
+            scores=scores,
+            decision_reason="普通候选分数满足 v6.1 最低分与最小差距要求。",
+        )
+
+    @staticmethod
+    def _v61_has_pressure(*, trend: DomainFact, momentum: DomainFact, pressure_direction: str) -> bool:
+        return (
+            trend.direction == pressure_direction
+            or momentum.direction == pressure_direction
+            or pressure_direction in trend.state_code
+            or pressure_direction in momentum.state_code
+            or "exhausting" in momentum.state_code
+            or "choppy" in momentum.state_code
+        )
+
+    @staticmethod
+    def _evidence_text_v6(
+        *,
+        facts: dict[str, DomainFact],
+        classification: ClassificationResult,
+        structure_evidence: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+    ) -> str:
+        competitors = "、".join(f"{code}={score}" for code, score in classification.competitors if code != classification.regime_code)
+        facts_zh = structure_evidence.get("facts_zh")
+        structure_facts = "、".join(str(item) for item in facts_zh) if isinstance(facts_zh, (list, tuple)) else "无"
+        return (
+            f"MarketRegime v6.1 已将本轮六个领域事实归类为 {classification.regime_code}。"
+            f"市场大背景={facts['market_context'].direction}/{facts['market_context'].state_code}；"
+            f"趋势={facts['trend'].direction}/{facts['trend'].state_code}；"
+            f"动能={facts['momentum'].direction}/{facts['momentum'].state_code}；"
+            f"波动={facts['volatility'].state_code}；"
+            f"结构位置={structure_context['position']}；"
+            f"结构证据={structure_evidence.get('primary_state_zh') or '未命名'}，{structure_facts}；"
+            f"风险={facts['risk_state'].state_code}。"
+            f"选择原因：{classification.decision_reason}"
+            f"主要竞争候选：{competitors or '无'}。该结论只描述市场环境，不生成策略、目标仓位或订单动作。"
+        )
+class ContextStructureRegimeV7Calculator(ContextStructureRegimeV61Calculator):
+    """MarketRegime 模块：context_structure_regime/v7 市场环境分类 calculator。
+
+    负责：消费六个领域事实、Structure 结构证据和上一周期 MarketRegime 状态，输出带确认机制的市场环境。
+    不负责：计算特征、读取数据库、选择策略、生成交易信号、生成目标仓位或订单动作。
+    读写数据库：不涉及。
+    访问 Redis：不涉及。
+    访问外部服务：不涉及。
+    发送 Hermes：不涉及。
+    调用大模型：不涉及。
+    涉及交易执行：不涉及。
+    允许真实交易：否。
+    """
+
+    metadata = CalculatorMetadata(
+        algorithm_name="context_structure_regime",
+        algorithm_version="v7",
+        calculator_type=CalculatorType.MARKET_REGIME,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/market_regime/context_structure_regime_v7.md",
+        implementation_document_path="docs/implementation/market_regime/context_structure_regime__v7.md",
+    )
+    evidence_type = "context_structure_regime_v7"
+
+    def calculate(self, calculation_input: CalculatorInput) -> CalculatorOutput:
+        values = dict(calculation_input.values)
+        params = dict(calculation_input.frozen_params)
+        allowed_regime_codes = self._string_tuple(values.get("allowed_regime_codes"))
+        if set(allowed_regime_codes) != set(REGIME_CODES):
+            return self._failed(
+                "context_structure_regime_allowed_codes_invalid",
+                f"context_structure_regime/{self.metadata.algorithm_version} 必须使用完整 regime_code 集合。",
+            )
+        domain_values = values.get("domain_values")
+        if not isinstance(domain_values, (list, tuple)):
+            return self._failed("context_structure_regime_domain_values_missing", "缺少领域事实输入。")
+        facts_result = self._facts_by_domain(domain_values)
+        if "error_code" in facts_result:
+            return self._failed(str(facts_result["error_code"]), str(facts_result["error_message"]))
+        facts: dict[str, DomainFact] = facts_result["facts"]
+        structure_evidence = self._extract_structure_evidence_v6(facts["structure"])
+        if structure_evidence is None:
+            return self._failed(
+                "market_regime_structure_evidence_missing",
+                "context_structure_regime/v7 必须消费 Structure 输出的 structure_evidence；当前输入缺少该证据。",
+            )
+
+        structure_context = self._structure_context_v6(structure_evidence)
+        classification, transition = self._classify_v7(
+            facts=facts,
+            params=params,
+            structure_context=structure_context,
+            previous_market_regime=values.get("previous_market_regime"),
+        )
+        used_ids = [facts[code].value_id for code in REQUIRED_DOMAIN_CODES]
+        return CalculatorOutput.succeeded(
+            output_schema_version=self.metadata.output_schema_version,
+            values={
+                "regime_code": classification.regime_code,
+                "regime_scores": classification.scores,
+                "regime_confidence": classification.confidence,
+                "classification_margin": classification.margin,
+                "used_domain_signal_value_ids": used_ids,
+                "transition": transition,
+                "evidence_text_zh": self._evidence_text_v7(
+                    facts=facts,
+                    classification=classification,
+                    structure_evidence=structure_evidence,
+                    structure_context=structure_context,
+                    transition=transition,
+                ),
+            },
+            evidence_items=(
+                {
+                    "type": self.evidence_type,
+                    "selected_regime_code": classification.regime_code,
+                    "decision_reason": classification.decision_reason,
+                    "transition": transition,
+                    "competitors": [
+                        {"regime_code": code, "score": str(score)} for code, score in classification.competitors
+                    ],
+                    "structure_context": structure_context,
+                    "structure_evidence": structure_evidence,
+                    "domain_summary": {
+                        code: {
+                            "direction": facts[code].direction,
+                            "state_code": facts[code].state_code,
+                            "strength": str(facts[code].strength),
+                        }
+                        for code in REQUIRED_DOMAIN_CODES
+                    },
+                },
+            ),
+            calculation_summary={
+                "selected_regime_code": classification.regime_code,
+                "decision_reason": classification.decision_reason,
+                "structure_position": structure_context["position"],
+                "transition": transition,
+                "used_domain_count": len(used_ids),
+            },
+        )
+
+    def _classify_v7(
+        self,
+        *,
+        facts: dict[str, DomainFact],
+        params: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+        previous_market_regime: Any,
+    ) -> tuple[ClassificationResult, dict[str, Any]]:
+        stateless = super()._classify_v6(facts=facts, params=params, structure_context=structure_context)
+        previous = self._previous_context_v7(previous_market_regime)
+        scores = dict(stateless.scores)
+        risk = facts["risk_state"]
+        if risk.state_code in {"risk_high_signal_unreliable", "risk_unclear"}:
+            return stateless, self._transition_v7(
+                previous=previous,
+                stateless_code=stateless.regime_code,
+                confirmed_code=stateless.regime_code,
+                action="risk_override",
+                candidate_status="confirmed",
+                candidate_age=0,
+                reason="风险状态领域提示当前分类可靠性不足，优先输出风险/不明确环境。",
+                structure_context=structure_context,
+                facts=facts,
+            )
+
+        previous_code = str(previous.get("confirmed_regime") or "")
+        if previous_code not in REGIME_CODES:
+            return stateless, self._transition_v7(
+                previous=previous,
+                stateless_code=stateless.regime_code,
+                confirmed_code=stateless.regime_code,
+                action="initialize",
+                candidate_status="confirmed",
+                candidate_age=0,
+                reason="没有可用的上一周期确认环境，本周期直接初始化为当前客观分类。",
+                structure_context=structure_context,
+                facts=facts,
+            )
+        if stateless.regime_code == previous_code:
+            selected = self._select(
+                regime_code=previous_code,
+                scores=scores,
+                decision_reason="v7：当前客观分类与上一周期确认环境一致，继续保持。",
+            )
+            return selected, self._transition_v7(
+                previous=previous,
+                stateless_code=stateless.regime_code,
+                confirmed_code=previous_code,
+                action="keep",
+                candidate_status="none",
+                candidate_age=0,
+                reason="确认环境延续。",
+                structure_context=structure_context,
+                facts=facts,
+            )
+
+        candidate_code = stateless.regime_code
+        candidate_age = self._candidate_age_v7(previous=previous, candidate_code=candidate_code)
+        should_switch, switch_reason = self._should_switch_v7(
+            previous_code=previous_code,
+            candidate_code=candidate_code,
+            candidate_age=candidate_age,
+            scores=scores,
+            facts=facts,
+            params=params,
+            structure_context=structure_context,
+        )
+        if should_switch:
+            selected = self._select(
+                regime_code=candidate_code,
+                scores=scores,
+                decision_reason=f"v7：{switch_reason}",
+            )
+            return selected, self._transition_v7(
+                previous=previous,
+                stateless_code=stateless.regime_code,
+                confirmed_code=candidate_code,
+                action="switch",
+                candidate_status="confirmed",
+                candidate_age=candidate_age,
+                reason=switch_reason,
+                structure_context=structure_context,
+                facts=facts,
+            )
+
+        selected = self._select(
+            regime_code=previous_code,
+            scores=scores,
+            decision_reason="v7：当前只是候选环境，尚未满足确认切换条件，继续保持上一周期确认环境。",
+        )
+        return selected, self._transition_v7(
+            previous=previous,
+            stateless_code=stateless.regime_code,
+            confirmed_code=previous_code,
+            action="observe",
+            candidate_status="observing",
+            candidate_age=candidate_age,
+            reason="候选环境观察中，未确认切换。",
+            structure_context=structure_context,
+            facts=facts,
+        )
+
+    def _should_switch_v7(
+        self,
+        *,
+        previous_code: str,
+        candidate_code: str,
+        candidate_age: int,
+        scores: Mapping[str, Decimal],
+        facts: dict[str, DomainFact],
+        params: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+    ) -> tuple[bool, str]:
+        previous_family = self._regime_family_v6(previous_code)
+        candidate_family = self._regime_family_v6(candidate_code)
+        if candidate_family == "other":
+            return True, "候选环境属于高风险/不明确等特殊环境，允许直接切换。"
+        same_family_periods = int(self._decimal_param(params, "same_family_confirmation_periods", Decimal("2")))
+        cross_family_periods = int(self._decimal_param(params, "cross_family_confirmation_periods", Decimal("3")))
+        retention_floor = self._decimal_param(params, "state_retention_floor", Decimal("0.35"))
+        min_score = self._decimal_param(params, "min_regime_score", Decimal("0.50"))
+        required_periods = same_family_periods if previous_family == candidate_family else cross_family_periods
+        candidate_score = scores.get(candidate_code, Decimal("0"))
+        previous_score = scores.get(previous_code, Decimal("0"))
+        structure_confirmed = self._structure_confirms_family_v7(
+            candidate_family=candidate_family,
+            structure_context=structure_context,
+        )
+        direction_confirmed = self._direction_confirms_family_v7(candidate_family=candidate_family, facts=facts)
+
+        if structure_confirmed and direction_confirmed:
+            return True, "结构已经确认破坏/突破，并且趋势或动能同向，允许切换确认环境。"
+        if candidate_age >= required_periods and direction_confirmed and candidate_score >= min_score:
+            return True, f"候选环境已连续出现 {candidate_age} 个周期，并且方向证据同向，允许确认切换。"
+        if (
+            previous_family == candidate_family
+            and previous_score < retention_floor
+            and candidate_score >= min_score
+            and direction_confirmed
+        ):
+            return True, "上一确认环境当前得分已经低于保留阈值，候选环境得分与方向证据满足切换条件。"
+        return False, "候选环境尚未满足结构确认或连续确认条件。"
+
+    @staticmethod
+    def _previous_context_v7(previous_market_regime: Any) -> dict[str, Any]:
+        if not isinstance(previous_market_regime, Mapping):
+            return {}
+        payload_summary = previous_market_regime.get("payload_summary")
+        calculation_summary = payload_summary.get("calculation_summary") if isinstance(payload_summary, Mapping) else {}
+        transition = calculation_summary.get("transition") if isinstance(calculation_summary, Mapping) else {}
+        confirmed = ""
+        candidate = ""
+        candidate_age = 0
+        if isinstance(transition, Mapping):
+            confirmed = str(transition.get("confirmed_regime") or "")
+            candidate = str(transition.get("candidate_regime") or "")
+            try:
+                candidate_age = int(transition.get("candidate_age_periods") or 0)
+            except (TypeError, ValueError):
+                candidate_age = 0
+        return {
+            "snapshot_id": previous_market_regime.get("market_regime_snapshot_id"),
+            "analysis_close_time_utc": previous_market_regime.get("analysis_close_time_utc"),
+            "confirmed_regime": confirmed or str(previous_market_regime.get("regime_code") or ""),
+            "candidate_regime": candidate,
+            "candidate_age_periods": max(0, candidate_age),
+        }
+
+    @staticmethod
+    def _candidate_age_v7(*, previous: Mapping[str, Any], candidate_code: str) -> int:
+        if str(previous.get("candidate_regime") or "") != candidate_code:
+            return 1
+        try:
+            return max(1, int(previous.get("candidate_age_periods") or 0) + 1)
+        except (TypeError, ValueError):
+            return 1
+
+    @staticmethod
+    def _structure_confirms_family_v7(*, candidate_family: str, structure_context: Mapping[str, Any]) -> bool:
+        if candidate_family == "bearish":
+            return bool(structure_context["support_breakdown_confirmed"])
+        if candidate_family == "bullish":
+            return bool(structure_context["resistance_breakout_confirmed"])
+        return False
+
+    @staticmethod
+    def _direction_confirms_family_v7(*, candidate_family: str, facts: dict[str, DomainFact]) -> bool:
+        if candidate_family not in {"bullish", "bearish"}:
+            return True
+        trend = facts["trend"]
+        momentum = facts["momentum"]
+        return trend.direction == candidate_family or momentum.direction == candidate_family
+
+    @staticmethod
+    def _transition_v7(
+        *,
+        previous: Mapping[str, Any],
+        stateless_code: str,
+        confirmed_code: str,
+        action: str,
+        candidate_status: str,
+        candidate_age: int,
+        reason: str,
+        structure_context: Mapping[str, Any],
+        facts: dict[str, DomainFact],
+    ) -> dict[str, Any]:
+        candidate_regime = "" if candidate_status == "none" else stateless_code
+        return {
+            "previous_confirmed_regime": previous.get("confirmed_regime") or "",
+            "previous_snapshot_id": previous.get("snapshot_id"),
+            "previous_analysis_close_time_utc": previous.get("analysis_close_time_utc") or "",
+            "stateless_regime": stateless_code,
+            "confirmed_regime": confirmed_code,
+            "candidate_regime": candidate_regime,
+            "candidate_status": candidate_status,
+            "candidate_age_periods": candidate_age,
+            "transition_action": action,
+            "transition_reason": reason,
+            "structure_confirmation": (
+                "support_breakdown_confirmed"
+                if structure_context["support_breakdown_confirmed"]
+                else "resistance_breakout_confirmed"
+                if structure_context["resistance_breakout_confirmed"]
+                else "none"
+            ),
+            "structure_position": structure_context["position"],
+            "trend_direction": facts["trend"].direction,
+            "momentum_direction": facts["momentum"].direction,
+            "risk_state": facts["risk_state"].state_code,
+        }
+
+    @staticmethod
+    def _evidence_text_v7(
+        *,
+        facts: dict[str, DomainFact],
+        classification: ClassificationResult,
+        structure_evidence: Mapping[str, Any],
+        structure_context: Mapping[str, Any],
+        transition: Mapping[str, Any],
+    ) -> str:
+        competitors = "、".join(
+            f"{code}={score}" for code, score in classification.competitors if code != classification.regime_code
+        )
+        facts_zh = structure_evidence.get("facts_zh")
+        structure_facts = "、".join(str(item) for item in facts_zh) if isinstance(facts_zh, (list, tuple)) else "无"
+        return (
+            f"MarketRegime v7 将本周期六个领域事实归类为 {classification.regime_code}。"
+            f"无状态候选={transition.get('stateless_regime')}，上一确认环境={transition.get('previous_confirmed_regime') or '无'}，"
+            f"候选环境={transition.get('candidate_regime') or '无'}，候选状态={transition.get('candidate_status')}，"
+            f"连续观察={transition.get('candidate_age_periods')}。"
+            f"市场大背景={facts['market_context'].direction}/{facts['market_context'].state_code}，"
+            f"趋势={facts['trend'].direction}/{facts['trend'].state_code}，"
+            f"动能={facts['momentum'].direction}/{facts['momentum'].state_code}，"
+            f"波动={facts['volatility'].state_code}，"
+            f"结构位置={structure_context['position']}，"
+            f"结构证据={structure_evidence.get('primary_state_zh') or '未命名'}，{structure_facts}，"
+            f"风险={facts['risk_state'].state_code}。"
+            f"切换动作={transition.get('transition_action')}，原因：{transition.get('transition_reason')}。"
+            f"主要竞争候选：{competitors or '无'}。该结论只描述市场环境，不生成策略、目标仓位或订单动作。"
+        )

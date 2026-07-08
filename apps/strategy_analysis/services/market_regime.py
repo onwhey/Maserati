@@ -406,8 +406,17 @@ def _build_calculator_input(
     domain_signal_set: DomainSignalSet,
     definition: MarketRegimeDefinition,
     domain_values: list[DomainSignalValue],
+    previous_market_regime: dict[str, Any] | None = None,
 ) -> CalculatorInput:
     payload, _dependency_hash = _definition_payload(definition)
+    values = {
+        "domain_values": [_domain_value_payload(value) for value in domain_values],
+        "allowed_domain_codes": payload["allowed_domain_codes"],
+        "required_domain_codes": payload["required_domain_codes"],
+        "allowed_regime_codes": payload["allowed_regime_codes"],
+    }
+    if previous_market_regime is not None:
+        values["previous_market_regime"] = previous_market_regime
     return CalculatorInput(
         calculator_type=CalculatorType.MARKET_REGIME,
         input_schema_version=definition.input_schema_version,
@@ -424,17 +433,57 @@ def _build_calculator_input(
         },
         frozen_params=definition.params,
         params_hash=definition.params_hash,
-        values={
-            "domain_values": [_domain_value_payload(value) for value in domain_values],
-            "allowed_domain_codes": payload["allowed_domain_codes"],
-            "required_domain_codes": payload["required_domain_codes"],
-            "allowed_regime_codes": payload["allowed_regime_codes"],
-        },
+        values=values,
         evidence_summary={
             "definition_code": definition.definition_code,
             "definition_hash": definition.definition_hash,
         },
     )
+
+
+def _is_stateful_market_regime_definition(definition: MarketRegimeDefinition) -> bool:
+    return definition.algorithm_name == "context_structure_regime" and definition.algorithm_version == "v7"
+
+
+def _business_request_prefix_for_previous_market_regime(business_request_key: str) -> str:
+    parts = business_request_key.split(":")
+    if len(parts) < 3 or parts[-1] != "market-regime":
+        return ""
+    return ":".join(parts[:-2]) + ":"
+
+
+def _previous_market_regime_context(
+    *,
+    domain_signal_set: DomainSignalSet,
+    definition: MarketRegimeDefinition,
+    business_request_key: str,
+) -> dict[str, Any] | None:
+    query = MarketRegimeSnapshot.objects.filter(
+        strategy_analysis_release_id=domain_signal_set.strategy_analysis_release_id,
+        release_hash=domain_signal_set.release_hash,
+        market_regime_definition=definition,
+        exchange=domain_signal_set.exchange,
+        market_type=domain_signal_set.market_type,
+        symbol=domain_signal_set.symbol,
+        status=AnalysisObjectStatus.CREATED,
+        is_usable=True,
+        analysis_close_time_utc__lt=domain_signal_set.analysis_close_time_utc,
+    )
+    request_prefix = _business_request_prefix_for_previous_market_regime(business_request_key)
+    if request_prefix:
+        query = query.filter(
+            business_request_key__startswith=request_prefix,
+            business_request_key__endswith=":market-regime",
+        )
+    previous = query.order_by("-analysis_close_time_utc", "-id").first()
+    if previous is None:
+        return None
+    return {
+        "market_regime_snapshot_id": previous.id,
+        "analysis_close_time_utc": previous.analysis_close_time_utc.isoformat(),
+        "regime_code": previous.regime_code,
+        "payload_summary": _json_ready(previous.payload_summary),
+    }
 
 
 def _failed_draft(output: CalculatorOutput, *, latency_ms: int) -> MarketRegimeDraft:
@@ -759,6 +808,7 @@ def _calculate_draft(
     definition: MarketRegimeDefinition,
     domain_values: list[DomainSignalValue],
     registry: CalculatorRegistry,
+    previous_market_regime: dict[str, Any] | None = None,
 ) -> MarketRegimeDraft:
     start = perf_counter()
     try:
@@ -771,6 +821,7 @@ def _calculate_draft(
             domain_signal_set=domain_signal_set,
             definition=definition,
             domain_values=domain_values,
+            previous_market_regime=previous_market_regime,
         )
         output = calculator.calculate(calculation_input)
         latency_ms = int((perf_counter() - start) * 1000)
@@ -1032,11 +1083,21 @@ def classify_for_strategy_routing(
         if existing_by_key is not None:
             return _snapshot_result(existing_by_key, trace_id=trace_id, trigger_source=trigger_source)
 
+    previous_market_regime = (
+        _previous_market_regime_context(
+            domain_signal_set=domain_signal_set,
+            definition=definition,
+            business_request_key=business_request_key,
+        )
+        if _is_stateful_market_regime_definition(definition)
+        else None
+    )
     draft = _calculate_draft(
         domain_signal_set=domain_signal_set,
         definition=definition,
         domain_values=domain_values,
         registry=registry,
+        previous_market_regime=previous_market_regime,
     )
 
     if dry_run:

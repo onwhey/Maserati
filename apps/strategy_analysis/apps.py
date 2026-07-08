@@ -33,6 +33,8 @@ class StrategyAnalysisConfig(AppConfig):
             ContextStructureRegimeV4Calculator,
             ContextStructureRegimeV5Calculator,
             ContextStructureRegimeV6Calculator,
+            ContextStructureRegimeV61Calculator,
+            ContextStructureRegimeV7Calculator,
         )
         from apps.strategy_calculator.registry import default_registry
         from apps.strategy_calculator.strategy_signal import (
@@ -60,6 +62,8 @@ class StrategyAnalysisConfig(AppConfig):
             ContextStructureRegimeV4Calculator(),
             ContextStructureRegimeV5Calculator(),
             ContextStructureRegimeV6Calculator(),
+            ContextStructureRegimeV61Calculator(),
+            ContextStructureRegimeV7Calculator(),
             LongTrendFollowingCalculator(),
             LongPullbackSupportCalculator(),
             ShortTrendFollowingCalculator(),

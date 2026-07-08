@@ -162,4 +162,50 @@ DEFAULT_MARKET_REGIME_DEFINITIONS: tuple[MarketRegimeDefinitionTemplate, ...] = 
         required_domain_codes=REQUIRED_DOMAIN_CODES,
         allowed_regime_codes=REGIME_CODES,
     ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v6_1",
+        display_name="【结构稳定】大背景结构市场环境 v6.1",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "并正式消费 Structure v3 输出的支撑、压力、夹层、突破候选、跌破候选、确认突破和确认跌破证据。"
+            "v6.1 在 v6 的客观结构位置基础上增加主环境稳定规则：主环境优先、候选只提醒、确认才切换，"
+            "避免同一连续行情内因为候选证据频繁跳变。该定义只输出市场环境，不选择策略、"
+            "不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v6.1",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v7",
+        display_name="【状态延续】大背景结构市场环境 v7",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "并消费上一周期 MarketRegime 确认状态。v7 保留 13 个市场环境口径，但增加确认环境、候选环境、观察中、确认切换机制；"
+            "普通波动不会立即改写主环境，只有结构、趋势、动能或风险证据足够一致时才允许切换。"
+            "该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v7",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "same_family_confirmation_periods": "2",
+            "cross_family_confirmation_periods": "3",
+            "state_retention_floor": "0.35",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
 )
