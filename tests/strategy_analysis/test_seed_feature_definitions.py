@@ -41,12 +41,18 @@ def test_seed_feature_definitions_creates_default_templates() -> None:
     assert FeatureDefinition.objects.filter(feature_code="latest_volume_4h").exists()
     assert FeatureDefinition.objects.filter(feature_code="structure_historical_major_zone_lower_1d_720").exists()
     assert FeatureDefinition.objects.filter(feature_code="structure_historical_major_zone_role_1d_720").exists()
+    assert FeatureDefinition.objects.filter(feature_code="structure_pivot_support_lower_1d_365").exists()
+    assert FeatureDefinition.objects.filter(feature_code="structure_pivot_resistance_status_4h_120").exists()
     structure_definition = FeatureDefinition.objects.get(feature_code="structure_minor_support_lower_4h_120")
     assert structure_definition.params["nullable"] is True
     historical_role = FeatureDefinition.objects.get(feature_code="structure_historical_major_zone_role_1d_720")
     assert historical_role.value_type == "text"
     assert historical_role.params["operation"] == "historical_structure_zone_metric"
     assert historical_role.params["window"] == 720
+    pivot_status = FeatureDefinition.objects.get(feature_code="structure_pivot_resistance_status_4h_120")
+    assert pivot_status.algorithm_name == "pivot_support_resistance_features"
+    assert pivot_status.value_type == "text"
+    assert pivot_status.params["operation"] == "pivot_zone_metric"
 
 
 @pytest.mark.django_db

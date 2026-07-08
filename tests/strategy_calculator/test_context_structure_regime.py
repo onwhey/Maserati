@@ -8,6 +8,9 @@ from apps.strategy_calculator.market_regime.context_structure_regime import (
     ContextStructureRegimeCalculator,
     ContextStructureRegimeV2Calculator,
     ContextStructureRegimeV3Calculator,
+    ContextStructureRegimeV4Calculator,
+    ContextStructureRegimeV5Calculator,
+    ContextStructureRegimeV6Calculator,
     REGIME_CODES,
     REQUIRED_DOMAIN_CODES,
 )
@@ -24,6 +27,50 @@ def domain_value(value_id: int, code: str, direction: str, state_code: str, stre
         "agreement_ratio": Decimal("1"),
         "definition_hash": f"hash-{code}",
         "evidence_items": [{"domain_code": code}],
+    }
+
+
+def structure_evidence_item(
+    *,
+    major: dict | None = None,
+    minor: dict | None = None,
+    primary_state_zh: str = "结构证据测试",
+) -> dict:
+    return {
+        "summary": {
+            "structure_evidence": {
+                "major": {
+                    "support_holds": False,
+                    "resistance_holds": False,
+                    "support_testing": False,
+                    "resistance_testing": False,
+                    "near_support": False,
+                    "near_resistance": False,
+                    "between_support_resistance": False,
+                    "support_breakdown_candidate": False,
+                    "support_breakdown_confirmed": False,
+                    "resistance_breakout_candidate": False,
+                    "resistance_breakout_confirmed": False,
+                    **(major or {}),
+                },
+                "minor": {
+                    "support_holds": False,
+                    "resistance_holds": False,
+                    "support_testing": False,
+                    "resistance_testing": False,
+                    "near_support": False,
+                    "near_resistance": False,
+                    "between_support_resistance": False,
+                    "support_breakdown_candidate": False,
+                    "support_breakdown_confirmed": False,
+                    "resistance_breakout_candidate": False,
+                    "resistance_breakout_confirmed": False,
+                    **(minor or {}),
+                },
+                "primary_state_zh": primary_state_zh,
+                "facts_zh": [primary_state_zh],
+            }
+        }
     }
 
 
@@ -286,3 +333,573 @@ def test_context_structure_regime_v3_does_not_force_bullish_continuation_after_p
     assert output.values["regime_code"] == "bullish_top_reversal_candidate"
     assert output.values["regime_scores"]["bullish_trend_continuation"] <= Decimal("0.3500")
     assert output.evidence_items[0]["type"] == "context_structure_regime_v3"
+
+
+def test_context_structure_regime_v4_requires_structure_evidence() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV4Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.FAILED
+    assert output.error_code == "market_regime_structure_evidence_missing"
+
+
+def test_context_structure_regime_v4_uses_support_holds_for_bullish_pullback() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV4Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_bullish_4h_bearish",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_present",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_support_minor_unclear",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_holds": True},
+                        primary_state_zh="1d 大结构支撑仍有效",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_pullback"
+    assert output.values["regime_scores"]["bullish_pullback"] > output.values["regime_scores"][
+        "bullish_top_reversal_candidate"
+    ]
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v4"
+    assert output.evidence_items[0]["structure_evidence"]["major"]["support_holds"] is True
+
+
+def test_context_structure_regime_v4_uses_support_breakdown_to_weaken_bullish_context() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV4Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_rebound",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_strengthening",
+            },
+            "volatility": {
+                "state_code": "volatility_high",
+            },
+            "structure": {
+                "direction": "bearish",
+                "state_code": "structure_major_breakdown_down",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_breakdown_candidate": True},
+                        primary_state_zh="1d 大结构支撑跌破候选",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_top_reversal_candidate"
+    assert output.values["regime_scores"]["bullish_trend_continuation"] <= Decimal("0.4200")
+
+
+def test_context_structure_regime_v4_uses_resistance_holds_for_bearish_rebound() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV4Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_bearish_4h_bullish",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_resistance_minor_unclear",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_holds": True},
+                        primary_state_zh="1d 大结构压力仍有效",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_rebound"
+    assert output.values["regime_scores"]["bearish_rebound"] > output.values["regime_scores"][
+        "bearish_trend_continuation"
+    ]
+
+
+def test_context_structure_regime_v4_uses_resistance_breakout_to_weaken_bearish_context() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV4Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "bullish",
+                "state_code": "trend_1d_neutral_4h_bullish",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "structure": {
+                "direction": "bullish",
+                "state_code": "structure_major_breakout_up",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_breakout_candidate": True},
+                        primary_state_zh="1d 大结构压力突破候选",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_breakout"
+    assert output.values["regime_scores"]["bearish_trend_continuation"] <= Decimal("0.4200")
+
+
+def test_context_structure_regime_v5_requires_structure_evidence() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.FAILED
+    assert output.error_code == "market_regime_structure_evidence_missing"
+
+
+def test_context_structure_regime_v5_keeps_bullish_pullback_when_support_holds() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_bullish_4h_bearish",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_present",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_support_minor_unclear",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_holds": True},
+                        primary_state_zh="1d 大结构支撑仍有效",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_pullback"
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v5"
+    assert output.evidence_items[0]["structure_phase"]["bullish_structure_maintained"] is True
+
+
+def test_context_structure_regime_v5_treats_support_breakdown_candidate_as_pressure_before_confirmation() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_bullish_4h_bearish",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_present",
+            },
+            "volatility": {
+                "state_code": "volatility_high",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_support_minor_unclear",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_breakdown_candidate": True},
+                        primary_state_zh="1d 大结构支撑跌破候选",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_top_reversal_candidate"
+    assert output.values["regime_code"] != "bearish_breakdown"
+    assert output.evidence_items[0]["structure_phase"]["bullish_structure_breakdown_candidate"] is True
+
+
+def test_context_structure_regime_v5_allows_confirmed_support_breakdown_to_bearish_breakdown() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_strengthening",
+            },
+            "volatility": {
+                "state_code": "volatility_high",
+            },
+            "structure": {
+                "direction": "bearish",
+                "state_code": "structure_major_breakdown_down",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_breakdown_candidate": True},
+                        primary_state_zh="1d 大结构支撑确认跌破",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_breakdown"
+    assert output.evidence_items[0]["structure_phase"]["bullish_structure_broken"] is True
+
+
+def test_context_structure_regime_v5_keeps_bearish_rebound_when_resistance_holds() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "neutral",
+                "state_code": "trend_1d_bearish_4h_bullish",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_major_near_resistance_minor_unclear",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_holds": True},
+                        primary_state_zh="1d 大结构压力仍有效",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_rebound"
+    assert output.evidence_items[0]["structure_phase"]["bearish_structure_maintained"] is True
+
+
+def test_context_structure_regime_v5_allows_confirmed_resistance_breakout_to_bullish_breakout() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV5Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "bullish",
+                "state_code": "trend_1d_bullish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "structure": {
+                "direction": "bullish",
+                "state_code": "structure_major_breakout_up",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_breakout_candidate": True},
+                        primary_state_zh="1d 大结构压力确认突破",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_breakout"
+    assert output.evidence_items[0]["structure_phase"]["bearish_structure_repaired"] is True
+
+
+def test_context_structure_regime_v6_requires_structure_evidence() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.FAILED
+    assert output.error_code == "market_regime_structure_evidence_missing"
+
+
+def test_context_structure_regime_v6_treats_bullish_pressure_as_structure_pressure_not_pullback() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        overrides={
+            "trend": {
+                "direction": "bullish",
+                "state_code": "trend_1d_bullish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "neutral",
+                "state_code": "momentum_neutral_choppy",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_pivot_major_resistance_holds",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_holds": True},
+                        primary_state_zh="1d 大结构压力压住",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] in {"bullish_top_reversal_candidate", "bullish_high_range"}
+    assert output.values["regime_code"] != "bullish_pullback"
+    assert output.evidence_items[0]["type"] == "context_structure_regime_v6"
+    assert output.evidence_items[0]["structure_context"]["resistance_active"] is True
+
+
+def test_context_structure_regime_v6_treats_bearish_support_as_low_range_not_trend_continuation() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "neutral",
+                "state_code": "momentum_neutral_choppy",
+            },
+            "structure": {
+                "direction": "neutral",
+                "state_code": "structure_pivot_major_support_holds",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_holds": True},
+                        primary_state_zh="1d 大结构支撑守住",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] in {"bearish_low_range", "bearish_bottom_reversal_candidate"}
+    assert output.values["regime_code"] != "bearish_trend_continuation"
+    assert output.evidence_items[0]["structure_context"]["support_active"] is True
+
+
+def test_context_structure_regime_v6_does_not_treat_support_breakdown_candidate_as_confirmed_breakdown() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        overrides={
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_strengthening",
+            },
+            "structure": {
+                "direction": "bearish",
+                "state_code": "structure_pivot_major_support_breakdown_candidate",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_breakdown_candidate": True},
+                        primary_state_zh="1d 大结构支撑跌破候选",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] != "bearish_breakdown"
+    assert output.evidence_items[0]["structure_context"]["support_breakdown_candidate"] is True
+
+
+def test_context_structure_regime_v6_allows_confirmed_support_breakdown_to_bearish_breakdown() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        overrides={
+            "trend": {
+                "direction": "bearish",
+                "state_code": "trend_1d_bearish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "bearish",
+                "state_code": "momentum_bearish_strengthening",
+            },
+            "structure": {
+                "direction": "bearish",
+                "state_code": "structure_pivot_major_support_breakdown_confirmed",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"support_breakdown_confirmed": True},
+                        primary_state_zh="1d 大结构确认跌破支撑",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bearish_breakdown"
+    assert output.evidence_items[0]["structure_context"]["support_breakdown_confirmed"] is True
+
+
+def test_context_structure_regime_v6_allows_confirmed_resistance_breakout_to_bullish_breakout() -> None:
+    output = calculate(
+        calculator=ContextStructureRegimeV6Calculator(),
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        overrides={
+            "market_context": {
+                "direction": "bearish",
+                "state_code": "market_context_deep_drawdown",
+            },
+            "trend": {
+                "direction": "bullish",
+                "state_code": "trend_1d_bullish_4h_aligned",
+            },
+            "momentum": {
+                "direction": "bullish",
+                "state_code": "momentum_bullish_strengthening",
+            },
+            "structure": {
+                "direction": "bullish",
+                "state_code": "structure_pivot_major_resistance_breakout_confirmed",
+                "evidence_items": [
+                    structure_evidence_item(
+                        major={"resistance_breakout_confirmed": True},
+                        primary_state_zh="1d 大结构确认突破压力",
+                    )
+                ],
+            },
+        },
+    )
+
+    assert output.calculation_status == CalculationStatus.SUCCEEDED
+    assert output.values["regime_code"] == "bullish_breakout"
+    assert output.evidence_items[0]["structure_context"]["resistance_breakout_confirmed"] is True

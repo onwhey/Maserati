@@ -959,6 +959,8 @@ function regimeLabel(value: unknown): string {
     bearish_trend_continuation: "空头趋势延续",
     high_risk_environment: "高风险环境",
     bullish_trend_continuation: "多头趋势延续",
+    bullish_top_reversal_candidate: "多头高位结构受压",
+    bearish_bottom_reversal_candidate: "空头低位结构受压",
     bearish_rebound_environment: "空头背景反弹",
     bullish_pullback_environment: "多头背景回调"
   };

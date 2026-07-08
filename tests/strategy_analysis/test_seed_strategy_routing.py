@@ -13,6 +13,7 @@ from apps.strategy_analysis.default_strategy_routing_definitions import (
     DEFAULT_STRATEGY_ROUTE_RULES,
 )
 from apps.strategy_analysis.definition_hashes import normalize_domain_codes, strategy_definition_hash
+from apps.strategy_analysis.market_regime_catalog import market_regime_display_name
 from apps.strategy_analysis.models import (
     DefinitionLifecycleStatus,
     ReleaseItemComponentType,
@@ -22,6 +23,7 @@ from apps.strategy_analysis.models import (
     StrategyRoutePolicy,
     StrategyRouteRule,
 )
+from apps.ops_console.selectors import list_strategy_route_policy_builder_options
 from apps.strategy_analysis.services.route_policy_builder import create_route_policy_variant, delete_route_policy
 from apps.strategy_analysis.services.workspace import (
     _release_selections_from_workspace,
@@ -122,6 +124,27 @@ def test_seed_strategy_routing_creates_default_policy_and_rules() -> None:
     no_trade_rule = policy.rules.get(rule_code="neutral_range_to_standard_no_trade")
     assert no_trade_rule.action == StrategyRouteAction.SELECT_STRATEGY
     assert no_trade_rule.selected_strategy_definition_id == strategies["standard_trend__neutral_range_no_trade"].id
+
+
+@pytest.mark.django_db
+def test_route_policy_builder_options_render_market_regime_from_catalog_not_rule_display_name() -> None:
+    create_all_required_strategy_definitions()
+    call_command("seed_strategy_routing", stdout=StringIO())
+    policy = StrategyRoutePolicy.objects.get(
+        policy_code=DEFAULT_STRATEGY_ROUTE_POLICY.policy_code,
+        policy_version=DEFAULT_STRATEGY_ROUTE_POLICY.policy_version,
+    )
+    rule = policy.rules.get(rule_code="bullish_top_reversal_candidate_to_standard_no_trade")
+    rule.display_name = "旧规则展示名"
+    rule.save(update_fields=["display_name", "updated_at_utc"])
+
+    data = list_strategy_route_policy_builder_options()
+    policy_payload = next(item for item in data["policies"] if item["id"] == policy.id)
+    rule_payload = next(item for item in policy_payload["rules"] if item["id"] == rule.id)
+
+    assert rule_payload["display_name"] == "旧规则展示名"
+    assert rule_payload["market_regime_codes"] == ["bullish_top_reversal_candidate"]
+    assert rule_payload["market_regime_display_name"] == market_regime_display_name("bullish_top_reversal_candidate")
 
 
 @pytest.mark.django_db

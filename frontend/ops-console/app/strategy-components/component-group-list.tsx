@@ -74,10 +74,10 @@ function strategyCoreIdea(component: Record<string, unknown>) {
     return "处理大背景偏空中的反弹或压力侧机会；反弹未修复趋势且靠近压力时倾向看空。";
   }
   if (code.includes("top_reversal_unconfirmed_no_trade")) {
-    return "处理多头顶部反转候选但尚未确认的行情；不提前做空，也不继续追多，明确不交易。";
+    return "处理多头高位结构受压但尚未确认反转的行情；不提前做空，也不继续追多，明确不交易。";
   }
   if (code.includes("bottom_reversal_unconfirmed_no_trade")) {
-    return "处理空头底部反转候选但尚未确认的行情；不提前做多，也不继续追空，明确不交易。";
+    return "处理空头低位结构受压但尚未确认反转的行情；不提前做多，也不继续追空，明确不交易。";
   }
   if (code.includes("neutral_range_no_trade")) {
     return "处理无方向震荡区间；没有明确趋势优势时不交易。";
@@ -467,6 +467,154 @@ function StrategyCompactTable({ groups }: { groups: ComponentGroup[] }) {
   );
 }
 
+function componentStatusText(component: Record<string, unknown>) {
+  const componentType = String(component.component_type ?? "");
+  const isSelectedVersion = Boolean(component.workspace_is_selected_version);
+  const isIncluded = Boolean(component.workspace_is_included);
+  if (componentType === "feature_definition") {
+    return isSelectedVersion ? "已选择" : "未选择";
+  }
+  return isSelectedVersion && isIncluded ? "已纳入" : "未纳入";
+}
+
+function componentSelectionColumnTitle(layerSlug: string) {
+  if (layerSlug === "features") {
+    return "选择状态";
+  }
+  return "纳入状态";
+}
+
+function componentNameColumnTitle(layerSlug: string) {
+  if (layerSlug === "features") {
+    return "特征名称";
+  }
+  if (layerSlug === "atomic-signals") {
+    return "原子信号名称";
+  }
+  if (layerSlug === "domain-signals") {
+    return "领域信号名称";
+  }
+  return "组件名称";
+}
+
+function componentCodeColumnTitle(layerSlug: string) {
+  if (layerSlug === "features") {
+    return "特征代码";
+  }
+  if (layerSlug === "atomic-signals") {
+    return "原子信号代码";
+  }
+  if (layerSlug === "domain-signals") {
+    return "领域代码";
+  }
+  return "组件代码";
+}
+
+function sortedComponentVersions(group: ComponentGroup) {
+  return [...group.items].sort((left, right) => {
+    const versionDiff = versionSortValue(left) - versionSortValue(right);
+    if (versionDiff !== 0) {
+      return versionDiff;
+    }
+    return Number(left.component_object_id ?? 0) - Number(right.component_object_id ?? 0);
+  });
+}
+
+function MultiChoiceCompactTable({
+  groups,
+  layerSlug
+}: {
+  groups: ComponentGroup[];
+  layerSlug: string;
+}) {
+  return (
+    <div className="overflow-hidden rounded-xl border bg-card">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1260px] border-collapse text-sm text-foreground/85">
+          <thead className="bg-muted/70 text-xs text-muted-foreground">
+            <tr className="border-b">
+              <th className="w-[280px] px-3 py-2 text-left font-medium">{componentNameColumnTitle(layerSlug)}</th>
+              <th className="w-[280px] px-3 py-2 text-left font-medium">{componentCodeColumnTitle(layerSlug)}</th>
+              <th className="w-[90px] px-3 py-2 text-left font-medium">版本</th>
+              <th className="px-3 py-2 text-left font-medium">说明</th>
+              <th className="w-[170px] px-3 py-2 text-left font-medium">算法</th>
+              <th className="w-[110px] px-3 py-2 text-left font-medium">{componentSelectionColumnTitle(layerSlug)}</th>
+              <th className="w-[170px] px-3 py-2 text-right font-medium">操作</th>
+            </tr>
+          </thead>
+          {groups.map((group, groupIndex) => {
+            const versions = sortedComponentVersions(group);
+            const tone = strategyRowTone(groupIndex);
+            const title = displayText(group.displayName, group.componentCode);
+            const code = displayText(group.componentCode);
+
+            return (
+              <tbody key={group.renderKey} className={`${tone} border-b last:border-b-0`}>
+                {versions.map((component, rowIndex) => {
+                  const algorithm = [
+                    displayText(component.algorithm_name),
+                    displayText(component.algorithm_version)
+                  ]
+                    .filter((value) => value !== "-")
+                    .join(" / ");
+                  const isSelected = componentStatusText(component).startsWith("已");
+
+                  return (
+                    <tr
+                      key={`${String(component.component_type)}:${String(component.component_object_id ?? rowIndex)}`}
+                      className="border-b border-border/60 last:border-b-0 align-middle"
+                    >
+                      {rowIndex === 0 ? (
+                        <td rowSpan={versions.length} className="px-3 py-2 align-middle">
+                          <div className="font-medium text-foreground">{title}</div>
+                        </td>
+                      ) : null}
+                      {rowIndex === 0 ? (
+                        <td rowSpan={versions.length} className="px-3 py-2 align-middle">
+                          <div className="max-w-[260px] truncate font-mono text-xs text-foreground/65" title={code}>
+                            {code}
+                          </div>
+                        </td>
+                      ) : null}
+                      <td className="px-3 py-2 align-middle">
+                        <span className="rounded-md bg-background/80 px-2 py-0.5 text-xs text-foreground/70">
+                          {versionText(component)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 align-middle text-foreground/75">
+                        <div className="line-clamp-2">{displayText(component.description, "暂无说明")}</div>
+                      </td>
+                      <td className="px-3 py-2 align-middle text-xs text-foreground/65">
+                        <div className="truncate" title={algorithm || "-"}>
+                          {algorithm || "-"}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 align-middle text-xs">
+                        {isSelected ? (
+                          <span className="rounded-md bg-emerald-100 px-2 py-1 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
+                            {componentStatusText(component)}
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-background/80 px-2 py-1 text-muted-foreground">
+                            {componentStatusText(component)}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 align-middle text-right">
+                        <WorkspaceComponentActionForm component={component} layerPath={layerSlug} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            );
+          })}
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function MarketRegimeCompactTable({
   groups,
   layerSlug
@@ -738,6 +886,8 @@ export function ComponentGroupList({
   const isStrategyRouteLayer = layerSlug === "strategy-routing";
   const isStrategyLayer = layerSlug === "strategies";
   const isMarketRegimeLayer = layerSlug === "market-regime";
+  const isMultiChoiceCompactLayer =
+    layerSlug === "features" || layerSlug === "atomic-signals" || layerSlug === "domain-signals";
   const isReadOnlyLayer = isStrategyRouteLayer || isStrategyLayer || isMarketRegimeLayer;
   const groups = useMemo(() => groupComponentsByCode(components, layerSlug), [components, layerSlug]);
   const filteredGroups = useMemo(() => filterGroups(groups, query, adoptionFilter), [groups, query, adoptionFilter]);
@@ -814,6 +964,8 @@ export function ComponentGroupList({
           <StrategyCompactTable groups={filteredGroups} />
         ) : isMarketRegimeLayer ? (
           <MarketRegimeCompactTable groups={filteredGroups} layerSlug={layerSlug} />
+        ) : isMultiChoiceCompactLayer ? (
+          <MultiChoiceCompactTable groups={filteredGroups} layerSlug={layerSlug} />
         ) : (
           <div className="space-y-3">
             {filteredGroups.map((group) => (

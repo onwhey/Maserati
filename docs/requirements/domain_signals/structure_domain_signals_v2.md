@@ -4,6 +4,14 @@
 
 本文档定义 `structure` 领域第二版领域聚合规则的需求草案。
 
+版本口径：
+
+```text
+Structure v1.0 = 原始位置描述：支撑、压力、区间、突破、跌破。
+Structure v1.1 = 在 v1.0 基础上增加 720 天历史大结构参考位可选证据块。
+Structure v2.0 = 在 v1.1 基础上补充支撑 / 压力穿透、确认、收回和修复等结构语义。
+```
+
 v2 不推翻 v1。
 
 v2 的核心变化是：
@@ -164,7 +172,7 @@ v2 的新增语义必须建立在这些事实之上。
 
 ### 3.1 历史大结构参考位
 
-Structure v2 需要补充“历史大结构参考位”表达。
+Structure v1.1 已补充“历史大结构参考位”表达。
 
 这里的历史大结构参考位，本质仍然是支撑压力事实，只是观察周期更长、出现频率更低、参考权重更高。
 
@@ -231,6 +239,50 @@ DecisionSnapshot；
 当前价格处于历史参考位附近，存在支撑压力角色互换观察价值。
 ```
 
+### 3.2 历史大结构参考位的可选证据块口径
+
+`historical_major_reference` 是 Structure v1.1 的可选证据块，不是 Structure 领域的核心结论。
+
+它的启用条件来自当前 StrategyAnalysisRelease 是否纳入对应的历史大结构原子信号。
+
+默认显示规则：
+
+```text
+如果当前版本包没有纳入任何历史大结构原子信号，Structure payload 中不得出现 historical_major_reference；
+如果当前版本包纳入了历史大结构原子信号，但没有形成有效历史结构参考位，Structure payload 可以出现 historical_major_reference，但必须明确 is_valid=false 和原因；
+如果当前版本包纳入了历史大结构原子信号，并形成有效历史结构参考位，Structure payload 才输出参考价格带、距离、角色、测试次数、反应质量等证据；
+historical_major_reference 不得因为存在无效或缺失证据而阻断 Structure 领域，除非后续版本明确把它升级为必跑核心证据。
+```
+
+影响边界：
+
+```text
+historical_major_reference 默认不影响 structure direction；
+默认不影响 structure state_code；
+默认不影响 strength；
+默认不影响 agreement_ratio；
+默认不参与 MarketRegime 的直接判断；
+默认不参与 StrategyRouting、StrategySignal、DecisionSnapshot 或订单动作。
+```
+
+它只在两种情况下进入 `evidence_text_zh`：
+
+```text
+当前价格接近有效历史大结构参考位；
+当前价格处于历史支撑压力角色互换位置，且这个信息对解释当前结构有明显帮助。
+```
+
+如果价格明显远离历史大结构参考位，或证据质量不足，它应只保留在 payload 中，或在未启用时完全不显示。
+
+后续新增类似的 Structure 补充模块，例如江恩时间参考、长周期节律参考、特殊箱体参考等，都必须按可选证据块机制接入：
+
+```text
+未选择对应原子时不显示；
+选择后只作为补充证据；
+不得默认改写 Structure 核心结论；
+不得越权生成交易动作。
+```
+
 ## 4. 输入边界
 
 Structure v2 仍然只能读取同一 AtomicSignalSet 中、归属于 `structure` 领域、且被当前 StrategyAnalysisRelease 选中的 AtomicSignalValue。
@@ -265,8 +317,9 @@ Structure v2 仍然输出一份 `structure` DomainSignalValue。
 这份输出应同时包含两层信息：
 
 ```text
-第一层：v1 已有的位置事实；
-第二层：v2 新增的结构语义。
+第一层：v1.0 已有的位置事实；
+第二层：v1.1 已有的历史大结构参考位可选证据；
+第三层：v2.0 新增的结构语义。
 ```
 
 建议输出结构包含：
@@ -274,7 +327,7 @@ Structure v2 仍然输出一份 `structure` DomainSignalValue。
 ```text
 major_structure = 1d 大结构位置事实；
 minor_structure = 4h 小结构位置事实；
-historical_major_reference = 长周期历史支撑压力参考位；
+historical_major_reference = v1.1 长周期历史支撑压力参考位，仅在对应可选原子被当前版本包纳入时出现；
 structure_state = 综合结构语义；
 structure_state_reason = 结构语义形成原因；
 structure_state_evidence = 使用了哪些支撑、压力、突破、跌破、收回、反抽失败证据。
@@ -613,6 +666,8 @@ v2 的 payload 不得只保留结构语义，必须保留原始结构位置事�
   }
 }
 ```
+
+上例中的 `historical_major_reference` 只是可选证据块示例。当前版本包没有纳入历史大结构原子时，payload 不应输出该字段。
 
 payload 不得出现：
 

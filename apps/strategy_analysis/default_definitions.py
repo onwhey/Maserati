@@ -77,6 +77,79 @@ def _structure_metric(feature_code: str, *, timeframe: str, window: int, metric:
     )
 
 
+def _pivot_structure_metric(
+    feature_code: str,
+    *,
+    timeframe: str,
+    window: int,
+    side: str,
+    metric: str,
+    value_type: str = FeatureValueType.DECIMAL,
+    nullable: bool = True,
+) -> FeatureDefinitionTemplate:
+    is_major = timeframe == "1d"
+    return FeatureDefinitionTemplate(
+        feature_code=feature_code,
+        display_name=feature_code,
+        description="拐点型支撑压力特征：基于有效局部高低点识别窄结构区。",
+        params={
+            "operation": "pivot_zone_metric",
+            "timeframe": timeframe,
+            "window": window,
+            "side": side,
+            "metric": metric,
+            "nullable": nullable,
+            "pivot_left": 3,
+            "pivot_right": 3,
+            "reaction_window": 10 if is_major else 12,
+            "atr_window": 14,
+            "min_reaction_atr_multiple": "2" if is_major else "1.5",
+            "min_reaction_pct": "0.03" if is_major else "0.012",
+            "min_spacing_bars": 10 if is_major else 12,
+            "cluster_atr_multiple": "0.8" if is_major else "0.6",
+            "cluster_pct": "0.01" if is_major else "0.005",
+            "max_zone_atr_multiple": "1.5" if is_major else "1.2",
+            "max_zone_width_pct": "0.04" if is_major else "0.02",
+            "min_zone_atr_multiple": "0.3" if is_major else "0.25",
+            "min_zone_width_pct": "0.005" if is_major else "0.003",
+            "min_touch_count": 1,
+            "confirm_bars": 2,
+            "invalidation_bars": 3,
+            "confirm_atr_multiple": "0.5",
+            "confirm_pct": "0.005",
+        },
+        input_timeframes=(timeframe,),
+        definition_version="1.0.0",
+        algorithm_name="pivot_support_resistance_features",
+        algorithm_version="1.0.0",
+        value_type=value_type,
+        output_schema_version="1.0",
+    )
+
+
+def _pivot_structure_metrics(*, timeframe: str, window: int, side: str) -> tuple[FeatureDefinitionTemplate, ...]:
+    suffix = f"{timeframe}_{window}"
+    return (
+        _pivot_structure_metric(f"structure_pivot_{side}_lower_{suffix}", timeframe=timeframe, window=window, side=side, metric="lower"),
+        _pivot_structure_metric(f"structure_pivot_{side}_upper_{suffix}", timeframe=timeframe, window=window, side=side, metric="upper"),
+        _pivot_structure_metric(f"structure_pivot_{side}_core_{suffix}", timeframe=timeframe, window=window, side=side, metric="core"),
+        _pivot_structure_metric(f"structure_pivot_{side}_width_pct_{suffix}", timeframe=timeframe, window=window, side=side, metric="width_pct"),
+        _pivot_structure_metric(f"structure_pivot_{side}_touch_count_{suffix}", timeframe=timeframe, window=window, side=side, metric="touch_count", nullable=False),
+        _pivot_structure_metric(f"structure_pivot_{side}_strength_{suffix}", timeframe=timeframe, window=window, side=side, metric="strength", nullable=False),
+        _pivot_structure_metric(
+            f"structure_pivot_{side}_status_{suffix}",
+            timeframe=timeframe,
+            window=window,
+            side=side,
+            metric="status",
+            value_type=FeatureValueType.TEXT,
+            nullable=False,
+        ),
+        _pivot_structure_metric(f"structure_pivot_distance_to_{side}_pct_{suffix}", timeframe=timeframe, window=window, side=side, metric="distance_pct"),
+        _pivot_structure_metric(f"structure_pivot_distance_to_{side}_atr_{suffix}", timeframe=timeframe, window=window, side=side, metric="distance_atr"),
+    )
+
+
 def _historical_major_structure_metric(
     feature_code: str,
     *,
@@ -100,7 +173,7 @@ def _historical_major_structure_metric(
         min_zone_score="0",
         max_distance_to_zone_pct="0.50",
         display_name=feature_code,
-        description="Structure v2 候选：1d 历史大结构区相关基础事实。",
+        description="Structure 1.1：1d 历史大结构区相关基础事实。",
     )
 
 
@@ -267,7 +340,11 @@ DEFAULT_FEATURE_DEFINITIONS: tuple[FeatureDefinitionTemplate, ...] = (
     _structure_metric("structure_major_breakdown_below_support_pct_1d_365", timeframe="1d", window=365, metric="breakdown_below_support_pct", nullable=True),
     _structure_metric("structure_minor_breakout_above_resistance_pct_4h_120", timeframe="4h", window=120, metric="breakout_above_resistance_pct", nullable=True),
     _structure_metric("structure_minor_breakdown_below_support_pct_4h_120", timeframe="4h", window=120, metric="breakdown_below_support_pct", nullable=True),
-    # structure v2 candidate：历史大结构区事实
+    # structure 1.1：历史大结构区事实
+    *_pivot_structure_metrics(timeframe="1d", window=365, side="support"),
+    *_pivot_structure_metrics(timeframe="1d", window=365, side="resistance"),
+    *_pivot_structure_metrics(timeframe="4h", window=120, side="support"),
+    *_pivot_structure_metrics(timeframe="4h", window=120, side="resistance"),
     _historical_major_structure_metric("structure_historical_major_zone_lower_1d_720", metric="zone_lower"),
     _historical_major_structure_metric("structure_historical_major_zone_upper_1d_720", metric="zone_upper"),
     _historical_major_structure_metric("structure_historical_major_zone_origin_type_1d_720", metric="origin_type", value_type=FeatureValueType.TEXT),

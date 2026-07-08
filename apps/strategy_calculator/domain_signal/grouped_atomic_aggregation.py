@@ -25,6 +25,18 @@ class GroupedAtomicAggregationCalculator:
     )
 
     _DIRECTION_VALUES = {"bullish", "bearish", "neutral", "none"}
+    _OPTIONAL_EVIDENCE_BLOCK_ATOMICS = {
+        "structure_historical_major_reference": frozenset(
+            {
+                "structure_historical_major_zone_valid",
+                "structure_historical_major_near_zone",
+                "structure_historical_major_support_like",
+                "structure_historical_major_resistance_like",
+                "structure_historical_major_role_flip_candidate",
+                "structure_historical_major_far_from_zone",
+            }
+        ),
+    }
 
     def calculate(self, calculation_input: CalculatorInput) -> CalculatorOutput:
         values = dict(calculation_input.values)
@@ -104,8 +116,8 @@ class GroupedAtomicAggregationCalculator:
         )
 
     def _prepare_payload(self, *, params: Mapping[str, Any], atomic_values: Any) -> dict[str, Any]:
-        allowed_codes = self._string_list(params.get("allowed_atomic_signal_codes"))
-        if not allowed_codes:
+        configured_allowed_codes = self._string_list(params.get("allowed_atomic_signal_codes"))
+        if not configured_allowed_codes:
             return {"error_code": "domain_allowed_atomic_empty", "error_message": "领域定义缺少允许原子信号"}
         values_by_code: dict[str, Mapping[str, Any]] = {}
         for item in atomic_values:
@@ -115,15 +127,18 @@ class GroupedAtomicAggregationCalculator:
             if not isinstance(code, str) or not code:
                 return {"error_code": "atomic_signal_code_missing", "error_message": "原子信号输入缺少 signal_code"}
             values_by_code[code] = item
+        runtime_allowed_codes = [code for code in configured_allowed_codes if code in values_by_code]
+        if not runtime_allowed_codes:
+            return {"error_code": "domain_runtime_allowed_atomic_empty", "error_message": "当前版本包没有可参与该领域的原子信号"}
         active_codes = sorted(code for code, item in values_by_code.items() if self._is_active_atomic(item))
         active_set = set(active_codes)
         return {
             "params": params,
-            "allowed_codes": allowed_codes,
+            "allowed_codes": runtime_allowed_codes,
             "values_by_code": values_by_code,
             "active_signal_codes": active_codes,
             "active_set": active_set,
-            "coverage_ratio": Decimal(len(values_by_code)) / Decimal(len(allowed_codes)),
+            "coverage_ratio": Decimal(len(values_by_code)) / Decimal(len(runtime_allowed_codes)),
         }
 
     def _market_context(self, payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -329,9 +344,18 @@ class GroupedAtomicAggregationCalculator:
             major_state=major_state,
             minor_state=minor_state,
         )
-        historical_major_reference = self._structure_historical_major_reference(
+        structure_evidence = self._structure_evidence_summary(
+            active=active,
+            major_state=major_state,
+            minor_state=minor_state,
+        )
+        historical_major_reference = self._structure_optional_evidence_block(
+            block_code="structure_historical_major_reference",
             values_by_code=payload["values_by_code"],
         )
+        optional_summary = {}
+        if historical_major_reference is not None:
+            optional_summary["historical_major_reference"] = historical_major_reference
         return {
             "direction": direction,
             "state_code": state_code,
@@ -354,8 +378,9 @@ class GroupedAtomicAggregationCalculator:
                 "minor_structure": minor_state,
                 "major_conflict": major_conflict,
                 "minor_conflict": minor_conflict,
+                "structure_evidence": structure_evidence,
                 **zone_summary,
-                "historical_major_reference": historical_major_reference,
+                **optional_summary,
             },
             "evidence_text_zh": (
                 f"structure 领域聚合完成：1d 大结构为 {major_state}，4h 小结构为 {minor_state}，"
@@ -547,8 +572,8 @@ class GroupedAtomicAggregationCalculator:
 
     @staticmethod
     def _structure_conflict(active: set[str], *, prefix: str) -> bool:
-        up = f"structure_{prefix}_breakout_up" in active
-        down = f"structure_{prefix}_breakdown_down" in active
+        up = f"structure_{prefix}_breakout_up" in active or f"structure_{prefix}_resistance_breakout_candidate" in active
+        down = f"structure_{prefix}_breakdown_down" in active or f"structure_{prefix}_support_breakdown_candidate" in active
         support = f"structure_{prefix}_near_support" in active
         resistance = f"structure_{prefix}_near_resistance" in active
         return (up and down) or (support and resistance)
@@ -556,9 +581,15 @@ class GroupedAtomicAggregationCalculator:
     @staticmethod
     def _structure_state(active: set[str], *, prefix: str) -> str:
         order = (
+            ("breakdown_down", f"structure_{prefix}_support_breakdown_confirmed"),
+            ("breakout_up", f"structure_{prefix}_resistance_breakout_confirmed"),
+            ("breakdown_down", f"structure_{prefix}_support_breakdown_candidate"),
+            ("breakout_up", f"structure_{prefix}_resistance_breakout_candidate"),
             ("breakdown_down", f"structure_{prefix}_breakdown_down"),
             ("breakout_up", f"structure_{prefix}_breakout_up"),
             ("unclear", f"structure_{prefix}_unclear"),
+            ("near_support", f"structure_{prefix}_support_holds"),
+            ("near_resistance", f"structure_{prefix}_resistance_holds"),
             ("near_support", f"structure_{prefix}_near_support"),
             ("near_resistance", f"structure_{prefix}_near_resistance"),
             ("range_middle", f"structure_{prefix}_range_middle"),
@@ -677,6 +708,113 @@ class GroupedAtomicAggregationCalculator:
         summary.update({key: value for key, value in optional_values.items() if value is not None})
         return summary
 
+    def _structure_evidence_summary(
+        self,
+        *,
+        active: set[str],
+        major_state: str,
+        minor_state: str,
+    ) -> dict[str, Any]:
+        major = self._structure_level_evidence(active=active, prefix="major", label_zh="1d 大结构")
+        minor = self._structure_level_evidence(active=active, prefix="minor", label_zh="4h 小结构")
+        facts_zh = [
+            text
+            for text in (
+                *self._structure_level_fact_texts(major),
+                *self._structure_level_fact_texts(minor),
+            )
+            if text
+        ]
+        primary_state_zh = self._structure_primary_state_zh(major_state=major_state, minor_state=minor_state)
+        return {
+            "major": major,
+            "minor": minor,
+            "primary_state_zh": primary_state_zh,
+            "facts_zh": facts_zh,
+        }
+
+    @staticmethod
+    def _structure_level_evidence(*, active: set[str], prefix: str, label_zh: str) -> dict[str, Any]:
+        support_valid = f"structure_{prefix}_support_valid" in active
+        resistance_valid = f"structure_{prefix}_resistance_valid" in active
+        near_support = f"structure_{prefix}_near_support" in active
+        near_resistance = f"structure_{prefix}_near_resistance" in active
+        support_holds = f"structure_{prefix}_support_holds" in active or (support_valid and near_support)
+        resistance_holds = f"structure_{prefix}_resistance_holds" in active or (resistance_valid and near_resistance)
+        breakout_up = f"structure_{prefix}_breakout_up" in active or f"structure_{prefix}_resistance_breakout_candidate" in active
+        breakdown_down = f"structure_{prefix}_breakdown_down" in active or f"structure_{prefix}_support_breakdown_candidate" in active
+        support_breakdown_confirmed = f"structure_{prefix}_support_breakdown_confirmed" in active
+        resistance_breakout_confirmed = f"structure_{prefix}_resistance_breakout_confirmed" in active
+        range_valid = f"structure_{prefix}_range_valid" in active
+        return {
+            "label_zh": label_zh,
+            "support_valid": support_valid,
+            "resistance_valid": resistance_valid,
+            "near_support": near_support,
+            "near_resistance": near_resistance,
+            "range_valid": range_valid,
+            "support_holds": support_holds and not breakdown_down,
+            "resistance_holds": resistance_holds and not breakout_up,
+            "support_breakdown_candidate": breakdown_down,
+            "resistance_breakout_candidate": breakout_up,
+            "support_breakdown_confirmed": support_breakdown_confirmed,
+            "resistance_breakout_confirmed": resistance_breakout_confirmed,
+            "breakout_up": breakout_up,
+            "breakdown_down": breakdown_down,
+        }
+
+    @staticmethod
+    def _structure_level_fact_texts(evidence: Mapping[str, Any]) -> list[str]:
+        label = str(evidence.get("label_zh") or "结构")
+        facts: list[str] = []
+        if evidence.get("support_holds"):
+            facts.append(f"{label}支撑仍有效")
+        if evidence.get("resistance_holds"):
+            facts.append(f"{label}压力仍有效")
+        if evidence.get("support_breakdown_candidate"):
+            facts.append(f"{label}支撑跌破候选")
+        if evidence.get("resistance_breakout_candidate"):
+            facts.append(f"{label}压力突破候选")
+        if evidence.get("range_valid") and not facts:
+            facts.append(f"{label}支撑压力区间可解释")
+        return facts
+
+    @staticmethod
+    def _structure_primary_state_zh(*, major_state: str, minor_state: str) -> str:
+        if major_state == "conflicted" or minor_state == "conflicted":
+            return "结构证据冲突"
+        if major_state == "breakdown_down":
+            return "大结构支撑跌破候选"
+        if major_state == "breakout_up":
+            return "大结构压力突破候选"
+        if major_state == "near_support":
+            return "大结构靠近支撑"
+        if major_state == "near_resistance":
+            return "大结构靠近压力"
+        if minor_state == "breakdown_down":
+            return "小结构支撑跌破候选"
+        if minor_state == "breakout_up":
+            return "小结构压力突破候选"
+        if minor_state == "near_support":
+            return "小结构靠近支撑"
+        if minor_state == "near_resistance":
+            return "小结构靠近压力"
+        if major_state in {"range_middle", "lower_half", "upper_half", "range_observed"}:
+            return "大结构区间位置明确"
+        return "结构证据不足"
+
+    def _structure_optional_evidence_block(
+        self,
+        *,
+        block_code: str,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not self._optional_evidence_block_selected(block_code=block_code, values_by_code=values_by_code):
+            return None
+        if block_code == "structure_historical_major_reference":
+            return self._structure_historical_major_reference(values_by_code=values_by_code)
+        return None
+
     def _structure_historical_major_reference(
         self,
         *,
@@ -711,6 +849,7 @@ class GroupedAtomicAggregationCalculator:
         is_valid = bool(zone_valid and zone)
         reference = {
             "is_valid": is_valid,
+            "reason_code": "" if is_valid else "historical_major_reference_invalid_or_missing",
             "zone": zone,
             "origin_type": self._optional_text(feature_values.get("structure_historical_major_zone_origin_type_1d_720")),
             "role": role,
@@ -740,6 +879,16 @@ class GroupedAtomicAggregationCalculator:
     def _atomic_condition_met(values_by_code: Mapping[str, Mapping[str, Any]], signal_code: str) -> bool:
         item = values_by_code.get(signal_code)
         return isinstance(item, Mapping) and GroupedAtomicAggregationCalculator._is_active_atomic(item)
+
+    @classmethod
+    def _optional_evidence_block_selected(
+        cls,
+        *,
+        block_code: str,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+    ) -> bool:
+        signal_codes = cls._OPTIONAL_EVIDENCE_BLOCK_ATOMICS.get(block_code, frozenset())
+        return any(signal_code in values_by_code for signal_code in signal_codes)
 
     @staticmethod
     def _optional_text(value: Any) -> str | None:
@@ -893,3 +1042,575 @@ class GroupedAtomicAggregationCalculator:
         if minor_conflict:
             tags.append("structure_minor_state_conflict_detected")
         return tags
+
+
+class GroupedAtomicAggregationV11Calculator(GroupedAtomicAggregationCalculator):
+    """Structure 1.1 使用的领域聚合计算器版本别名；逻辑与 1.0 一致，仅区分定义版本语义。"""
+
+    metadata = CalculatorMetadata(
+        algorithm_name="grouped_atomic_aggregation",
+        algorithm_version="1.1.0",
+        calculator_type=CalculatorType.DOMAIN_SIGNAL,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/domain_signals/structure_domain_signals_v1.md",
+        implementation_document_path="docs/implementation/domain_signal/grouped_atomic_aggregation__1.0.0.md",
+    )
+
+
+class GroupedAtomicAggregationV2Calculator(GroupedAtomicAggregationCalculator):
+    """Structure 2.0 使用的领域聚合计算器；补充支撑/压力穿透与确认语义，不生成交易动作。"""
+
+    metadata = CalculatorMetadata(
+        algorithm_name="grouped_atomic_aggregation",
+        algorithm_version="2.0.0",
+        calculator_type=CalculatorType.DOMAIN_SIGNAL,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/domain_signals/structure_domain_signals_v2.md",
+        implementation_document_path="docs/implementation/domain_signal/grouped_atomic_aggregation__1.0.0.md",
+    )
+
+    def _structure(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(super()._structure(payload))
+        active = payload["active_set"]
+        legacy_state_code = str(result.get("state_code") or "")
+        semantic = self._structure_v2_semantic_state(active=active, legacy_state_code=legacy_state_code)
+        support_resistance_context = self._structure_v2_support_resistance_context(active=active)
+
+        result["direction"] = semantic["direction"]
+        result["state_code"] = semantic["state_code"]
+        result["strength"] = max(Decimal(str(result.get("strength") or "0")), Decimal(str(semantic["strength"])))
+        result["agreement_ratio"] = Decimal(str(semantic["agreement_ratio"]))
+        result["state_tags"] = sorted(set([*result.get("state_tags", []), *semantic["state_tags"]]))
+        summary = dict(result.get("summary") or {})
+        summary["legacy_state_code"] = legacy_state_code
+        summary["structure_state_v2"] = semantic
+        summary["support_resistance_context"] = support_resistance_context
+        result["summary"] = summary
+        context_text = str(support_resistance_context.get("text_zh") or "")
+        result["evidence_text_zh"] = (
+            f"structure v2 领域聚合完成：结构状态为 {semantic['state_zh']}。"
+            f"{semantic['reason_zh']}{context_text}该结论只描述支撑压力结构事实，不输出交易动作。"
+        )
+        return result
+
+    @staticmethod
+    def _structure_v2_support_resistance_context(*, active: set[str]) -> dict[str, Any]:
+        major_support_holds = "structure_major_support_holds" in active
+        major_resistance_holds = "structure_major_resistance_holds" in active
+        minor_support_holds = "structure_minor_support_holds" in active
+        minor_resistance_holds = "structure_minor_resistance_holds" in active
+        major_support_resistance_conflict = major_support_holds and major_resistance_holds
+        minor_support_resistance_conflict = minor_support_holds and minor_resistance_holds
+        any_support_resistance_conflict = major_support_resistance_conflict or minor_support_resistance_conflict
+
+        active_context_signal_codes = [
+            signal_code
+            for signal_code, enabled in (
+                ("structure_major_support_holds", major_support_holds),
+                ("structure_major_resistance_holds", major_resistance_holds),
+                ("structure_minor_support_holds", minor_support_holds),
+                ("structure_minor_resistance_holds", minor_resistance_holds),
+            )
+            if enabled
+        ]
+
+        text_parts: list[str] = []
+        if major_support_resistance_conflict:
+            text_parts.append("1d 大支撑和 1d 大压力同时有效")
+        elif major_support_holds:
+            text_parts.append("1d 大支撑有效")
+        elif major_resistance_holds:
+            text_parts.append("1d 大压力有效")
+
+        if minor_support_resistance_conflict:
+            text_parts.append("4h 小支撑和 4h 小压力同时有效")
+        elif minor_support_holds:
+            text_parts.append("4h 小支撑有效")
+        elif minor_resistance_holds:
+            text_parts.append("4h 小压力有效")
+
+        if not text_parts:
+            text_zh = ""
+        elif any_support_resistance_conflict:
+            text_zh = f"补充事实：{'；'.join(text_parts)}，当前 Structure 不是单边结构。"
+        else:
+            text_zh = f"补充事实：{'；'.join(text_parts)}。"
+
+        return {
+            "has_major_support": major_support_holds,
+            "has_major_resistance": major_resistance_holds,
+            "has_minor_support": minor_support_holds,
+            "has_minor_resistance": minor_resistance_holds,
+            "major_support_resistance_conflict": major_support_resistance_conflict,
+            "minor_support_resistance_conflict": minor_support_resistance_conflict,
+            "any_support_resistance_conflict": any_support_resistance_conflict,
+            "active_context_signal_codes": active_context_signal_codes,
+            "closer_side": "unknown",
+            "text_zh": text_zh,
+        }
+
+    @classmethod
+    def _structure_v2_semantic_state(cls, *, active: set[str], legacy_state_code: str) -> dict[str, Any]:
+        checks = (
+            ("structure_major_support_breakdown_confirmed", "bearish", "structure_major_support_breakdown_confirmed", "1d 大支撑确认跌破", "1d 大支撑跌破幅度达到确认阈值，结构破坏证据较强。", "0.90", "1"),
+            ("structure_major_resistance_breakout_confirmed", "bullish", "structure_major_resistance_breakout_confirmed", "1d 大压力确认突破", "1d 大压力突破幅度达到确认阈值，结构修复或延续证据较强。", "0.90", "1"),
+            ("structure_major_support_breakdown_candidate", "bearish", "structure_major_support_breakdown_candidate", "1d 大支撑跌破候选", "1d 大支撑刚被跌破，但仍缺少收回、反抽失败等跨周期确认。", "0.75", "1"),
+            ("structure_major_resistance_breakout_candidate", "bullish", "structure_major_resistance_breakout_candidate", "1d 大压力突破候选", "1d 大压力刚被突破，但仍缺少回踩有效等跨周期确认。", "0.75", "1"),
+            ("structure_major_support_holds", "neutral", "structure_major_support_holds", "1d 大支撑守住", "价格靠近 1d 大支撑且仍收在支撑区上方，支撑暂未失效。", "0.65", "0"),
+            ("structure_major_resistance_holds", "neutral", "structure_major_resistance_holds", "1d 大压力压住", "价格靠近 1d 大压力且仍收在压力区下方，压力暂未失效。", "0.65", "0"),
+            ("structure_minor_support_breakdown_confirmed", "bearish", "structure_minor_support_breakdown_confirmed", "4h 小支撑确认跌破", "4h 小支撑跌破幅度达到确认阈值，但不能单独推翻 1d 大结构。", "0.55", "1"),
+            ("structure_minor_resistance_breakout_confirmed", "bullish", "structure_minor_resistance_breakout_confirmed", "4h 小压力确认突破", "4h 小压力突破幅度达到确认阈值，但不能单独推翻 1d 大结构。", "0.55", "1"),
+            ("structure_minor_support_breakdown_candidate", "bearish", "structure_minor_support_breakdown_candidate", "4h 小支撑跌破候选", "4h 小支撑刚被跌破，只表达短周期结构变化。", "0.45", "1"),
+            ("structure_minor_resistance_breakout_candidate", "bullish", "structure_minor_resistance_breakout_candidate", "4h 小压力突破候选", "4h 小压力刚被突破，只表达短周期结构变化。", "0.45", "1"),
+            ("structure_minor_support_holds", "neutral", "structure_minor_support_holds", "4h 小支撑守住", "价格靠近 4h 小支撑且仍收在支撑区上方。", "0.40", "0"),
+            ("structure_minor_resistance_holds", "neutral", "structure_minor_resistance_holds", "4h 小压力压住", "价格靠近 4h 小压力且仍收在压力区下方。", "0.40", "0"),
+        )
+        for signal_code, direction, state_code, state_zh, reason_zh, strength, agreement in checks:
+            if signal_code in active:
+                return {
+                    "state_code": state_code,
+                    "state_zh": state_zh,
+                    "direction": direction,
+                    "strength": strength,
+                    "agreement_ratio": agreement,
+                    "reason_zh": reason_zh,
+                    "trigger_signal_code": signal_code,
+                    "legacy_state_code": legacy_state_code,
+                    "state_tags": [state_code, f"{state_code}_active"],
+                    "limitations": [
+                        "第一版 Structure v2 尚未使用跨周期收回、反抽失败或回踩有效证据；确认状态主要基于突破/跌破幅度阈值。"
+                    ],
+                }
+        return {
+            "state_code": f"{legacy_state_code}_v2_observed" if legacy_state_code else "structure_v2_observed",
+            "state_zh": "结构位置观察",
+            "direction": "neutral",
+            "strength": "0.35",
+            "agreement_ratio": "0",
+            "reason_zh": "当前未触发支撑守住、压力压住、跌破候选或突破候选等 Structure v2 语义。",
+            "trigger_signal_code": "",
+            "legacy_state_code": legacy_state_code,
+            "state_tags": ["structure_v2_no_semantic_trigger"],
+            "limitations": [
+                "第一版 Structure v2 尚未使用跨周期收回、反抽失败或回踩有效证据；确认状态主要基于突破/跌破幅度阈值。"
+            ],
+        }
+
+
+class GroupedAtomicAggregationV3Calculator(GroupedAtomicAggregationCalculator):
+    """Structure 3.0 使用的领域聚合计算器；只聚合拐点型支撑压力原子事实，不生成交易动作。"""
+
+    metadata = CalculatorMetadata(
+        algorithm_name="grouped_atomic_aggregation",
+        algorithm_version="3.0.0",
+        calculator_type=CalculatorType.DOMAIN_SIGNAL,
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        deterministic=True,
+        supports_dry_run=True,
+        algorithm_requirement_document_path="docs/requirements/domain_signals/structure_domain_signals_v3.md",
+        implementation_document_path="docs/implementation/domain_signal/grouped_atomic_aggregation__1.0.0.md",
+    )
+
+    _PIVOT_LEVEL_LABEL_ZH = {
+        "major": "1d 大结构",
+        "minor": "4h 小结构",
+    }
+    _PIVOT_LEVEL_SUFFIX = {
+        "major": ("1d", "365"),
+        "minor": ("4h", "120"),
+    }
+    _PIVOT_STATE_ZH = {
+        "support_breakdown_confirmed": "确认跌破支撑",
+        "resistance_breakout_confirmed": "确认突破压力",
+        "support_breakdown_candidate": "支撑跌破候选",
+        "resistance_breakout_candidate": "压力突破候选",
+        "between_support_resistance": "处于支撑压力夹层",
+        "support_holds": "支撑守住",
+        "resistance_holds": "压力压住",
+        "support_testing": "正在测试支撑",
+        "resistance_testing": "正在测试压力",
+        "near_support": "靠近支撑",
+        "near_resistance": "靠近压力",
+        "conflicted": "结构证据冲突",
+        "unclear": "结构不明确",
+    }
+
+    def _structure(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        active = payload["active_set"]
+        values_by_code = payload["values_by_code"]
+        major = self._pivot_level_evidence(active=active, values_by_code=values_by_code, level="major")
+        minor = self._pivot_level_evidence(active=active, values_by_code=values_by_code, level="minor")
+        decision = self._pivot_domain_state(major=major, minor=minor)
+        support_zone = self._preferred_pivot_zone(major=major, minor=minor, side="support")
+        resistance_zone = self._preferred_pivot_zone(major=major, minor=minor, side="resistance")
+        structure_evidence = {
+            "major": major,
+            "minor": minor,
+            "primary_state_zh": decision["state_zh"],
+            "facts_zh": [*major["facts_zh"], *minor["facts_zh"]],
+        }
+        current_zone_position = self._pivot_current_zone_position(major_state=major["state"], minor_state=minor["state"])
+        return {
+            "direction": decision["direction"],
+            "state_code": decision["state_code"],
+            "strength": decision["strength"],
+            "agreement_ratio": decision["agreement_ratio"],
+            "counts": {
+                "major_active": self._count_prefix(active, "structure_pivot_major_"),
+                "minor_active": self._count_prefix(active, "structure_pivot_minor_"),
+                "major_state": major["state"],
+                "minor_state": minor["state"],
+            },
+            "state_tags": sorted(
+                set(
+                    [
+                        decision["state_code"],
+                        f"structure_pivot_major_{major['state']}",
+                        f"structure_pivot_minor_{minor['state']}",
+                        *major["state_tags"],
+                        *minor["state_tags"],
+                    ]
+                )
+            ),
+            "summary": {
+                "major_structure": major["state"],
+                "minor_structure": minor["state"],
+                "structure_evidence": structure_evidence,
+                "current_zone_position": current_zone_position,
+                "major_support_zone": major.get("support_zone"),
+                "major_resistance_zone": major.get("resistance_zone"),
+                "minor_support_zone": minor.get("support_zone"),
+                "minor_resistance_zone": minor.get("resistance_zone"),
+                "support_zone": support_zone,
+                "resistance_zone": resistance_zone,
+            },
+            "evidence_text_zh": (
+                f"Structure v3 聚合完成：{major['label_zh']}为{major['state_zh']}，"
+                f"{minor['label_zh']}为{minor['state_zh']}，最终结构状态为{decision['state_zh']}。"
+                "该结论只描述拐点支撑压力事实，不生成交易动作。"
+            ),
+        }
+
+    @classmethod
+    def _pivot_level_evidence(
+        cls,
+        *,
+        active: set[str],
+        values_by_code: Mapping[str, Mapping[str, Any]],
+        level: str,
+    ) -> dict[str, Any]:
+        prefix = f"structure_pivot_{level}"
+        flags = {
+            "support_valid": f"{prefix}_support_valid" in active,
+            "near_support": f"{prefix}_near_support" in active,
+            "support_testing": f"{prefix}_support_testing" in active,
+            "support_holds": f"{prefix}_support_holds" in active,
+            "support_breakdown_candidate": f"{prefix}_support_breakdown_candidate" in active,
+            "support_breakdown_confirmed": f"{prefix}_support_breakdown_confirmed" in active,
+            "resistance_valid": f"{prefix}_resistance_valid" in active,
+            "near_resistance": f"{prefix}_near_resistance" in active,
+            "resistance_testing": f"{prefix}_resistance_testing" in active,
+            "resistance_holds": f"{prefix}_resistance_holds" in active,
+            "resistance_breakout_candidate": f"{prefix}_resistance_breakout_candidate" in active,
+            "resistance_breakout_confirmed": f"{prefix}_resistance_breakout_confirmed" in active,
+            "between_support_resistance": f"{prefix}_between_support_resistance" in active,
+            "unclear": f"{prefix}_unclear" in active,
+        }
+        state = cls._pivot_level_state(flags)
+        state_zh = cls._PIVOT_STATE_ZH[state]
+        support_zone = cls._pivot_zone(values_by_code=values_by_code, level=level, side="support")
+        resistance_zone = cls._pivot_zone(values_by_code=values_by_code, level=level, side="resistance")
+        facts_zh = cls._pivot_fact_texts(level=level, flags=flags, state_zh=state_zh)
+        return {
+            "label_zh": cls._PIVOT_LEVEL_LABEL_ZH[level],
+            "state": state,
+            "state_zh": state_zh,
+            "support_zone": support_zone,
+            "resistance_zone": resistance_zone,
+            "state_tags": [f"{key}_active" for key, value in flags.items() if value],
+            "facts_zh": facts_zh,
+            **flags,
+        }
+
+    @classmethod
+    def _pivot_level_state(cls, flags: Mapping[str, bool]) -> str:
+        breakdown = flags["support_breakdown_confirmed"] or flags["support_breakdown_candidate"]
+        breakout = flags["resistance_breakout_confirmed"] or flags["resistance_breakout_candidate"]
+        if breakdown and breakout:
+            return "conflicted"
+        if flags["support_breakdown_confirmed"]:
+            return "support_breakdown_confirmed"
+        if flags["resistance_breakout_confirmed"]:
+            return "resistance_breakout_confirmed"
+        if flags["support_breakdown_candidate"]:
+            return "support_breakdown_candidate"
+        if flags["resistance_breakout_candidate"]:
+            return "resistance_breakout_candidate"
+        if flags["between_support_resistance"] or (flags["support_holds"] and flags["resistance_holds"]):
+            return "between_support_resistance"
+        if flags["support_holds"]:
+            return "support_holds"
+        if flags["resistance_holds"]:
+            return "resistance_holds"
+        if flags["support_testing"]:
+            return "support_testing"
+        if flags["resistance_testing"]:
+            return "resistance_testing"
+        if flags["near_support"]:
+            return "near_support"
+        if flags["near_resistance"]:
+            return "near_resistance"
+        return "unclear"
+
+    @classmethod
+    def _pivot_domain_state(cls, *, major: Mapping[str, Any], minor: Mapping[str, Any]) -> dict[str, Any]:
+        major_state = str(major["state"])
+        minor_state = str(minor["state"])
+        state_code = cls._pivot_state_code(major_state=major_state, minor_state=minor_state)
+        state_zh = cls._PIVOT_STATE_ZH.get(major_state, "结构不明确")
+        if major_state == "support_breakdown_confirmed":
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=state_zh,
+                direction="bearish",
+                strength=Decimal("0.85"),
+                agreement_ratio=Decimal("1"),
+            )
+        if major_state == "resistance_breakout_confirmed":
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=state_zh,
+                direction="bullish",
+                strength=Decimal("0.85"),
+                agreement_ratio=Decimal("1"),
+            )
+        if major_state in {"support_breakdown_candidate", "resistance_breakout_candidate"}:
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=state_zh,
+                direction="neutral",
+                strength=Decimal("0.65"),
+                agreement_ratio=Decimal("0"),
+            )
+        if major_state not in {"unclear", "conflicted"}:
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=state_zh,
+                direction="neutral",
+                strength=Decimal("0.55"),
+                agreement_ratio=Decimal("0"),
+            )
+        if minor_state == "support_breakdown_confirmed":
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=f"大结构不明确，小结构{cls._PIVOT_STATE_ZH[minor_state]}",
+                direction="bearish",
+                strength=Decimal("0.45"),
+                agreement_ratio=Decimal("1"),
+            )
+        if minor_state == "resistance_breakout_confirmed":
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=f"大结构不明确，小结构{cls._PIVOT_STATE_ZH[minor_state]}",
+                direction="bullish",
+                strength=Decimal("0.45"),
+                agreement_ratio=Decimal("1"),
+            )
+        if minor_state not in {"unclear", "conflicted"}:
+            return cls._pivot_state_result(
+                state_code=state_code,
+                state_zh=f"大结构不明确，小结构{cls._PIVOT_STATE_ZH[minor_state]}",
+                direction="neutral",
+                strength=Decimal("0.35"),
+                agreement_ratio=Decimal("0"),
+            )
+        return cls._pivot_state_result(
+            state_code=state_code,
+            state_zh="结构不明确",
+            direction="neutral",
+            strength=Decimal("0"),
+            agreement_ratio=Decimal("0"),
+        )
+
+    @staticmethod
+    def _pivot_state_result(
+        *,
+        state_code: str,
+        state_zh: str,
+        direction: str,
+        strength: Decimal,
+        agreement_ratio: Decimal,
+    ) -> dict[str, Any]:
+        return {
+            "state_code": state_code,
+            "state_zh": state_zh,
+            "direction": direction,
+            "strength": strength,
+            "agreement_ratio": agreement_ratio,
+        }
+
+    @staticmethod
+    def _pivot_state_code(*, major_state: str, minor_state: str) -> str:
+        if major_state == "conflicted":
+            return "structure_pivot_major_conflicted"
+        if major_state != "unclear":
+            return f"structure_pivot_major_{major_state}"
+        if minor_state == "conflicted":
+            return "structure_pivot_major_unclear_minor_conflicted"
+        if minor_state != "unclear":
+            return f"structure_pivot_major_unclear_minor_{minor_state}"
+        return "structure_pivot_unclear"
+
+    @classmethod
+    def _pivot_fact_texts(cls, *, level: str, flags: Mapping[str, bool], state_zh: str) -> list[str]:
+        label = cls._PIVOT_LEVEL_LABEL_ZH[level]
+        facts: list[str] = []
+        if flags["between_support_resistance"] or (flags["support_holds"] and flags["resistance_holds"]):
+            facts.append(f"{label}同时存在有效支撑和有效压力，当前处于夹层")
+        elif flags["support_holds"]:
+            facts.append(f"{label}支撑暂时守住")
+        elif flags["resistance_holds"]:
+            facts.append(f"{label}压力暂时压住")
+        elif flags["support_testing"]:
+            facts.append(f"{label}正在测试支撑")
+        elif flags["resistance_testing"]:
+            facts.append(f"{label}正在测试压力")
+        elif flags["near_support"]:
+            facts.append(f"{label}靠近支撑")
+        elif flags["near_resistance"]:
+            facts.append(f"{label}靠近压力")
+        if flags["support_breakdown_candidate"]:
+            facts.append(f"{label}出现支撑跌破候选")
+        if flags["support_breakdown_confirmed"]:
+            facts.append(f"{label}确认跌破支撑")
+        if flags["resistance_breakout_candidate"]:
+            facts.append(f"{label}出现压力突破候选")
+        if flags["resistance_breakout_confirmed"]:
+            facts.append(f"{label}确认突破压力")
+        if not facts and flags["unclear"]:
+            facts.append(f"{label}结构不明确")
+        if not facts:
+            facts.append(f"{label}未形成可用结构事实")
+        if state_zh not in facts[-1]:
+            facts.append(f"{label}最终状态：{state_zh}")
+        return facts
+
+    @staticmethod
+    def _preferred_pivot_zone(
+        *,
+        major: Mapping[str, Any],
+        minor: Mapping[str, Any],
+        side: str,
+    ) -> dict[str, str] | None:
+        key = f"{side}_zone"
+        major_state = str(major["state"])
+        minor_state = str(minor["state"])
+        if side == "support":
+            states = {
+                "support_holds",
+                "support_testing",
+                "near_support",
+                "support_breakdown_candidate",
+                "support_breakdown_confirmed",
+                "between_support_resistance",
+            }
+        else:
+            states = {
+                "resistance_holds",
+                "resistance_testing",
+                "near_resistance",
+                "resistance_breakout_candidate",
+                "resistance_breakout_confirmed",
+                "between_support_resistance",
+            }
+        if major_state in states:
+            return major.get(key) or minor.get(key)
+        if minor_state in states:
+            return minor.get(key) or major.get(key)
+        return major.get(key) or minor.get(key)
+
+    @staticmethod
+    def _pivot_current_zone_position(*, major_state: str, minor_state: str) -> str:
+        states = {major_state, minor_state}
+        if "conflicted" in states:
+            return "conflicted"
+        if "between_support_resistance" in states:
+            return "between_support_resistance"
+        if states & {"support_holds", "support_testing", "near_support", "support_breakdown_candidate", "support_breakdown_confirmed"}:
+            return "near_or_below_support"
+        if states & {
+            "resistance_holds",
+            "resistance_testing",
+            "near_resistance",
+            "resistance_breakout_candidate",
+            "resistance_breakout_confirmed",
+        }:
+            return "near_or_above_resistance"
+        return "unclear"
+
+    @classmethod
+    def _pivot_zone(
+        cls,
+        *,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+        level: str,
+        side: str,
+    ) -> dict[str, str] | None:
+        feature_values = cls._pivot_feature_values(values_by_code)
+        timeframe, window = cls._PIVOT_LEVEL_SUFFIX[level]
+        suffix = f"{timeframe}_{window}"
+        prefix = f"structure_pivot_{side}"
+        fields = {
+            "lower": f"{prefix}_lower_{suffix}",
+            "upper": f"{prefix}_upper_{suffix}",
+            "core": f"{prefix}_core_{suffix}",
+            "strength": f"{prefix}_strength_{suffix}",
+            "status": f"{prefix}_status_{suffix}",
+            "distance_pct": f"structure_pivot_distance_to_{side}_pct_{suffix}",
+            "distance_atr": f"structure_pivot_distance_to_{side}_atr_{suffix}",
+        }
+        lower = feature_values.get(fields["lower"])
+        upper = feature_values.get(fields["upper"])
+        if lower is None or upper is None:
+            return None
+        result = {"lower": str(lower), "upper": str(upper)}
+        for key in ("core", "strength", "status", "distance_pct", "distance_atr"):
+            value = feature_values.get(fields[key])
+            if value is not None:
+                result[key] = str(value)
+        return result
+
+    @staticmethod
+    def _pivot_feature_values(values_by_code: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for item in values_by_code.values():
+            value_json = item.get("value_json")
+            if isinstance(value_json, Mapping):
+                feature_values = value_json.get("feature_values")
+                if isinstance(feature_values, Mapping):
+                    for code, payload in feature_values.items():
+                        if isinstance(payload, Mapping) and str(code) not in result:
+                            result[str(code)] = payload.get("value")
+            evidence_items = item.get("evidence_items")
+            if not isinstance(evidence_items, (list, tuple)):
+                continue
+            for evidence in evidence_items:
+                if not isinstance(evidence, Mapping):
+                    continue
+                used_features = evidence.get("used_features")
+                if not isinstance(used_features, (list, tuple)):
+                    continue
+                for feature in used_features:
+                    if not isinstance(feature, Mapping):
+                        continue
+                    code = str(feature.get("feature_code") or "")
+                    if code and code not in result and feature.get("missing") is not True:
+                        result[code] = feature.get("observed_value")
+        return result

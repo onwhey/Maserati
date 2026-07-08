@@ -1172,14 +1172,14 @@ def validate_release_integrity(
         )
     }
     domain_memberships: dict[str, int] = {}
+    atomic_codes = {item.component_code for item in atomic_items}
     for domain_item in (item for item in items if item.component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION):
         payload = domain_item.payload_summary or {}
         if domain_item.dependency_hash != domain_atomic_membership_hash(payload):
             errors.append(f"domain_signal_definition:{domain_item.component_code} 原子信号归属指纹不一致")
-        codes = set(payload.get("allowed_atomic_signal_codes", [])) | set(payload.get("required_atomic_signal_codes", []))
+        codes = (set(payload.get("allowed_atomic_signal_codes", [])) | set(payload.get("required_atomic_signal_codes", []))) & atomic_codes
         for code in codes:
             domain_memberships[str(code)] = domain_memberships.get(str(code), 0) + 1
-    atomic_codes = {item.component_code for item in atomic_items}
     domain_items = [item for item in items if item.component_type == ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION]
     domain_definitions = {
         definition.id: definition
@@ -1231,8 +1231,8 @@ def validate_release_integrity(
             errors.append(f"domain_signal_definition:{domain_item.component_code} 定义身份或指纹不一致")
         if not set(required_codes).issubset(set(allowed_codes)):
             errors.append(f"domain_signal_definition:{domain_item.component_code} required 原子信号不在 allowed 内")
-        if not set(allowed_codes).issubset(atomic_codes):
-            errors.append(f"domain_signal_definition:{domain_item.component_code} 引用了版本包原子切片之外的信号")
+        if not set(required_codes).issubset(atomic_codes):
+            errors.append(f"domain_signal_definition:{domain_item.component_code} required 原子信号未包含在版本包原子切片")
 
     for item in atomic_items:
         definition = atomic_definitions.get(item.component_object_id)

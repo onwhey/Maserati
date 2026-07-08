@@ -4,6 +4,16 @@ from .context_structure_regime import (
     ContextStructureRegimeCalculator,
     ContextStructureRegimeV2Calculator,
     ContextStructureRegimeV3Calculator,
+    ContextStructureRegimeV4Calculator,
+    ContextStructureRegimeV5Calculator,
+    ContextStructureRegimeV6Calculator,
 )
 
-__all__ = ["ContextStructureRegimeCalculator", "ContextStructureRegimeV2Calculator", "ContextStructureRegimeV3Calculator"]
+__all__ = [
+    "ContextStructureRegimeCalculator",
+    "ContextStructureRegimeV2Calculator",
+    "ContextStructureRegimeV3Calculator",
+    "ContextStructureRegimeV4Calculator",
+    "ContextStructureRegimeV5Calculator",
+    "ContextStructureRegimeV6Calculator",
+]

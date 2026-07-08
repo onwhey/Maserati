@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from apps.strategy_analysis.market_regime_catalog import market_regime_display_name
 from apps.strategy_analysis.models import StrategyRouteAction, StrategyRouteFallbackPolicy
 
 
@@ -40,6 +41,14 @@ class StrategyRouteRuleTemplate:
     selected_strategy: tuple[str, str] | None = None
 
 
+def _rule_display_name(regime_code: str) -> str:
+    return f"{market_regime_display_name(regime_code)}接线规则"
+
+
+def _rule_description(regime_code: str) -> str:
+    return f"匹配市场环境：{market_regime_display_name(regime_code)}；命中后交给本规则绑定的策略处理。"
+
+
 DEFAULT_STRATEGY_ROUTE_POLICY = StrategyRoutePolicyTemplate(
     policy_code="context_structure_strategy_routing",
     policy_version="v2",
@@ -57,8 +66,8 @@ DEFAULT_STRATEGY_ROUTE_POLICY = StrategyRoutePolicyTemplate(
 DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     StrategyRouteRuleTemplate(
         rule_code="bullish_trend_continuation_to_long_trend_following",
-        display_name="多头趋势延续",
-        description="当系统识别为多头趋势延续环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bullish_trend_continuation"),
+        description=_rule_description("bullish_trend_continuation"),
         priority=10,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bullish_trend_continuation"]},
@@ -66,8 +75,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bullish_breakout_to_long_trend_following",
-        display_name="多头向上突破",
-        description="当系统识别为多头向上突破环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bullish_breakout"),
+        description=_rule_description("bullish_breakout"),
         priority=20,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bullish_breakout"]},
@@ -75,8 +84,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bullish_pullback_to_long_pullback_support",
-        display_name="多头回调",
-        description="当系统识别为多头回调环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bullish_pullback"),
+        description=_rule_description("bullish_pullback"),
         priority=30,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bullish_pullback"]},
@@ -84,8 +93,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bullish_high_range_to_long_pullback_support",
-        display_name="多头高位震荡",
-        description="当系统识别为多头高位震荡环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bullish_high_range"),
+        description=_rule_description("bullish_high_range"),
         priority=40,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bullish_high_range"]},
@@ -93,8 +102,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bearish_trend_continuation_to_short_trend_following",
-        display_name="空头趋势延续",
-        description="当系统识别为空头趋势延续环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bearish_trend_continuation"),
+        description=_rule_description("bearish_trend_continuation"),
         priority=50,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bearish_trend_continuation"]},
@@ -102,8 +111,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bearish_breakdown_to_short_trend_following",
-        display_name="空头向下跌破",
-        description="当系统识别为空头向下跌破环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bearish_breakdown"),
+        description=_rule_description("bearish_breakdown"),
         priority=60,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bearish_breakdown"]},
@@ -111,8 +120,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bearish_rebound_to_short_rebound_pressure",
-        display_name="空头反弹",
-        description="当系统识别为空头反弹环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bearish_rebound"),
+        description=_rule_description("bearish_rebound"),
         priority=70,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bearish_rebound"]},
@@ -120,8 +129,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bearish_low_range_to_short_rebound_pressure",
-        display_name="空头低位震荡",
-        description="当系统识别为空头低位震荡环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bearish_low_range"),
+        description=_rule_description("bearish_low_range"),
         priority=80,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bearish_low_range"]},
@@ -129,8 +138,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bullish_top_reversal_candidate_to_standard_no_trade",
-        display_name="多头顶部反转候选",
-        description="当系统识别为多头顶部反转候选环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bullish_top_reversal_candidate"),
+        description=_rule_description("bullish_top_reversal_candidate"),
         priority=90,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bullish_top_reversal_candidate"]},
@@ -138,8 +147,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="bearish_bottom_reversal_candidate_to_standard_no_trade",
-        display_name="空头底部反转候选",
-        description="当系统识别为空头底部反转候选环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("bearish_bottom_reversal_candidate"),
+        description=_rule_description("bearish_bottom_reversal_candidate"),
         priority=100,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["bearish_bottom_reversal_candidate"]},
@@ -147,8 +156,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="neutral_range_to_standard_no_trade",
-        display_name="无方向震荡",
-        description="当系统识别为无方向震荡环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("neutral_range"),
+        description=_rule_description("neutral_range"),
         priority=110,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["neutral_range"]},
@@ -156,8 +165,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="high_risk_environment_to_standard_no_trade",
-        display_name="高风险环境",
-        description="当系统识别为高风险环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("high_risk_environment"),
+        description=_rule_description("high_risk_environment"),
         priority=120,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["high_risk_environment"]},
@@ -165,8 +174,8 @@ DEFAULT_STRATEGY_ROUTE_RULES: tuple[StrategyRouteRuleTemplate, ...] = (
     ),
     StrategyRouteRuleTemplate(
         rule_code="unclear_environment_to_standard_no_trade",
-        display_name="不明确环境",
-        description="当系统识别为不明确环境时，将该市场环境交给右侧绑定的策略处理。",
+        display_name=_rule_display_name("unclear_environment"),
+        description=_rule_description("unclear_environment"),
         priority=130,
         action=StrategyRouteAction.SELECT_STRATEGY,
         match_conditions={"regime_codes": ["unclear_environment"]},

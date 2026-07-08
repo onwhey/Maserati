@@ -460,6 +460,57 @@ def switch_domain_algorithm(
     atomic_set.save(update_fields=["release_hash"])
 
 
+def add_optional_allowed_atomic_to_domain(
+    *,
+    release: StrategyAnalysisRelease,
+    atomic_set: AtomicSignalSet,
+    domain_code: str,
+    optional_atomic_code: str,
+) -> None:
+    domain = DomainSignalDefinition.objects.get(domain_code=domain_code)
+    allowed_codes = normalize_atomic_signal_codes(
+        [*domain.allowed_atomic_signal_codes, optional_atomic_code],
+    )
+    required_codes = normalize_atomic_signal_codes(domain.required_atomic_signal_codes, allow_empty=True)
+    params_hash = stable_hash(domain.params)
+    definition_hash = domain_signal_definition_hash(
+        domain_code=domain.domain_code,
+        output_mode=domain.output_mode,
+        algorithm_name=domain.algorithm_name,
+        algorithm_version=domain.algorithm_version,
+        params_hash=params_hash,
+        is_required=domain.is_required,
+        allowed_atomic_signal_codes=allowed_codes,
+        required_atomic_signal_codes=required_codes,
+        minimum_coverage_ratio=domain.minimum_coverage_ratio,
+        agreement_threshold=domain.agreement_threshold,
+    )
+    DomainSignalDefinition.objects.filter(id=domain.id).update(
+        allowed_atomic_signal_codes=list(allowed_codes),
+        required_atomic_signal_codes=list(required_codes),
+        definition_hash=definition_hash,
+    )
+    payload = {
+        "allowed_atomic_signal_codes": list(allowed_codes),
+        "required_atomic_signal_codes": list(required_codes),
+    }
+    release.items.filter(
+        component_type=ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION,
+        component_code=domain_code,
+    ).update(
+        definition_hash=definition_hash,
+        params_hash=params_hash,
+        dependency_hash=domain_atomic_membership_hash(payload),
+        payload_summary=payload,
+    )
+    release.release_hash = calculate_release_hash(release)
+    release.save(update_fields=["release_hash", "updated_at_utc"])
+    StrategyAnalysisReleaseApproval.objects.filter(release=release).update(release_hash=release.release_hash)
+    StrategyAnalysisReleaseActivation.objects.filter(release=release).update(release_hash=release.release_hash)
+    atomic_set.release_hash = release.release_hash
+    atomic_set.save(update_fields=["release_hash"])
+
+
 @pytest.mark.django_db
 def test_domain_signal_builds_six_formal_domains_from_atomic_set() -> None:
     atomic_set, release = build_fixture()
@@ -484,6 +535,24 @@ def test_domain_signal_builds_six_formal_domains_from_atomic_set() -> None:
     assert volatility.output_mode == DomainSignalOutputMode.STATE
     assert volatility.direction == AtomicSignalDirection.NONE
     assert volatility.state_code == "high"
+
+
+@pytest.mark.django_db
+def test_domain_signal_allows_optional_atomic_not_in_release_slice() -> None:
+    atomic_set, release = build_fixture()
+    add_optional_allowed_atomic_to_domain(
+        release=release,
+        atomic_set=atomic_set,
+        domain_code="structure",
+        optional_atomic_code="atomic_structure_optional_reference",
+    )
+
+    result = run_service(atomic_set, release)
+
+    assert result.status.value == "succeeded"
+    structure = DomainSignalValue.objects.get(domain_code="structure")
+    assert structure.used_atomic_signal_codes == ["atomic_structure"]
+    assert structure.coverage_ratio == Decimal("1.000000000000000000")
 
 
 @pytest.mark.django_db
@@ -669,3 +738,9 @@ def test_seed_domain_signal_definitions_is_idempotent() -> None:
         status=DefinitionLifecycleStatus.ACTIVE,
         enabled=True,
     ).count() == 6
+    structure = DomainSignalDefinition.objects.get(domain_code="structure")
+    assert structure.algorithm_name == "grouped_atomic_aggregation"
+    assert structure.algorithm_version == "3.0.0"
+    assert structure.allowed_atomic_signal_codes
+    assert all(code.startswith("structure_pivot_") for code in structure.allowed_atomic_signal_codes)
+    assert "structure_major_support_holds" not in structure.allowed_atomic_signal_codes

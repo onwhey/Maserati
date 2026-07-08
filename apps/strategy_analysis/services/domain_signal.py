@@ -231,10 +231,11 @@ def _load_domain_definitions(
         required_codes = set(payload["required_atomic_signal_codes"])
         if not required_codes.issubset(allowed_codes):
             return None, "domain_signal_required_atomic_not_allowed"
-        if not allowed_codes.issubset(release_atomic_codes):
+        if not required_codes.issubset(release_atomic_codes):
             return None, "domain_signal_release_atomic_dependency_missing"
         for code in allowed_codes:
-            memberships[code] = memberships.get(code, 0) + 1
+            if code in release_atomic_codes:
+                memberships[code] = memberships.get(code, 0) + 1
 
         try:
             calculator = registry.resolve(
@@ -307,6 +308,7 @@ def _atomic_payload(value: AtomicSignalValue) -> dict[str, Any]:
         "value_decimal": value.value_decimal,
         "value_text": value.value_text,
         "value_json": value.value_json,
+        "evidence_items": value.evidence_items,
     }
 
 
@@ -320,6 +322,16 @@ def _run_calculator(
 ) -> DomainValueDraft:
     payload, _dependency_hash = _domain_definition_payload(definition)
     required_codes = set(payload["required_atomic_signal_codes"])
+    runtime_allowed_codes = [
+        code for code in payload["allowed_atomic_signal_codes"] if any(value.signal_code == code for value in atomic_values)
+    ]
+    if not runtime_allowed_codes:
+        return _failed_draft(
+            definition,
+            error_code="domain_signal_runtime_allowed_atomic_empty",
+            error_message="当前版本包没有可参与该领域的原子信号",
+            used_values=atomic_values,
+        )
     invalid_required = [
         value
         for value in atomic_values
@@ -338,7 +350,7 @@ def _run_calculator(
         for value in atomic_values
         if value.status == AnalysisObjectStatus.CREATED and value.is_valid
     ]
-    coverage_ratio = Decimal(len(valid_values)) / Decimal(len(payload["allowed_atomic_signal_codes"]))
+    coverage_ratio = Decimal(len(valid_values)) / Decimal(len(runtime_allowed_codes))
     if coverage_ratio < definition.minimum_coverage_ratio:
         return _failed_draft(
             definition,

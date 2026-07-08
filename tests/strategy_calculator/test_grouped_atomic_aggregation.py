@@ -4,7 +4,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from apps.strategy_calculator.contracts import CalculatorInput, CalculatorType
-from apps.strategy_calculator.domain_signal import GroupedAtomicAggregationCalculator
+from apps.strategy_calculator.domain_signal import (
+    GroupedAtomicAggregationCalculator,
+    GroupedAtomicAggregationV2Calculator,
+    GroupedAtomicAggregationV3Calculator,
+)
 
 
 def _input(*, domain_code: str, output_mode: str, params: dict, atomic_values: list[dict]) -> CalculatorInput:
@@ -22,7 +26,14 @@ def _input(*, domain_code: str, output_mode: str, params: dict, atomic_values: l
     )
 
 
-def _atomic(signal_code: str, *, active: bool = True, direction: str = "neutral", value_json: dict | None = None) -> dict:
+def _atomic(
+    signal_code: str,
+    *,
+    active: bool = True,
+    direction: str = "neutral",
+    value_json: dict | None = None,
+    evidence_items: list[dict] | None = None,
+) -> dict:
     return {
         "atomic_signal_value_id": abs(hash(signal_code)) % 100000,
         "signal_code": signal_code,
@@ -34,7 +45,26 @@ def _atomic(signal_code: str, *, active: bool = True, direction: str = "neutral"
         "value_decimal": None,
         "value_text": "",
         "value_json": value_json,
+        "evidence_items": evidence_items or [],
     }
+
+
+def _pivot_evidence(*, side: str, timeframe: str = "1d", window: str = "365") -> list[dict]:
+    prefix = f"structure_pivot_{side}"
+    suffix = f"{timeframe}_{window}"
+    return [
+        {
+            "evidence_type": "structure_pivot_atomic_condition",
+            "used_features": [
+                {"feature_code": f"{prefix}_lower_{suffix}", "observed_value": "70000"},
+                {"feature_code": f"{prefix}_upper_{suffix}", "observed_value": "72000"},
+                {"feature_code": f"{prefix}_core_{suffix}", "observed_value": "71000"},
+                {"feature_code": f"{prefix}_strength_{suffix}", "observed_value": "0.8"},
+                {"feature_code": f"{prefix}_status_{suffix}", "observed_value": "hold"},
+                {"feature_code": f"structure_pivot_distance_to_{side}_pct_{suffix}", "observed_value": "0.01"},
+            ],
+        }
+    ]
 
 
 def test_grouped_atomic_trend_uses_1d_as_primary_and_4h_as_auxiliary() -> None:
@@ -105,6 +135,7 @@ def test_grouped_atomic_structure_carries_support_and_resistance_zones_in_summar
         "allowed_atomic_signal_codes": [
             "structure_major_near_support",
             "structure_minor_range_middle",
+            "structure_historical_major_zone_valid",
         ],
         "required_atomic_signal_codes": [],
     }
@@ -132,9 +163,46 @@ def test_grouped_atomic_structure_carries_support_and_resistance_zones_in_summar
 
     summary = output.evidence_items[0]["summary"]
     assert output.values["state_code"] == "structure_major_near_support_minor_range_middle"
+    assert output.values["coverage_ratio"] == Decimal("1")
     assert summary["support_zone"] == {"lower": "49000", "upper": "50000"}
     assert summary["resistance_zone"] == {"lower": "59000", "upper": "60000"}
     assert summary["current_zone_position"] == "near_support"
+    assert "historical_major_reference" not in summary
+
+
+def test_grouped_atomic_structure_keeps_selected_invalid_historical_reference_as_optional_block() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_near_support",
+            "structure_minor_range_middle",
+            "structure_historical_major_zone_valid",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_near_support"),
+                _atomic("structure_minor_range_middle"),
+                _atomic("structure_historical_major_zone_valid", active=False),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    reference = summary["historical_major_reference"]
+    assert output.values["state_code"] == "structure_major_near_support_minor_range_middle"
+    assert reference["is_valid"] is False
+    assert reference["reason_code"] == "historical_major_reference_invalid_or_missing"
+    assert reference["zone"] is None
+    assert reference["should_mention_in_evidence"] is False
+    assert "720 天历史大结构参考位" not in output.values["evidence_text_zh"]
 
 
 def test_grouped_atomic_structure_keeps_far_historical_reference_out_of_evidence_text() -> None:
@@ -322,6 +390,226 @@ def test_grouped_atomic_structure_records_minor_conflict_as_market_fact() -> Non
     assert "structure_minor_state_conflict_detected" in output.evidence_items[0]["state_tags"]
 
 
+def test_grouped_atomic_structure_v2_outputs_major_support_breakdown_confirmed() -> None:
+    calculator = GroupedAtomicAggregationV2Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_support_breakdown_candidate",
+            "structure_major_support_breakdown_confirmed",
+            "structure_minor_range_middle",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_support_breakdown_candidate", direction="bearish"),
+                _atomic("structure_major_support_breakdown_confirmed", direction="bearish"),
+                _atomic("structure_minor_range_middle"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    semantic = summary["structure_state_v2"]
+    assert output.values["direction"] == "bearish"
+    assert output.values["state_code"] == "structure_major_support_breakdown_confirmed"
+    assert output.values["strength"] == Decimal("0.90")
+    assert semantic["state_zh"] == "1d 大支撑确认跌破"
+    assert semantic["trigger_signal_code"] == "structure_major_support_breakdown_confirmed"
+    assert summary["legacy_state_code"] == "structure_major_breakdown_down"
+
+
+def test_grouped_atomic_structure_v2_outputs_major_resistance_holds_without_trade_action() -> None:
+    calculator = GroupedAtomicAggregationV2Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_resistance_holds",
+            "structure_minor_range_middle",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_resistance_holds"),
+                _atomic("structure_minor_range_middle"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    semantic = summary["structure_state_v2"]
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_major_resistance_holds"
+    assert semantic["state_zh"] == "1d 大压力压住"
+    assert "不输出交易动作" in output.values["evidence_text_zh"]
+
+
+
+def test_grouped_atomic_structure_v2_records_support_resistance_context_without_changing_primary_state() -> None:
+    calculator = GroupedAtomicAggregationV2Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_support_holds",
+            "structure_major_resistance_holds",
+            "structure_minor_support_holds",
+            "structure_minor_resistance_holds",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_support_holds"),
+                _atomic("structure_major_resistance_holds"),
+                _atomic("structure_minor_support_holds"),
+                _atomic("structure_minor_resistance_holds"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    context = summary["support_resistance_context"]
+    assert output.values["state_code"] == "structure_major_support_holds"
+    assert context["has_major_support"] is True
+    assert context["has_major_resistance"] is True
+    assert context["has_minor_support"] is True
+    assert context["has_minor_resistance"] is True
+    assert context["major_support_resistance_conflict"] is True
+    assert context["minor_support_resistance_conflict"] is True
+    assert context["any_support_resistance_conflict"] is True
+    assert list(context["active_context_signal_codes"]) == [
+        "structure_major_support_holds",
+        "structure_major_resistance_holds",
+        "structure_minor_support_holds",
+        "structure_minor_resistance_holds",
+    ]
+    assert "\u8865\u5145\u4e8b\u5b9e" in output.values["evidence_text_zh"]
+    assert "\u4e0d\u662f\u5355\u8fb9\u7ed3\u6784" in output.values["evidence_text_zh"]
+
+
+def test_grouped_atomic_structure_v3_outputs_between_support_resistance_when_both_sides_exist() -> None:
+    calculator = GroupedAtomicAggregationV3Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_pivot_major_support_holds",
+            "structure_pivot_major_resistance_holds",
+            "structure_pivot_major_between_support_resistance",
+            "structure_pivot_minor_unclear",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="directional",
+            params=params,
+            atomic_values=[
+                _atomic("structure_pivot_major_support_holds", evidence_items=_pivot_evidence(side="support")),
+                _atomic("structure_pivot_major_resistance_holds", evidence_items=_pivot_evidence(side="resistance")),
+                _atomic("structure_pivot_major_between_support_resistance"),
+                _atomic("structure_pivot_minor_unclear"),
+            ],
+        )
+    )
+
+    summary = output.evidence_items[0]["summary"]
+    evidence = summary["structure_evidence"]
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_pivot_major_between_support_resistance"
+    assert summary["current_zone_position"] == "between_support_resistance"
+    assert evidence["major"]["support_holds"] is True
+    assert evidence["major"]["resistance_holds"] is True
+    assert evidence["major"]["between_support_resistance"] is True
+    assert summary["support_zone"] == {
+        "lower": "70000",
+        "upper": "72000",
+        "core": "71000",
+        "strength": "0.8",
+        "status": "hold",
+        "distance_pct": "0.01",
+    }
+    assert summary["resistance_zone"]["lower"] == "70000"
+
+
+def test_grouped_atomic_structure_v3_outputs_confirmed_breakdown_as_directional_fact() -> None:
+    calculator = GroupedAtomicAggregationV3Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_pivot_major_support_breakdown_confirmed",
+            "structure_pivot_minor_unclear",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="directional",
+            params=params,
+            atomic_values=[
+                _atomic("structure_pivot_major_support_breakdown_confirmed", direction="bearish"),
+                _atomic("structure_pivot_minor_unclear"),
+            ],
+        )
+    )
+
+    evidence = output.evidence_items[0]["summary"]["structure_evidence"]
+    assert output.values["direction"] == "bearish"
+    assert output.values["state_code"] == "structure_pivot_major_support_breakdown_confirmed"
+    assert output.values["strength"] == Decimal("0.85")
+    assert evidence["major"]["support_breakdown_confirmed"] is True
+
+
+def test_grouped_atomic_structure_v3_keeps_breakdown_candidate_neutral() -> None:
+    calculator = GroupedAtomicAggregationV3Calculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_pivot_major_support_breakdown_candidate",
+            "structure_pivot_minor_unclear",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="directional",
+            params=params,
+            atomic_values=[
+                _atomic("structure_pivot_major_support_breakdown_candidate", direction="bearish"),
+                _atomic("structure_pivot_minor_unclear"),
+            ],
+        )
+    )
+
+    evidence = output.evidence_items[0]["summary"]["structure_evidence"]
+    assert output.values["direction"] == "neutral"
+    assert output.values["state_code"] == "structure_pivot_major_support_breakdown_candidate"
+    assert output.values["strength"] == Decimal("0.65")
+    assert evidence["major"]["support_breakdown_candidate"] is True
+
+
 def test_grouped_atomic_structure_records_major_conflict_as_unclear_fact() -> None:
     calculator = GroupedAtomicAggregationCalculator()
     params = {
@@ -356,6 +644,73 @@ def test_grouped_atomic_structure_records_major_conflict_as_unclear_fact() -> No
     assert summary["major_conflict"] is True
     assert summary["current_zone_position"] == "conflicted"
     assert "structure_major_state_conflict_detected" in output.evidence_items[0]["state_tags"]
+
+
+def test_grouped_atomic_structure_outputs_interpretable_support_and_pressure_evidence() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_support_valid",
+            "structure_major_near_support",
+            "structure_minor_resistance_valid",
+            "structure_minor_near_resistance",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_support_valid"),
+                _atomic("structure_major_near_support"),
+                _atomic("structure_minor_resistance_valid"),
+                _atomic("structure_minor_near_resistance"),
+            ],
+        )
+    )
+
+    evidence = output.evidence_items[0]["summary"]["structure_evidence"]
+    assert output.values["state_code"] == "structure_major_near_support_minor_near_resistance"
+    assert evidence["primary_state_zh"] == "大结构靠近支撑"
+    assert evidence["major"]["support_holds"] is True
+    assert evidence["minor"]["resistance_holds"] is True
+    assert list(evidence["facts_zh"]) == ["1d 大结构支撑仍有效", "4h 小结构压力仍有效"]
+
+
+def test_grouped_atomic_structure_outputs_break_candidates_as_facts_without_changing_state_contract() -> None:
+    calculator = GroupedAtomicAggregationCalculator()
+    params = {
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": [
+            "structure_major_breakdown_down",
+            "structure_minor_breakout_up",
+        ],
+        "required_atomic_signal_codes": [],
+    }
+
+    output = calculator.calculate(
+        _input(
+            domain_code="structure",
+            output_mode="state",
+            params=params,
+            atomic_values=[
+                _atomic("structure_major_breakdown_down"),
+                _atomic("structure_minor_breakout_up"),
+            ],
+        )
+    )
+
+    evidence = output.evidence_items[0]["summary"]["structure_evidence"]
+    assert output.values["direction"] == "bearish"
+    assert output.values["state_code"] == "structure_major_breakdown_down"
+    assert evidence["primary_state_zh"] == "大结构支撑跌破候选"
+    assert evidence["major"]["support_breakdown_candidate"] is True
+    assert evidence["minor"]["resistance_breakout_candidate"] is True
+    assert list(evidence["facts_zh"]) == ["1d 大结构支撑跌破候选", "4h 小结构压力突破候选"]
 
 
 def test_grouped_atomic_risk_distinguishes_classifiable_risk_from_unreliable_signal() -> None:

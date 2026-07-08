@@ -214,6 +214,36 @@ P0 推荐映射方向：
 让被选 StrategyDefinition 在 StrategySignal 阶段基于允许的 DomainSignalValue 输出 neutral 或低质量策略判断。
 ```
 
+### 2.3 MarketRegime 展示来源和 RouteRule 边界
+
+MarketRegime 的 `regime_code`、中文展示名和说明属于市场环境事实定义，不属于 StrategyRouteRule。
+
+后台页面展示“市场环境”时，必须从统一 MarketRegime 定义目录读取：
+
+```text
+regime_code → 中文名 → 说明
+```
+
+StrategyRouteRule 只负责表达：
+
+```text
+匹配哪些 MarketRegime；
+命中后执行 select_strategy / no_strategy；
+如果选择策略，绑定哪个 StrategyDefinition。
+```
+
+StrategyRouteRule.display_name 只能作为规则自身的展示名或规则身份说明，不得作为 MarketRegime 中文名的来源。
+
+OpsConsole 中的策略路由接线表必须按以下方式展示：
+
+```text
+市场环境列：来自 MarketRegime 定义目录；
+规则代码列：来自 StrategyRouteRule.rule_code；
+绑定策略列：来自 StrategyRouteRule.selected_strategy_definition。
+```
+
+不得再用 RouteRule 的 display_name 伪装上游 MarketRegime 名称。
+
 ## 3. 固定规则匹配逻辑
 
 StrategyRouting 不采用路由算法注册制。

@@ -97,4 +97,69 @@ DEFAULT_MARKET_REGIME_DEFINITIONS: tuple[MarketRegimeDefinitionTemplate, ...] = 
         required_domain_codes=REQUIRED_DOMAIN_CODES,
         allowed_regime_codes=REGIME_CODES,
     ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v4",
+        display_name="【结构增强】大背景结构市场环境 v4",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "并正式消费 Structure 输出的支撑仍有效、压力仍有效、支撑跌破候选和压力突破候选证据，"
+            "识别当前市场环境。该定义保留 v2/v3 已验证的经验，但核心分类逻辑独立维护；"
+            "该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v4",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v5",
+        display_name="【结构确认】大背景结构市场环境 v5",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "并正式消费 Structure 输出的支撑仍有效、压力仍有效、支撑跌破候选和压力突破候选证据。"
+            "v5 的重点不是预测反转，而是先判断大背景结构是否保持、受压、破坏候选或确认破坏，"
+            "再输出当前市场环境。该定义只输出市场环境，不选择策略、不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v5",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+            "transition_floor_score": "0.50",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
+    MarketRegimeDefinitionTemplate(
+        definition_code="context_structure_regime_v6",
+        display_name="【结构位置】大背景结构市场环境 v6",
+        description=(
+            "综合 market_context、trend、momentum、volatility、structure、risk_state 六个领域事实，"
+            "并正式消费 Structure v3 输出的支撑、压力、夹层、突破候选、跌破候选、确认突破和确认跌破证据。"
+            "v6 是独立算法，不继承 v5 的业务判断；它只识别市场环境，不选择策略、"
+            "不生成目标仓位或订单动作。"
+        ),
+        algorithm_name="context_structure_regime",
+        algorithm_version="v6",
+        input_schema_version="1.0",
+        output_schema_version="1.0",
+        params={
+            "min_regime_score": "0.50",
+            "min_classification_margin": "0.05",
+        },
+        allowed_domain_codes=REQUIRED_DOMAIN_CODES,
+        required_domain_codes=REQUIRED_DOMAIN_CODES,
+        allowed_regime_codes=REGIME_CODES,
+    ),
 )

@@ -41,6 +41,11 @@ from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueStatus
 from apps.market_data.models import MarketSnapshot
+from apps.strategy_analysis.market_regime_catalog import (
+    market_regime_description_from_match_conditions,
+    market_regime_display_name_from_match_conditions,
+    regime_codes_from_match_conditions,
+)
 from apps.strategy_analysis.models import (
     AtomicSignalSet,
     AtomicSignalDefinition,
@@ -1502,6 +1507,7 @@ def list_strategy_route_policy_builder_options() -> dict[str, Any]:
         rules = []
         for rule in policy.rules.select_related("selected_strategy_definition").order_by("priority", "rule_code", "id"):
             selected = rule.selected_strategy_definition
+            match_conditions = _clean(rule.match_conditions)
             rules.append(
                 {
                     "id": rule.id,
@@ -1510,7 +1516,13 @@ def list_strategy_route_policy_builder_options() -> dict[str, Any]:
                     "description": rule.description,
                     "priority": rule.priority,
                     "action": rule.action,
-                    "match_conditions": _clean(rule.match_conditions),
+                    "match_conditions": match_conditions,
+                    "market_regime_codes": list(regime_codes_from_match_conditions(match_conditions)),
+                    "market_regime_display_name": market_regime_display_name_from_match_conditions(
+                        match_conditions,
+                        fallback=rule.rule_code,
+                    ),
+                    "market_regime_description": market_regime_description_from_match_conditions(match_conditions),
                     "selected_strategy_definition_id": selected.id if selected else None,
                     "selected_strategy_code": selected.strategy_code if selected else "",
                     "selected_strategy_version": selected.strategy_version if selected else "",

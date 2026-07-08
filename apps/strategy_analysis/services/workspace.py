@@ -500,6 +500,51 @@ def _route_bound_strategy_definitions(
     return strategies, errors
 
 
+def _filter_atomic_items_from_selected_domains(
+    *,
+    included_by_type: dict[ReleaseItemComponentType, list[StrategyAnalysisWorkspaceItem]],
+    loaded_components: dict[int, Any],
+) -> tuple[dict[ReleaseItemComponentType, list[StrategyAnalysisWorkspaceItem]], list[str]]:
+    """按已选择的领域定义倒推本版本包真正需要的原子信号版本。"""
+
+    domain_items = included_by_type.get(ReleaseItemComponentType.DOMAIN_SIGNAL_DEFINITION, [])
+    if not domain_items:
+        return included_by_type, []
+
+    errors: list[str] = []
+    allowed_atomic_codes: set[str] = set()
+    required_atomic_codes: set[str] = set()
+    for item in domain_items:
+        definition: DomainSignalDefinition = loaded_components[item.id]
+        try:
+            allowed_codes = normalize_atomic_signal_codes(definition.allowed_atomic_signal_codes)
+            required_codes = normalize_atomic_signal_codes(definition.required_atomic_signal_codes, allow_empty=True)
+        except ValueError as exc:
+            errors.append(f"领域 {item.component_code} 的原子依赖配置不合法：{exc}")
+            continue
+        allowed_atomic_codes.update(allowed_codes)
+        required_atomic_codes.update(required_codes)
+
+    atomic_items_by_code = {
+        item.component_code: item
+        for item in included_by_type.get(ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION, [])
+    }
+    filtered_atomic_items: list[StrategyAnalysisWorkspaceItem] = []
+    for atomic_code in sorted(required_atomic_codes):
+        if atomic_code not in atomic_items_by_code:
+            errors.append(f"领域算法必需原子 {atomic_code}，但工作区没有选择这个原子的具体版本")
+            continue
+    for atomic_code in sorted(allowed_atomic_codes):
+        atomic_item = atomic_items_by_code.get(atomic_code)
+        if atomic_item is None:
+            continue
+        filtered_atomic_items.append(atomic_item)
+
+    filtered_by_type = dict(included_by_type)
+    filtered_by_type[ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION] = filtered_atomic_items
+    return filtered_by_type, errors
+
+
 def _release_selections_from_workspace(
     workspace: StrategyAnalysisWorkspace,
 ) -> tuple[list[ReleaseComponentSelection], list[str]]:
@@ -536,6 +581,12 @@ def _release_selections_from_workspace(
     )
     errors.extend(route_strategy_errors)
 
+    included_by_type, atomic_filter_errors = _filter_atomic_items_from_selected_domains(
+        included_by_type=included_by_type,
+        loaded_components=loaded_components,
+    )
+    errors.extend(atomic_filter_errors)
+
     required_feature_codes: set[str] = set()
     for item in included_by_type.get(ReleaseItemComponentType.ATOMIC_SIGNAL_DEFINITION, []):
         definition: AtomicSignalDefinition = loaded_components[item.id]
@@ -564,6 +615,12 @@ def _release_selections_from_workspace(
     if errors:
         return [], errors
 
+    included_non_feature_items = [
+        item
+        for component_type in RELEASE_SORT_BASE
+        if component_type not in {ReleaseItemComponentType.FEATURE_DEFINITION, ReleaseItemComponentType.STRATEGY_DEFINITION}
+        for item in sorted(included_by_type.get(component_type, []), key=lambda value: (value.component_code, value.id))
+    ]
     selected_items = inferred_feature_items + included_non_feature_items
     selected_specs = [
         (_normalize_component_type(item.component_type), item.component_object_id)

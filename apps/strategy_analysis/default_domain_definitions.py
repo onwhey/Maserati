@@ -42,6 +42,14 @@ def _codes(category: str) -> list[str]:
     return sorted(template.signal_code for template in DEFAULT_ATOMIC_SIGNAL_DEFINITIONS if template.category == category)
 
 
+def _codes_with_prefix(category: str, prefix: str) -> list[str]:
+    return sorted(
+        template.signal_code
+        for template in DEFAULT_ATOMIC_SIGNAL_DEFINITIONS
+        if template.category == category and template.signal_code.startswith(prefix)
+    )
+
+
 def _base_params(domain_type: str, *, required: list[str] | None = None) -> dict[str, Any]:
     return {
         "domain_type": domain_type,
@@ -259,10 +267,9 @@ def _volatility() -> DomainSignalDefinitionTemplate:
 
 def _structure() -> DomainSignalDefinitionTemplate:
     params = {
-        **_base_params("structure"),
-        "clear_state_strength": "0.80",
-        "minor_only_strength_cap": "0.50",
-        "unclear_strength": "0",
+        "domain_type": "structure",
+        "allowed_atomic_signal_codes": _codes_with_prefix("structure", "structure_pivot_"),
+        "required_atomic_signal_codes": [],
     }
     return DomainSignalDefinitionTemplate(
         domain_code="structure",
@@ -271,7 +278,7 @@ def _structure() -> DomainSignalDefinitionTemplate:
         category="structure",
         output_mode=DomainSignalOutputMode.DIRECTIONAL,
         algorithm_name="grouped_atomic_aggregation",
-        algorithm_version="1.0.0",
+        algorithm_version="3.0.0",
         params=params,
     )
 

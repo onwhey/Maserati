@@ -44,6 +44,27 @@ HISTORICAL_MAJOR_STRUCTURE_FEATURE_CODES: tuple[str, ...] = (
 )
 
 
+def _pivot_structure_feature_codes(*, timeframe: str, window: int, side: str) -> tuple[str, ...]:
+    suffix = f"{timeframe}_{window}"
+    prefix = f"structure_pivot_{side}"
+    return (
+        f"{prefix}_lower_{suffix}",
+        f"{prefix}_upper_{suffix}",
+        f"{prefix}_core_{suffix}",
+        f"{prefix}_strength_{suffix}",
+        f"{prefix}_status_{suffix}",
+        f"structure_pivot_distance_to_{side}_pct_{suffix}",
+        f"structure_pivot_distance_to_{side}_atr_{suffix}",
+    )
+
+
+def _pivot_structure_context_feature_codes(*, timeframe: str, window: int) -> tuple[str, ...]:
+    return (
+        *_pivot_structure_feature_codes(timeframe=timeframe, window=window, side="support"),
+        *_pivot_structure_feature_codes(timeframe=timeframe, window=window, side="resistance"),
+    )
+
+
 @dataclass(frozen=True)
 class AtomicSignalDefinitionTemplate:
     signal_code: str
@@ -152,6 +173,69 @@ def _historical_structure_atomic(
         label_zh=label_zh,
         aggregation=aggregation,
         extra_params=merged_extra_params,
+    )
+
+
+def _pivot_structure_atomic(
+    signal_code: str,
+    *,
+    level: str,
+    timeframe: str,
+    window: int,
+    side: str,
+    condition: str,
+    label_zh: str,
+    direction: str = AtomicSignalDirection.NEUTRAL,
+    near_threshold: str | None = None,
+) -> AtomicSignalDefinitionTemplate:
+    include_feature_values = (
+        _pivot_structure_context_feature_codes(timeframe=timeframe, window=window)
+        if side == "both"
+        else _pivot_structure_feature_codes(timeframe=timeframe, window=window, side=side)
+    )
+    params: dict[str, Any] = {
+        "condition": condition,
+        "level": level,
+        "timeframe": timeframe,
+        "window": window,
+        "side": side,
+        "label_zh": label_zh,
+        "include_feature_values": list(include_feature_values),
+        "evidence_type": "structure_pivot_atomic_condition",
+    }
+    if near_threshold is not None:
+        params["near_threshold"] = str(near_threshold)
+    return AtomicSignalDefinitionTemplate(
+        signal_code=signal_code,
+        display_name=label_zh,
+        description=f"{label_zh}。该定义只表达拐点型支撑压力结构事实，不生成交易动作。",
+        category="structure",
+        default_direction=direction,
+        algorithm_name="pivot_structure_atomic",
+        algorithm_version="1.0.0",
+        params=params,
+        output_type=AtomicSignalOutputType.BOOLEAN,
+    )
+
+
+def _pivot_structure_group(*, level: str, timeframe: str, window: int, near_threshold: str) -> tuple[AtomicSignalDefinitionTemplate, ...]:
+    prefix = f"structure_pivot_{level}"
+    label_prefix = "1d 大" if level == "major" else "4h 小"
+    return (
+        _pivot_structure_atomic(f"{prefix}_support_valid", level=level, timeframe=timeframe, window=window, side="support", condition="valid", label_zh=f"{label_prefix}拐点支撑有效"),
+        _pivot_structure_atomic(f"{prefix}_near_support", level=level, timeframe=timeframe, window=window, side="support", condition="near", label_zh=f"{label_prefix}靠近拐点支撑", near_threshold=near_threshold),
+        _pivot_structure_atomic(f"{prefix}_support_testing", level=level, timeframe=timeframe, window=window, side="support", condition="testing", label_zh=f"{label_prefix}拐点支撑测试中"),
+        _pivot_structure_atomic(f"{prefix}_support_holds", level=level, timeframe=timeframe, window=window, side="support", condition="holds", label_zh=f"{label_prefix}拐点支撑守住"),
+        _pivot_structure_atomic(f"{prefix}_support_breakdown_candidate", level=level, timeframe=timeframe, window=window, side="support", condition="breakdown_candidate", label_zh=f"{label_prefix}拐点支撑跌破候选", direction=AtomicSignalDirection.BEARISH),
+        _pivot_structure_atomic(f"{prefix}_support_breakdown_confirmed", level=level, timeframe=timeframe, window=window, side="support", condition="breakdown_confirmed", label_zh=f"{label_prefix}拐点支撑确认跌破", direction=AtomicSignalDirection.BEARISH),
+        _pivot_structure_atomic(f"{prefix}_resistance_valid", level=level, timeframe=timeframe, window=window, side="resistance", condition="valid", label_zh=f"{label_prefix}拐点压力有效"),
+        _pivot_structure_atomic(f"{prefix}_near_resistance", level=level, timeframe=timeframe, window=window, side="resistance", condition="near", label_zh=f"{label_prefix}靠近拐点压力", near_threshold=near_threshold),
+        _pivot_structure_atomic(f"{prefix}_resistance_testing", level=level, timeframe=timeframe, window=window, side="resistance", condition="testing", label_zh=f"{label_prefix}拐点压力测试中"),
+        _pivot_structure_atomic(f"{prefix}_resistance_holds", level=level, timeframe=timeframe, window=window, side="resistance", condition="holds", label_zh=f"{label_prefix}拐点压力压住"),
+        _pivot_structure_atomic(f"{prefix}_resistance_breakout_candidate", level=level, timeframe=timeframe, window=window, side="resistance", condition="breakout_candidate", label_zh=f"{label_prefix}拐点压力突破候选", direction=AtomicSignalDirection.BULLISH),
+        _pivot_structure_atomic(f"{prefix}_resistance_breakout_confirmed", level=level, timeframe=timeframe, window=window, side="resistance", condition="breakout_confirmed", label_zh=f"{label_prefix}拐点压力确认突破", direction=AtomicSignalDirection.BULLISH),
+        _pivot_structure_atomic(f"{prefix}_between_support_resistance", level=level, timeframe=timeframe, window=window, side="both", condition="between", label_zh=f"{label_prefix}拐点支撑压力夹层"),
+        _pivot_structure_atomic(f"{prefix}_unclear", level=level, timeframe=timeframe, window=window, side="both", condition="unclear", label_zh=f"{label_prefix}拐点结构不明确"),
     )
 
 
@@ -530,8 +614,22 @@ def _structure() -> tuple[AtomicSignalDefinitionTemplate, ...]:
         _atomic("structure_major_breakdown_down", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_major_breakdown_below_support_pct_1d_365", "gte", "0.008")], label_zh="当前收盘跌破 1d 大支撑区"),
         _atomic("structure_minor_breakout_up", category="structure", direction=AtomicSignalDirection.BULLISH, conditions=[_c("structure_minor_breakout_above_resistance_pct_4h_120", "gte", "0.004")], label_zh="当前收盘突破 4h 小压力区"),
         _atomic("structure_minor_breakdown_down", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_minor_breakdown_below_support_pct_4h_120", "gte", "0.004")], label_zh="当前收盘跌破 4h 小支撑区"),
+        _atomic("structure_major_support_holds", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_major_support_lower_1d_365", "is_not_null"), _c(major_support, "is_not_null"), _c("structure_major_support_score_1d_365", "gt", "0"), _c("structure_major_distance_to_support_upper_pct_1d_365", "lte", "0.035"), _c("structure_major_breakdown_below_support_pct_1d_365", "lte", "0")], label_zh="1d 大支撑仍然有效"),
+        _atomic("structure_major_resistance_holds", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c(major_resistance, "is_not_null"), _c("structure_major_resistance_upper_1d_365", "is_not_null"), _c("structure_major_resistance_score_1d_365", "gt", "0"), _c("structure_major_distance_to_resistance_lower_pct_1d_365", "lte", "0.035"), _c("structure_major_breakout_above_resistance_pct_1d_365", "lte", "0")], label_zh="1d 大压力仍然有效"),
+        _atomic("structure_minor_support_holds", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_minor_support_lower_4h_120", "is_not_null"), _c(minor_support, "is_not_null"), _c("structure_minor_support_score_4h_120", "gt", "0"), _c("structure_minor_distance_to_support_upper_pct_4h_120", "lte", "0.015"), _c("structure_minor_breakdown_below_support_pct_4h_120", "lte", "0")], label_zh="4h 小支撑仍然有效"),
+        _atomic("structure_minor_resistance_holds", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c(minor_resistance, "is_not_null"), _c("structure_minor_resistance_upper_4h_120", "is_not_null"), _c("structure_minor_resistance_score_4h_120", "gt", "0"), _c("structure_minor_distance_to_resistance_lower_pct_4h_120", "lte", "0.015"), _c("structure_minor_breakout_above_resistance_pct_4h_120", "lte", "0")], label_zh="4h 小压力仍然有效"),
+        _atomic("structure_major_support_breakdown_candidate", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_major_breakdown_below_support_pct_1d_365", "gte", "0.008")], label_zh="1d 大支撑跌破候选"),
+        _atomic("structure_major_support_breakdown_confirmed", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_major_breakdown_below_support_pct_1d_365", "gte", "0.020")], label_zh="1d 大支撑跌破幅度达到确认阈值"),
+        _atomic("structure_minor_support_breakdown_candidate", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_minor_breakdown_below_support_pct_4h_120", "gte", "0.004")], label_zh="4h 小支撑跌破候选"),
+        _atomic("structure_minor_support_breakdown_confirmed", category="structure", direction=AtomicSignalDirection.BEARISH, conditions=[_c("structure_minor_breakdown_below_support_pct_4h_120", "gte", "0.010")], label_zh="4h 小支撑跌破幅度达到确认阈值"),
+        _atomic("structure_major_resistance_breakout_candidate", category="structure", direction=AtomicSignalDirection.BULLISH, conditions=[_c("structure_major_breakout_above_resistance_pct_1d_365", "gte", "0.008")], label_zh="1d 大压力突破候选"),
+        _atomic("structure_major_resistance_breakout_confirmed", category="structure", direction=AtomicSignalDirection.BULLISH, conditions=[_c("structure_major_breakout_above_resistance_pct_1d_365", "gte", "0.020")], label_zh="1d 大压力突破幅度达到确认阈值"),
+        _atomic("structure_minor_resistance_breakout_candidate", category="structure", direction=AtomicSignalDirection.BULLISH, conditions=[_c("structure_minor_breakout_above_resistance_pct_4h_120", "gte", "0.004")], label_zh="4h 小压力突破候选"),
+        _atomic("structure_minor_resistance_breakout_confirmed", category="structure", direction=AtomicSignalDirection.BULLISH, conditions=[_c("structure_minor_breakout_above_resistance_pct_4h_120", "gte", "0.010")], label_zh="4h 小压力突破幅度达到确认阈值"),
         _atomic("structure_major_unclear", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_major_support_lower_1d_365", "is_null"), _c(major_support, "is_null"), _c(major_resistance, "is_null"), _c("structure_major_resistance_upper_1d_365", "is_null"), _c("structure_major_range_width_pct_1d_365", "is_null"), _c(major_support, "gte", right_feature_code=major_resistance)], label_zh="1d 大结构缺少可用支撑或压力", aggregation="any"),
         _atomic("structure_minor_unclear", category="structure", direction=AtomicSignalDirection.NEUTRAL, conditions=[_c("structure_minor_support_lower_4h_120", "is_null"), _c(minor_support, "is_null"), _c(minor_resistance, "is_null"), _c("structure_minor_resistance_upper_4h_120", "is_null"), _c("structure_minor_range_width_pct_4h_120", "is_null"), _c(minor_support, "gte", right_feature_code=minor_resistance)], label_zh="4h 小结构缺少可用支撑或压力", aggregation="any"),
+        *_pivot_structure_group(level="major", timeframe="1d", window=365, near_threshold="0.025"),
+        *_pivot_structure_group(level="minor", timeframe="4h", window=120, near_threshold="0.010"),
         _historical_structure_atomic(
             "structure_historical_major_zone_valid",
             conditions=[

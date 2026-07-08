@@ -26,6 +26,9 @@ type RouteRuleOption = {
   description: string;
   priority: number;
   match_conditions: Record<string, unknown>;
+  market_regime_codes: string[];
+  market_regime_display_name: string;
+  market_regime_description: string;
   selected_strategy_definition_id: number | null;
   selected_strategy_code: string;
   selected_strategy_version: string;
@@ -160,8 +163,11 @@ export function StrategyRoutingBuilder({
                     {(selectedPolicy?.rules ?? []).map((rule) => (
                       <tr key={rule.id} className="align-middle">
                         <td className="px-3 py-2 text-xs text-muted-foreground">{rule.priority}</td>
-                        <td className="px-3 py-2 font-medium text-foreground">
-                          {text(rule.display_name, rule.rule_code)}
+                        <td
+                          className="px-3 py-2 font-medium text-foreground"
+                          title={text(rule.market_regime_description, rule.market_regime_codes?.join(", "))}
+                        >
+                          {text(rule.market_regime_display_name, rule.rule_code)}
                         </td>
                         <td className="px-3 py-2">
                           <div className="max-w-[260px] truncate font-mono text-xs text-muted-foreground" title={rule.rule_code}>
@@ -171,7 +177,7 @@ export function StrategyRoutingBuilder({
                         <td className="px-3 py-2">
                           <Select
                             id={`rule_${rule.id}`}
-                            aria-label={`${text(rule.display_name, rule.rule_code)} 绑定策略`}
+                            aria-label={`${text(rule.market_regime_display_name, rule.rule_code)} 绑定策略`}
                             className="block w-full"
                             value={String(bindings[String(rule.id)] ?? 0)}
                             onChange={(event) => setRuleStrategy(rule.id, Number(event.currentTarget.value))}

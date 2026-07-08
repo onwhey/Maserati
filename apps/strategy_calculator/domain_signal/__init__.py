@@ -1,6 +1,17 @@
 """DomainSignal calculator 集合；仅执行纯计算，不读写存储或访问外部服务。"""
 
-from .grouped_atomic_aggregation import GroupedAtomicAggregationCalculator
+from .grouped_atomic_aggregation import (
+    GroupedAtomicAggregationCalculator,
+    GroupedAtomicAggregationV11Calculator,
+    GroupedAtomicAggregationV2Calculator,
+    GroupedAtomicAggregationV3Calculator,
+)
 from .single_atomic_passthrough import SingleAtomicPassthroughCalculator
 
-__all__ = ["GroupedAtomicAggregationCalculator", "SingleAtomicPassthroughCalculator"]
+__all__ = [
+    "GroupedAtomicAggregationCalculator",
+    "GroupedAtomicAggregationV11Calculator",
+    "GroupedAtomicAggregationV2Calculator",
+    "GroupedAtomicAggregationV3Calculator",
+    "SingleAtomicPassthroughCalculator",
+]
