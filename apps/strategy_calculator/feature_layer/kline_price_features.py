@@ -167,6 +167,9 @@ class KlinePriceFeatureCalculator:
             "from_intrabar_high_reversal_pct": self._from_intrabar_high_reversal_pct,
             "from_intrabar_low_recovery_pct": self._from_intrabar_low_recovery_pct,
             "two_bar_opposite_reversal_pct": self._two_bar_opposite_reversal_pct,
+            "bars_since_market_shock": self._bars_since_market_shock,
+            "direction_flip_count": self._direction_flip_count,
+            "cumulative_range_pct": self._cumulative_range_pct,
             "higher_high_count": self._higher_high_count,
             "higher_low_count": self._higher_low_count,
             "lower_high_count": self._lower_high_count,
@@ -456,6 +459,34 @@ class KlinePriceFeatureCalculator:
         if previous_body == 0 or current_body == 0 or (previous_body > 0) == (current_body > 0):
             return Decimal("0")
         return min(abs(previous_body), abs(current_body))
+
+    @staticmethod
+    def _bars_since_market_shock(bars: list[KlineBar], params: dict[str, Any]) -> Decimal:
+        observation_window = _positive_int(params, "window")
+        range_threshold = _decimal(params.get("range_threshold"), "range_threshold")
+        body_threshold = _decimal(params.get("body_threshold"), "body_threshold")
+        if range_threshold <= 0 or body_threshold <= 0:
+            raise FeatureCalculationError("feature_params_invalid", "range_threshold 和 body_threshold 必须大于 0")
+        target = _tail(bars, observation_window + 1)
+        for bars_since, bar in enumerate(reversed(target)):
+            range_pct = _safe_div(bar.high - bar.low, bar.open, "bar_open_non_positive")
+            if range_pct >= range_threshold or abs(_body_return(bar)) >= body_threshold:
+                return Decimal(bars_since)
+        return Decimal(observation_window + 1)
+
+    @staticmethod
+    def _direction_flip_count(bars: list[KlineBar], params: dict[str, Any]) -> Decimal:
+        target = _tail(bars, _positive_int(params, "window"))
+        directions = [1 if bar.close > bar.open else -1 for bar in target if bar.close != bar.open]
+        return Decimal(sum(1 for index in range(1, len(directions)) if directions[index] != directions[index - 1]))
+
+    @staticmethod
+    def _cumulative_range_pct(bars: list[KlineBar], params: dict[str, Any]) -> Decimal:
+        target = _tail(bars, _positive_int(params, "window"))
+        return sum(
+            (_safe_div(bar.high - bar.low, bar.open, "bar_open_non_positive") for bar in target),
+            Decimal("0"),
+        )
 
     @staticmethod
     def _higher_high_count(bars: list[KlineBar], params: dict[str, Any]) -> Decimal:

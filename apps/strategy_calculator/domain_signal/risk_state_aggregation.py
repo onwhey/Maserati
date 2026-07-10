@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from ..contracts import CalculatorMetadata, CalculatorType
@@ -74,11 +74,25 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
         "long_chase_risk": "chase_risk_after_shock",
         "short_chase_risk": "chase_risk_after_shock",
     }
+    _INTRABAR_EXTREME_RANGE_CODE = "risk_intrabar_extreme_range"
+    _DOWN_BODY_SHOCK_CODE = "risk_down_body_shock"
+    _UP_BODY_SHOCK_CODE = "risk_up_body_shock"
+    _BODY_SHOCK_TAGS = {
+        _DOWN_BODY_SHOCK_CODE: "downside_shock",
+        _UP_BODY_SHOCK_CODE: "upside_shock",
+    }
+    _POST_SHOCK_CODE = "risk_post_shock_observation"
+    _HIGH_VOLATILITY_NO_DIRECTION_CODE = "risk_high_volatility_no_direction"
 
     def _risk_state(self, payload: Mapping[str, Any]) -> dict[str, Any]:
         active = payload["active_set"]
         values_by_code = payload["values_by_code"]
         category_scores: dict[str, Decimal] = {category: Decimal("0") for category in self._CATEGORY_NAMES}
+        direction_scores: dict[str, Decimal] = {
+            "upside": Decimal("0"),
+            "downside": Decimal("0"),
+            "two_sided": Decimal("0"),
+        }
         risk_directions: set[str] = set()
         active_risks: list[dict[str, str]] = []
         risk_effect_tags: set[str] = set()
@@ -96,6 +110,8 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
                 category_scores[category] = score
             if direction:
                 risk_directions.add(direction)
+            if direction in direction_scores and score > direction_scores[direction]:
+                direction_scores[direction] = score
             if category:
                 risk_effect_tags.add(category)
             if category in self._DISTORTION_CATEGORIES:
@@ -104,11 +120,37 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
                 risk_effect_tags.add("directional_exposure")
             if category in self._CHASE_CATEGORIES:
                 risk_effect_tags.add("chase_risk")
-            if code == "risk_intrabar_extreme_range":
+            if code == self._INTRABAR_EXTREME_RANGE_CODE:
                 risk_effect_tags.update(
                     {
                         "intrabar_extreme_range",
                         "market_shock",
+                        "signal_distortion",
+                        "two_sided_instability",
+                    }
+                )
+            body_shock_tag = self._BODY_SHOCK_TAGS.get(code)
+            if body_shock_tag:
+                risk_effect_tags.update(
+                    {
+                        "body_shock",
+                        "market_shock",
+                        "signal_distortion",
+                        body_shock_tag,
+                    }
+                )
+            if code == self._POST_SHOCK_CODE:
+                risk_effect_tags.update(
+                    {
+                        "post_shock_observation",
+                        "signal_distortion",
+                    }
+                )
+            if code == self._HIGH_VOLATILITY_NO_DIRECTION_CODE:
+                risk_effect_tags.update(
+                    {
+                        "high_volatility_no_direction",
+                        "direction_instability",
                         "signal_distortion",
                         "two_sided_instability",
                     }
@@ -129,24 +171,27 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
         elevated_categories = [category for category, score in category_scores.items() if score >= Decimal("0.55")]
         dominant_categories = [category for category, score in category_scores.items() if score == risk_score_ratio and score > 0]
 
+        active_codes = set(active)
+        post_shock_context = self._post_shock_context(active_codes=active_codes, values_by_code=values_by_code)
         direction_stability_score = self._direction_stability_score(
             risk_directions=risk_directions,
             signal_distortion_score=signal_distortion_score,
-            elevated_category_count=len(elevated_categories),
+            active_codes=active_codes,
+            values_by_code=values_by_code,
         )
-        unclear = self._is_unclear(category_scores=category_scores, elevated_category_count=len(elevated_categories))
+        unclear = self._is_unclear(direction_scores=direction_scores)
         high_unreliable = signal_distortion_score >= Decimal("0.70")
 
-        if high_unreliable:
-            state_code = "risk_high_signal_unreliable"
-        elif unclear:
+        if unclear:
             state_code = "risk_unclear"
+        elif high_unreliable:
+            state_code = "risk_high_signal_unreliable"
         elif elevated_categories:
             state_code = "risk_elevated_classifiable"
         else:
             state_code = "risk_clear"
 
-        primary_event = self._primary_risk_event(dominant_categories, active_codes=set(active))
+        primary_event = self._primary_risk_event(dominant_categories, active_codes=active_codes)
         risk_score = self._score_to_int(risk_score_ratio)
         market_event_score = risk_score
         distortion_score = self._score_to_int(signal_distortion_score)
@@ -156,6 +201,8 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
             market_event_score=market_event_score,
             signal_distortion_score=distortion_score,
             risk_effect_tags=risk_effect_tags,
+            active_codes=active_codes,
+            post_shock_context=post_shock_context,
         )
         summary = {
             "risk_state": state_code,
@@ -167,10 +214,13 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
             "direction_stability_score": direction_stability_score,
             "primary_risk_event": primary_event,
             "risk_event_phase": event_phase,
-            "post_shock_observation_bars_remaining": 0,
+            "post_shock_observation_bars_remaining": post_shock_context["bars_remaining"],
             "risk_effect_tags": sorted(risk_effect_tags),
             "dominant_risk_categories": dominant_categories,
             "risk_directions": sorted(risk_directions),
+            "risk_direction_scores": {
+                direction: self._score_to_int(score) for direction, score in direction_scores.items()
+            },
             "active_risks": active_risks,
             "active_market_events": active_risks,
             "directional_exposure": self._directional_exposure(category_scores=category_scores),
@@ -187,7 +237,8 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
             "evidence_text_zh": (
                 f"RiskState v2 领域聚合完成：状态为 {state_code}，市场事件分数 {market_event_score}，"
                 f"信号失真分数 {distortion_score}，方向暴露分数 {directional_exposure_score}，"
-                f"主要事件为 {primary_event}。该结论只描述市场冲击、信号可靠性和方向暴露事实，"
+                f"方向稳定分数 {direction_stability_score}，主要事件为 {primary_event}，"
+                f"事件阶段为 {event_phase}。该结论只描述市场冲击、信号可靠性和方向暴露事实，"
                 "不等于停止交易、减仓或下单。"
             ),
         }
@@ -209,34 +260,61 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
         *,
         risk_directions: set[str],
         signal_distortion_score: Decimal,
-        elevated_category_count: int,
+        active_codes: set[str],
+        values_by_code: Mapping[str, Mapping[str, Any]],
     ) -> int:
         directional = {direction for direction in risk_directions if direction in {"upside", "downside"}}
         if "two_sided" in risk_directions or len(directional) >= 2:
-            return 25
-        if signal_distortion_score >= Decimal("0.70"):
-            return 40
-        if signal_distortion_score >= Decimal("0.55") or elevated_category_count >= 3:
-            return 60
-        return 100
+            base_score = 25
+        elif signal_distortion_score >= Decimal("0.70"):
+            base_score = 40
+        elif signal_distortion_score >= Decimal("0.55"):
+            base_score = 60
+        else:
+            base_score = 100
+        if RiskStateAggregationV2Calculator._HIGH_VOLATILITY_NO_DIRECTION_CODE not in active_codes:
+            return base_score
+        flip_count = RiskStateAggregationV2Calculator._atomic_feature_decimal(
+            values_by_code=values_by_code,
+            signal_code=RiskStateAggregationV2Calculator._HIGH_VOLATILITY_NO_DIRECTION_CODE,
+            feature_code="risk_direction_flip_count_4h_8",
+        )
+        efficiency = RiskStateAggregationV2Calculator._atomic_feature_decimal(
+            values_by_code=values_by_code,
+            signal_code=RiskStateAggregationV2Calculator._HIGH_VOLATILITY_NO_DIRECTION_CODE,
+            feature_code="risk_movement_efficiency_4h_8",
+        )
+        observed_scores = [base_score]
+        if flip_count is not None:
+            normalized_flips = min(max(flip_count, Decimal("0")), Decimal("7")) / Decimal("7")
+            observed_scores.append(int(((Decimal("1") - normalized_flips) * Decimal("100")).to_integral_value()))
+        if efficiency is not None:
+            normalized_efficiency = min(max(efficiency, Decimal("0")), Decimal("1"))
+            observed_scores.append(int((normalized_efficiency * Decimal("100")).to_integral_value()))
+        return min(observed_scores)
 
     @staticmethod
-    def _is_unclear(*, category_scores: Mapping[str, Decimal], elevated_category_count: int) -> bool:
+    def _is_unclear(*, direction_scores: Mapping[str, Decimal]) -> bool:
+        upside_score = direction_scores.get("upside", Decimal("0"))
+        downside_score = direction_scores.get("downside", Decimal("0"))
         return (
-            category_scores["long_exposure_risk"] >= Decimal("0.55")
-            and category_scores["short_exposure_risk"] >= Decimal("0.55")
-        ) or (
-            category_scores["long_chase_risk"] >= Decimal("0.55")
-            and category_scores["short_chase_risk"] >= Decimal("0.55")
-        ) or (
-            category_scores["false_breakout_risk"] >= Decimal("0.55")
-            and category_scores["false_breakdown_risk"] >= Decimal("0.55")
-        ) or elevated_category_count >= 3
+            upside_score >= Decimal("0.55")
+            and downside_score >= Decimal("0.55")
+            and upside_score == downside_score
+        )
 
     @classmethod
     def _primary_risk_event(cls, dominant_categories: list[str], *, active_codes: set[str]) -> str:
-        if "risk_intrabar_extreme_range" in active_codes and "signal_reliability_risk" in dominant_categories:
+        if cls._DOWN_BODY_SHOCK_CODE in active_codes:
+            return "extreme_down_shock"
+        if cls._UP_BODY_SHOCK_CODE in active_codes:
+            return "extreme_up_shock"
+        if cls._INTRABAR_EXTREME_RANGE_CODE in active_codes and "signal_reliability_risk" in dominant_categories:
             return "intrabar_extreme_range_event"
+        if cls._HIGH_VOLATILITY_NO_DIRECTION_CODE in active_codes:
+            return "high_volatility_no_direction"
+        if cls._POST_SHOCK_CODE in active_codes:
+            return "post_shock_observation"
         for category in (
             "signal_reliability_risk",
             "market_disorder_risk",
@@ -275,11 +353,64 @@ class RiskStateAggregationV2Calculator(GroupedAtomicAggregationCalculator):
         market_event_score: int,
         signal_distortion_score: int,
         risk_effect_tags: set[str],
+        active_codes: set[str],
+        post_shock_context: Mapping[str, int],
     ) -> str:
-        if "market_shock" in risk_effect_tags and market_event_score >= 70:
+        if "market_shock" in risk_effect_tags:
             return "shock_active"
+        if RiskStateAggregationV2Calculator._POST_SHOCK_CODE in active_codes:
+            if post_shock_context["bars_since"] <= 3:
+                return "post_shock_observation"
+            return "cooling"
         if signal_distortion_score >= 70:
             return "signal_distortion_active"
         if market_event_score >= 70:
             return "risk_event_active"
         return "none"
+
+    @classmethod
+    def _post_shock_context(
+        cls,
+        *,
+        active_codes: set[str],
+        values_by_code: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, int]:
+        if cls._POST_SHOCK_CODE not in active_codes:
+            return {"bars_since": 0, "bars_remaining": 0}
+        bars_since_value = cls._atomic_feature_decimal(
+            values_by_code=values_by_code,
+            signal_code=cls._POST_SHOCK_CODE,
+            feature_code="risk_bars_since_market_shock_4h_6",
+        )
+        item = values_by_code.get(cls._POST_SHOCK_CODE, {})
+        value_json = item.get("value_json") if isinstance(item, Mapping) else None
+        raw_window = value_json.get("observation_window_bars") if isinstance(value_json, Mapping) else None
+        try:
+            window = int(raw_window)
+        except (TypeError, ValueError):
+            window = 0
+        bars_since = int(bars_since_value) if bars_since_value is not None else 0
+        return {
+            "bars_since": bars_since,
+            "bars_remaining": max(window - bars_since, 0),
+        }
+
+    @staticmethod
+    def _atomic_feature_decimal(
+        *,
+        values_by_code: Mapping[str, Mapping[str, Any]],
+        signal_code: str,
+        feature_code: str,
+    ) -> Decimal | None:
+        item = values_by_code.get(signal_code, {})
+        value_json = item.get("value_json") if isinstance(item, Mapping) else None
+        feature_values = value_json.get("feature_values") if isinstance(value_json, Mapping) else None
+        feature_item = feature_values.get(feature_code) if isinstance(feature_values, Mapping) else None
+        raw_value = feature_item.get("value") if isinstance(feature_item, Mapping) else None
+        if raw_value is None or isinstance(raw_value, bool):
+            return None
+        try:
+            value = Decimal(str(raw_value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return value if value.is_finite() else None

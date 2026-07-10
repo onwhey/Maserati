@@ -744,3 +744,8 @@ def test_seed_domain_signal_definitions_is_idempotent() -> None:
     assert structure.allowed_atomic_signal_codes
     assert all(code.startswith("structure_pivot_") for code in structure.allowed_atomic_signal_codes)
     assert "structure_major_support_holds" not in structure.allowed_atomic_signal_codes
+    risk_state = DomainSignalDefinition.objects.get(domain_code="risk_state")
+    assert risk_state.algorithm_name == "risk_state_aggregation"
+    assert risk_state.algorithm_version == "2.0.0"
+    assert "risk_down_body_shock" in risk_state.allowed_atomic_signal_codes
+    assert "risk_up_body_shock" in risk_state.allowed_atomic_signal_codes

@@ -12,7 +12,9 @@ RiskState v2 的核心目标不是预测涨跌，也不是替代风控，而是�
 
 换句话说，RiskState v2 是市场事实链路里的“信号可靠性与市场混乱度识别层”。
 
-它消费同一版本包内已选中的 `risk_state` AtomicSignalValue，生成一份 `risk_state` DomainSignalValue，为 MarketRegime 和 StrategySignal 提供风险上下文。
+它消费同一版本包内已选中的 `risk_state` AtomicSignalValue，生成一份 `risk_state` DomainSignalValue，为后续 MarketRegime 复验提供风险上下文。
+
+当前阶段只补全 RiskState 领域事实，不开发 MarketRegime 消费逻辑，也不进入 StrategySignal。StrategySignal 是否以及如何消费 RiskState，必须等领域层复核和 MarketRegime 主环境边界稳定后另行验收。
 
 本文档回答：
 
@@ -243,6 +245,44 @@ v2 的 `payload_summary` 至少应包含：
 更长周期累计冲击风险。
 ```
 
+## 5.2 第二轮正式开发范围
+
+RiskState v2 第二轮只实现两类缺失事实：
+
+```text
+1. 极端冲击后观察期；
+2. 高波动无方向 / 方向稳定性不足。
+```
+
+第二轮不新增 RiskState v2.1 或 v3，不修改四类 `state_code`，新增信息仍通过 v2 的分数、事件阶段和标签表达。
+
+第二轮不负责：
+
+```text
+修改 MarketRegime 分类算法；
+新增或删除 MarketRegime 主环境；
+读取上一周期 MarketRegime；
+决定主趋势延续或反转；
+开发 StrategySignal 消费规则；
+生成不交易、减仓、空仓等策略动作；
+实现更长周期累计冲击风险。
+```
+
+第二轮开始编码前，Feature / AtomicSignal 必须先能在“当前 MarketSnapshot 所携带的历史窗口”中提供以下最小事实：
+
+```text
+最近一次极端冲击距离当前多少根已收盘 4h K；
+冲击后是否出现新的极端振幅、假突破、假跌破或双向扫动；
+最近固定窗口内方向切换次数；
+最近固定窗口内方向一致性；
+最近固定窗口内累计收益与累计振幅；
+最近固定窗口内趋势效率或等价的方向稳定性事实。
+```
+
+RiskState DomainSignal 只聚合这些原子事实。若第二轮所需原子没有纳入版本包，应按依赖完整性规则阻断该 RiskState v2 定义的发布或计算，不得把证据缺失伪装成 `risk_clear`。
+
+第二轮中的窗口长度、阈值和严重程度必须由对应 Feature / AtomicSignal 定义冻结并可追溯；不得在 DomainSignal 聚合器中重复计算 K 线或另藏一套阈值。
+
 字段语义：
 
 | 字段 | 含义 |
@@ -256,6 +296,7 @@ v2 的 `payload_summary` 至少应包含：
 | `risk_effect_tags` | 下游可消费的风险效果标签 |
 | `dominant_risk_categories` | 当前主导风险类别 |
 | `risk_directions` | 风险方向，不等于交易方向 |
+| `risk_direction_scores` | 上行、下行、双向风险事实各自的最高强度，0-100 |
 | `evidence_items` | 人工复核证据 |
 
 ## 6. 风险事件生命周期
@@ -275,6 +316,26 @@ resolved。
 ### 6.1 shock_active
 
 当前 4h K 线本身已经构成极端冲击。
+
+当前市场冲击采用以下领域层“或者”关系：
+
+```text
+单根 4h 振幅 >= 7%；
+或单根 4h 开盘到收盘实体跌幅 >= 4%；
+或单根 4h 开盘到收盘实体涨幅 >= 4%。
+```
+
+这三类事实必须由三个独立 AtomicSignal 表达，RiskState 只负责聚合。任何一个原子成立，当前 `risk_event_phase` 都必须为 `shock_active`，不得因事件分数低于 high、实体占比不足或收盘位置不够靠近极值而回落为 `none` / `risk_clear`。
+
+收盘位置只用于进一步区分：
+
+```text
+是否更像向下杀跌还是下探收回；
+是否形成多头 / 空头方向暴露风险；
+是否存在急跌追空 / 急涨追多风险。
+```
+
+它不负责否定“当根已经发生明显实体冲击”这一客观事实。
 
 典型事实：
 
@@ -569,9 +630,10 @@ signal_distortion_score < 20；
 满足：
 
 ```text
-20 <= risk_score < 50；
+至少一类风险事实达到 elevated；
 风险方向或风险类别清楚；
 没有严重信号失真；
+不存在强度相同的上下方向风险冲突；
 MarketRegime 仍可正常分类，但应保留风险上下文。
 ```
 
@@ -597,14 +659,33 @@ signal_distortion_score >= 75；
 
 ### 12.4 risk_unclear
 
-满足任一：
+只在上下方向风险事实真实冲突且没有主次时成立：
 
 ```text
-风险类别互相冲突；
-方向稳定性极低但未达到 high_signal_unreliable；
-多类 elevated 风险并存且无主导；
-证据不足以判断是可分类冲击还是混乱行情。
+上行方向分数 >= 55；
+下行方向分数 >= 55；
+上行方向分数 = 下行方向分数。
 ```
+
+补充规则：
+
+```text
+同方向同时出现多类风险，不构成 risk_unclear；
+一边 high、另一边 elevated，存在明确主次，不构成 risk_unclear；
+只有 two_sided 风险而没有相反的上行 / 下行事实，不构成 risk_unclear；
+上下两边同为 elevated，或上下两边同为 high，才属于无主次的方向冲突；
+risk_unclear 的优先级高于 risk_high_signal_unreliable，但 risk_score 和 signal_distortion_score 仍保留真实强度。
+```
+
+例如，同一次下行实体冲击同时产生：
+
+```text
+下行市场冲击；
+多头方向暴露风险；
+急跌后追空风险。
+```
+
+三者都来自同一向下事件，必须聚合为 `risk_elevated_classifiable` 或 `risk_high_signal_unreliable`，不得仅因风险类别数量达到三类而输出 `risk_unclear`。
 
 ## 13. 假突破 / 假跌破聚合要求
 
@@ -732,9 +813,36 @@ post_shock_observation → 不应把冲击后的下一根普通 K 线立即当�
 
 MarketRegime 不得用 Volatility 临时代替 RiskState。
 
-## 18. 与 StrategySignal 的关系
+### 17.1 与“主环境 / 当前事件”新边界的兼容性
 
-StrategySignal 可以消费 RiskState v2 的风险事实，例如：
+RiskState v2 不负责改写日线级主环境。
+
+同一周期允许同时成立：
+
+```text
+主环境：多头回调；
+RiskState：下行极端冲击后的观察期。
+```
+
+也允许同时成立：
+
+```text
+主环境：空头反弹；
+RiskState：高波动无方向，普通信号可靠性低。
+```
+
+两者回答的是不同问题：
+
+```text
+MarketRegime 主环境回答：当前处于哪一种可持续行情阶段；
+RiskState 回答：当前冲击、混乱和信号失真程度有多高。
+```
+
+因此，RiskState 可以让后续 MarketRegime 降低置信度或承认当前证据不足，但不得直接输出“转多”“转空”“趋势延续”“趋势反转”，也不得自行覆盖 MarketRegime 主环境。
+
+## 18. 与 StrategySignal 的未来关系（当前不开发）
+
+领域层和 MarketRegime 完成复核后，StrategySignal 可以再单独设计如何消费 RiskState v2 的风险事实，例如：
 
 ```text
 看到 long_exposure_risk 高时，降低多头信号置信度；
@@ -744,6 +852,8 @@ StrategySignal 可以消费 RiskState v2 的风险事实，例如：
 ```
 
 但 RiskState 自己不得输出策略动作。
+
+上述内容只用于保留未来边界，不属于 RiskState v2 第二轮的开发和验收范围。
 
 ## 19. evidence_text_zh 要求
 
@@ -768,6 +878,9 @@ RiskState v2 必须输出人能看懂的中文解释。
 ```text
 无风险原子成立 → risk_clear；
 单根 4h 下行极端冲击 → risk_elevated_classifiable 或 risk_high_signal_unreliable，payload 包含 down_shock；
+单根实体跌幅达到 4%、振幅不足 7%、收盘位置为 0.385 → 仍须识别 extreme_down_shock，risk_event_phase 为 shock_active，不得 risk_clear；
+单根实体涨幅达到 4%、振幅不足 7%、收盘位置未靠近最高点 → 仍须识别 extreme_up_shock，risk_event_phase 为 shock_active，不得 risk_clear；
+收盘位置条件只影响方向暴露和追单风险原子，不得否定当前市场冲击；
 极端冲击后第 1-3 根 4h → post_shock_observation，不得立即 risk_clear；
 冲击后波动下降、方向稳定 → cooling / resolved；
 假突破 elevated → risk_score 上升，不得 risk_clear；
@@ -777,7 +890,10 @@ RiskState v2 必须输出人能看懂的中文解释。
 高波动无方向 → risk_high_signal_unreliable 或 risk_unclear，payload 包含 high_volatility_no_direction；
 方向稳定但单边强冲击 → risk_elevated_classifiable，而不是默认 risk_unclear；
 双向扫动 high → risk_high_signal_unreliable；
-多类风险 elevated 且无主导 → risk_unclear；
+同方向三类风险同时成立 → 不得 risk_unclear；
+上下方向风险同为 elevated → risk_unclear；
+上下方向风险同为 high → risk_unclear，并保留 100 分风险强度；
+一边 high、另一边 elevated → 存在明确主次，不得 risk_unclear；
 coverage_ratio 低于阈值 → failed，不得伪装 risk_clear；
 risk_score、signal_distortion_score、direction_stability_score 可复算；
 evidence_text_zh 不得输出交易建议。
@@ -809,11 +925,13 @@ evidence_text_zh 不得输出交易建议。
 
 ## 22. 后续实现切片
 
-建议分三步实现：
+RiskState v2 按以下切片推进：
 
 ### 22.1 聚合器修复切片
 
-先修复：
+状态：已完成第一轮实现并完成基础回测复核。
+
+已实现：
 
 ```text
 false_breakout_risk；
@@ -826,7 +944,9 @@ risk_effect_tags。
 
 ### 22.2 冲击生命周期切片
 
-再新增：
+状态：当根冲击与生命周期已由回测 107 / 108 验证；同方向多类风险误判为 `risk_unclear` 的聚合修复已完成自动化回归，待复跑 107 对应窗口验证落库结果。
+
+本切片新增：
 
 ```text
 extreme_down_shock；
@@ -836,9 +956,13 @@ cooling；
 resolved。
 ```
 
+通过标准：当根振幅达到 7% 或实体涨跌幅绝对值达到 4%，任一成立都必须进入 `shock_active`；极端冲击后的下一根普通 K 线不得立即回到 `risk_clear`；观察期、冷却期和解除状态必须由当前历史窗口中的原子事实复算得到，不读取上一轮 DomainSignal。
+
 ### 22.3 高波动无方向切片
 
-最后新增：
+状态：代码已实现，待新版本包回测验证。
+
+本切片新增：
 
 ```text
 high_volatility_no_direction；
@@ -847,6 +971,8 @@ recent_direction_flip_count；
 recent_trend_efficiency_ratio；
 方向随机但波动大的识别。
 ```
+
+通过标准：高波动且方向频繁切换的样本必须提高 `signal_distortion_score` 并降低 `direction_stability_score`；高波动但方向稳定的单边行情不得被误判为无方向混乱。
 
 ## 23. 最终定位
 

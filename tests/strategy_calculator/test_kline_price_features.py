@@ -143,6 +143,107 @@ def test_kline_price_features_calculates_risk_state_large_body_count() -> None:
     assert count == Decimal("3")
 
 
+def test_kline_price_features_calculates_bars_since_market_shock() -> None:
+    bars = _bars(7, start_close=Decimal("100"), step=Decimal("0"))
+    bars[-3].update({"open": "100", "high": "108", "low": "100", "close": "102"})
+
+    bars_since = _value(
+        {
+            "operation": "bars_since_market_shock",
+            "timeframe": "4h",
+            "window": 6,
+            "range_threshold": "0.07",
+            "body_threshold": "0.04",
+        },
+        bars_4h=bars,
+    )
+
+    assert bars_since == Decimal("2")
+
+
+def test_kline_price_features_treats_large_body_as_market_shock_without_extreme_range() -> None:
+    bars = _bars(7, start_close=Decimal("100"), step=Decimal("0"))
+    bars[-2].update({"open": "100", "high": "101", "low": "95", "close": "95.5"})
+
+    bars_since = _value(
+        {
+            "operation": "bars_since_market_shock",
+            "timeframe": "4h",
+            "window": 6,
+            "range_threshold": "0.07",
+            "body_threshold": "0.04",
+        },
+        bars_4h=bars,
+    )
+
+    assert bars_since == Decimal("1")
+
+
+def test_kline_price_features_marks_current_large_body_as_current_market_shock() -> None:
+    bars = _bars(7, start_close=Decimal("100"), step=Decimal("0"))
+    bars[-1].update(
+        {
+            "open": "78094.2",
+            "high": "78101.5",
+            "low": "72889.2",
+            "close": "74893.8",
+        }
+    )
+
+    bars_since = _value(
+        {
+            "operation": "bars_since_market_shock",
+            "timeframe": "4h",
+            "window": 6,
+            "range_threshold": "0.07",
+            "body_threshold": "0.04",
+        },
+        bars_4h=bars,
+    )
+
+    assert (Decimal("78101.5") - Decimal("72889.2")) / Decimal("78094.2") < Decimal("0.07")
+    assert (Decimal("74893.8") - Decimal("78094.2")) / Decimal("78094.2") <= Decimal("-0.04")
+    assert bars_since == Decimal("0")
+
+
+def test_kline_price_features_returns_sentinel_when_recent_market_shock_is_absent() -> None:
+    bars = _bars(7, start_close=Decimal("100"), step=Decimal("0"))
+
+    bars_since = _value(
+        {
+            "operation": "bars_since_market_shock",
+            "timeframe": "4h",
+            "window": 6,
+            "range_threshold": "0.07",
+            "body_threshold": "0.04",
+        },
+        bars_4h=bars,
+    )
+
+    assert bars_since == Decimal("7")
+
+
+def test_kline_price_features_calculates_direction_flips_and_cumulative_range() -> None:
+    bars = _bars(8, start_close=Decimal("100"), step=Decimal("0"))
+    for index, bar in enumerate(bars):
+        bar.update(
+            {
+                "open": "100",
+                "high": "102",
+                "low": "98",
+                "close": "101" if index % 2 == 0 else "99",
+            }
+        )
+
+    flip_count = _value({"operation": "direction_flip_count", "timeframe": "4h", "window": 8}, bars_4h=bars)
+    range_sum = _value({"operation": "cumulative_range_pct", "timeframe": "4h", "window": 8}, bars_4h=bars)
+    efficiency = _value({"operation": "movement_efficiency", "timeframe": "4h", "window": 8}, bars_4h=bars)
+
+    assert flip_count == Decimal("7")
+    assert range_sum == Decimal("0.32")
+    assert efficiency == Decimal("1") / Decimal("7")
+
+
 def test_kline_price_features_calculates_structure_zone_metrics() -> None:
     bars = _bars(20, start_close=Decimal("100"), step=Decimal("0.2"))
     bars[4]["low"] = "95"

@@ -268,16 +268,19 @@ def _risk(
     severity_conditions: Iterable[Mapping[str, Any]] = (),
     include_feature_values: Iterable[str] = (),
     aggregation: str = "all",
+    json_payload_extra: Mapping[str, Any] | None = None,
 ) -> AtomicSignalDefinitionTemplate:
+    json_payload = {
+        "risk_category": risk_category,
+        "risk_direction": risk_direction,
+        "risk_severity": "none",
+        **dict(json_payload_extra or {}),
+    }
     extra_params: dict[str, Any] = {
         "value_mode": "json",
         "base_severity": "elevated",
         "high_severity": "high",
-        "json_payload": {
-            "risk_category": risk_category,
-            "risk_direction": risk_direction,
-            "risk_severity": "none",
-        },
+        "json_payload": json_payload,
         "severity_conditions": [dict(condition) for condition in severity_conditions],
     }
     included = [str(code) for code in include_feature_values if str(code).strip()]
@@ -718,6 +721,26 @@ def _risk_state() -> tuple[AtomicSignalDefinitionTemplate, ...]:
             severity_conditions=[_c("candle_range_pct_4h_latest", "gte", "0.07")],
             include_feature_values=["candle_range_pct_4h_latest"],
         ),
+        _risk(
+            "risk_down_body_shock",
+            risk_category="signal_reliability_risk",
+            risk_direction="downside",
+            conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.04")],
+            label_zh="单根 4h 下行实体冲击",
+            severity_conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.07")],
+            include_feature_values=["risk_latest_body_return_pct_4h"],
+            json_payload_extra={"risk_event_type": "extreme_down_shock"},
+        ),
+        _risk(
+            "risk_up_body_shock",
+            risk_category="signal_reliability_risk",
+            risk_direction="upside",
+            conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.04")],
+            label_zh="单根 4h 上行实体冲击",
+            severity_conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.07")],
+            include_feature_values=["risk_latest_body_return_pct_4h"],
+            json_payload_extra={"risk_event_type": "extreme_up_shock"},
+        ),
         _risk("risk_short_chase_after_down_shock", risk_category="short_chase_risk", risk_direction="downside", conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.04"), _c("atr_percentile_4h_120", "gte", "0.80"), _c("risk_latest_close_location_ratio_4h", "lte", "0.35")], label_zh="急跌后的追空风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.07"), _c("risk_consecutive_large_bear_body_count_4h_20", "gte", "3")]),
         _risk("risk_long_chase_after_up_shock", risk_category="long_chase_risk", risk_direction="upside", conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.04"), _c("atr_percentile_4h_120", "gte", "0.80"), _c("risk_latest_close_location_ratio_4h", "gte", "0.65")], label_zh="急涨后的追多风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.07"), _c("risk_consecutive_large_bull_body_count_4h_20", "gte", "3")]),
         _risk("risk_false_breakout_rejection", risk_category="false_breakout_risk", risk_direction="upside", conditions=[_c("structure_minor_breakout_above_resistance_pct_4h_120", "gt", "0"), _c("upper_shadow_ratio_4h_latest", "gte", "0.45"), _c("risk_latest_close_location_ratio_4h", "lte", "0.55")], label_zh="向上突破快速失败风险", severity_conditions=[_c("atr_percentile_4h_120", "gte", "0.95"), _c("risk_latest_from_intrabar_high_reversal_pct_4h", "gte", "0.025")]),
@@ -725,6 +748,46 @@ def _risk_state() -> tuple[AtomicSignalDefinitionTemplate, ...]:
         _risk("risk_consecutive_down_disorder", risk_category="market_disorder_risk", risk_direction="downside", conditions=[_c("risk_consecutive_large_bear_body_count_4h_20", "gte", "3"), _c("risk_cumulative_return_pct_4h_3", "lte", "-0.08")], label_zh="连续急跌导致市场扰动", severity_conditions=[_c("atr_percentile_4h_120", "gte", "0.95"), _c("realized_vol_percentile_4h_120", "gte", "0.95")], aggregation="any"),
         _risk("risk_consecutive_up_disorder", risk_category="market_disorder_risk", risk_direction="upside", conditions=[_c("risk_consecutive_large_bull_body_count_4h_20", "gte", "3"), _c("risk_cumulative_return_pct_4h_3", "gte", "0.08")], label_zh="连续急涨导致市场扰动", severity_conditions=[_c("atr_percentile_4h_120", "gte", "0.95"), _c("realized_vol_percentile_4h_120", "gte", "0.95")], aggregation="any"),
         _risk("risk_two_sided_whipsaw", risk_category="signal_reliability_risk", risk_direction="two_sided", conditions=[_c("upper_shadow_ratio_4h_latest", "gte", "0.45"), _c("lower_shadow_ratio_4h_latest", "gte", "0.35"), _c("atr_percentile_4h_120", "gte", "0.80")], label_zh="双向剧烈扫动风险", severity_conditions=[_c("atr_percentile_4h_120", "gte", "0.95"), _c("realized_vol_percentile_4h_120", "gte", "0.95")]),
+        _risk(
+            "risk_post_shock_observation",
+            risk_category="signal_reliability_risk",
+            risk_direction="two_sided",
+            conditions=[
+                _c("risk_bars_since_market_shock_4h_6", "gte", "1"),
+                _c("risk_bars_since_market_shock_4h_6", "lte", "6"),
+            ],
+            label_zh="极端冲击后观察期",
+            severity_conditions=[_c("risk_bars_since_market_shock_4h_6", "lte", "3")],
+            include_feature_values=["risk_bars_since_market_shock_4h_6"],
+            json_payload_extra={
+                "risk_event_type": "post_shock_observation",
+                "observation_window_bars": 6,
+            },
+        ),
+        _risk(
+            "risk_high_volatility_no_direction",
+            risk_category="market_disorder_risk",
+            risk_direction="two_sided",
+            conditions=[
+                _c("realized_vol_percentile_4h_120", "gte", "0.80"),
+                _c("risk_direction_flip_count_4h_8", "gte", "4"),
+                _c("risk_movement_efficiency_4h_8", "lte", "0.35"),
+            ],
+            label_zh="高波动无方向",
+            severity_conditions=[
+                _c("realized_vol_percentile_4h_120", "gte", "0.95"),
+                _c("risk_direction_flip_count_4h_8", "gte", "6"),
+                _c("risk_movement_efficiency_4h_8", "lte", "0.20"),
+            ],
+            include_feature_values=[
+                "realized_vol_percentile_4h_120",
+                "risk_direction_flip_count_4h_8",
+                "risk_movement_efficiency_4h_8",
+                "risk_cumulative_return_pct_4h_8",
+                "risk_cumulative_range_pct_4h_8",
+            ],
+            json_payload_extra={"risk_event_type": "high_volatility_no_direction"},
+        ),
     )
 
 

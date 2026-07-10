@@ -197,6 +197,12 @@ high。
 | ATR 极高分位阈值 | 0.95 | atr_percentile_4h_120 >= 0.95 |
 | 连续大实体阈值 | 3 | 连续大阳 / 大阴达到 3 根 |
 | 结构突破 / 跌破有效幅度 | 0.4% | 使用 4h 小结构默认突破 / 跌破阈值 |
+| 冲击后观察窗口 | 6 根 4h | 最近一次极端振幅事件的观察范围 |
+| 观察期高严重度范围 | 冲击后 1-3 根 4h | 距离冲击越近，普通信号失真风险越高 |
+| 无方向识别窗口 | 8 根 4h | 统计方向切换和移动效率 |
+| 方向切换阈值 | 4 次 | 最近 8 根出现至少 4 次实体方向切换 |
+| 移动效率上限 | 0.35 | 净位移相对路径较小 |
+| 高波动分位阈值 | 0.80 | realized_vol_percentile_4h_120 >= 0.80 |
 
 这些参数属于对应 AtomicSignalDefinition 的默认参数。后续调整必须新增原子信号版本。
 
@@ -522,6 +528,133 @@ candle_range_pct_4h_latest >= 7.0%
 
 这个原子用于补足“只看开盘到收盘涨跌幅会漏掉极端盘中波动”的缺口。
 
+### 6.11 单根 4h 下行实体冲击
+
+```text
+signal_code = risk_down_body_shock
+risk_category = signal_reliability_risk
+risk_direction = downside
+risk_event_type = extreme_down_shock
+```
+
+成立条件：
+
+```text
+risk_latest_body_return_pct_4h <= -4.0%
+```
+
+强化条件：
+
+```text
+risk_latest_body_return_pct_4h <= -7.0%
+```
+
+业务含义：
+
+```text
+最新 4h 从开盘到收盘已经形成明显下行实体冲击；
+该事实本身构成当前市场冲击，不再由实体占比或收盘位置否定；
+实体占比和收盘位置只由多头暴露、追空风险等更具体的原子继续解释。
+```
+
+### 6.12 单根 4h 上行实体冲击
+
+```text
+signal_code = risk_up_body_shock
+risk_category = signal_reliability_risk
+risk_direction = upside
+risk_event_type = extreme_up_shock
+```
+
+成立条件：
+
+```text
+risk_latest_body_return_pct_4h >= 4.0%
+```
+
+强化条件：
+
+```text
+risk_latest_body_return_pct_4h >= 7.0%
+```
+
+业务含义：
+
+```text
+最新 4h 从开盘到收盘已经形成明显上行实体冲击；
+该事实本身构成当前市场冲击，不再由实体占比或收盘位置否定；
+实体占比和收盘位置只由空头暴露、追多风险等更具体的原子继续解释。
+```
+
+### 6.13 极端冲击后观察期
+
+```text
+signal_code = risk_post_shock_observation
+risk_category = signal_reliability_risk
+risk_direction = two_sided
+risk_event_type = post_shock_observation
+observation_window_bars = 6
+```
+
+成立条件：
+
+```text
+risk_bars_since_market_shock_4h_6 >= 1
+且 risk_bars_since_market_shock_4h_6 <= 6。
+```
+
+强化条件：
+
+```text
+risk_bars_since_market_shock_4h_6 <= 3。
+```
+
+业务含义：
+
+```text
+最近 6 根已收盘 4h 内发生过市场冲击，但当前 K 本身不是该冲击 K；
+市场冲击包括单根振幅达到 7%，或开盘到收盘实体涨跌幅绝对值达到 4%；
+市场仍可能处于冲击影响、信号失真或冷却过程；
+它不延续上一轮 DomainSignal，而是每轮根据当前冻结历史窗口重新计算。
+```
+
+它不表示主趋势已经改变，也不表示必须暂停、平仓或空仓。
+
+### 6.14 高波动无方向
+
+```text
+signal_code = risk_high_volatility_no_direction
+risk_category = market_disorder_risk
+risk_direction = two_sided
+risk_event_type = high_volatility_no_direction
+```
+
+成立条件：
+
+```text
+realized_vol_percentile_4h_120 >= 0.80
+且 risk_direction_flip_count_4h_8 >= 4
+且 risk_movement_efficiency_4h_8 <= 0.35。
+```
+
+强化条件满足任一：
+
+```text
+realized_vol_percentile_4h_120 >= 0.95；
+risk_direction_flip_count_4h_8 >= 6；
+risk_movement_efficiency_4h_8 <= 0.20。
+```
+
+业务含义：
+
+```text
+最近 8 根 4h 波动处于高位，但涨跌交替频繁、方向推进效率低；
+当前更接近高波动无方向，而不是稳定单边趋势；
+该原子只表达普通趋势、突破、跌破信号容易失真。
+```
+
+高波动但方向稳定、移动效率较高的单边行情不得触发该原子。
+
 ## 7. 不应放入 risk_state AtomicSignal 的判断
 
 禁止：
@@ -567,6 +700,12 @@ AtomicSignal 不直接输出这些领域状态。
 连续 3 根大阴线 → consecutive_down_disorder 成立；
 连续 3 根大阳线 → consecutive_up_disorder 成立；
 长上下影且 ATR 高分位 → two_sided_whipsaw 成立；
+4h 实体跌幅达到 4%，即使收盘位置为 0.385、振幅不足 7% → down_body_shock 成立；
+4h 实体涨幅达到 4%，即使收盘位置未靠近最高点、振幅不足 7% → up_body_shock 成立；
+实体冲击原子成立与否不得依赖实体占比或收盘位置；
+任一市场冲击发生后的第 1-6 根 4h → post_shock_observation 成立，当前冲击 K 不重复成立；
+最近 8 根高波动、方向切换至少 4 次且移动效率低 → high_volatility_no_direction 成立；
+高波动但方向稳定、移动效率高 → high_volatility_no_direction 不成立；
 同一基础 FeatureValue 被多个原子复用，不重复计算；
 不读取账户、持仓、订单、成交、PriceSnapshot、Binance 或大模型；
 不输出交易动作或目标仓位。

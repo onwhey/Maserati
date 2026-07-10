@@ -309,6 +309,11 @@ DEFAULT_FEATURE_DEFINITIONS: tuple[FeatureDefinitionTemplate, ...] = (
     _feature("risk_latest_from_intrabar_high_reversal_pct_4h", operation="from_intrabar_high_reversal_pct", timeframe="4h"),
     _feature("risk_latest_from_intrabar_low_recovery_pct_4h", operation="from_intrabar_low_recovery_pct", timeframe="4h"),
     _feature("risk_two_bar_opposite_reversal_pct_4h", operation="two_bar_opposite_reversal_pct", timeframe="4h"),
+    _feature("risk_bars_since_market_shock_4h_6", operation="bars_since_market_shock", timeframe="4h", window=6, range_threshold="0.07", body_threshold="0.04"),
+    _feature("risk_direction_flip_count_4h_8", operation="direction_flip_count", timeframe="4h", window=8),
+    _feature("risk_movement_efficiency_4h_8", operation="movement_efficiency", timeframe="4h", window=8),
+    _feature("risk_cumulative_return_pct_4h_8", operation="cumulative_return_pct", timeframe="4h", window=8),
+    _feature("risk_cumulative_range_pct_4h_8", operation="cumulative_range_pct", timeframe="4h", window=8),
     # structure：支撑压力、区间和位置事实
     _feature("structure_major_latest_close_1d", operation="latest_close", timeframe="1d"),
     _feature("structure_minor_latest_close_4h", operation="latest_close", timeframe="4h"),
