@@ -204,27 +204,26 @@ function BacktestPeriodTable({
   const columns: Array<{ key: string; label: string; render?: (row: Record<string, unknown>) => ReactNode }> = [
     { key: "period_index", label: "序号" },
     { key: "analysis_close_time_utc", label: "UTC 周期", render: (row) => formatUtcMinute(row.analysis_close_time_utc) },
-    { key: "status", label: "状态", render: (row) => statusText(row.status) },
+    { key: "market_regime", label: "市场环境", render: (row) => regimeLabel(row.market_regime) },
+    { key: "current_kline_return_pct", label: "涨幅", render: (row) => <ReturnPercent value={row.current_kline_return_pct} /> },
+    { key: "kline_amplitude_pct", label: "振幅", render: (row) => formatPercent(row.kline_amplitude_pct) },
     { key: "period_return_pct", label: "周期收益", render: (row) => <ReturnPercent value={row.period_return_pct} /> },
-    { key: "selected_strategy", label: "策略", render: (row) => strategyLabel(row.selected_strategy) },
-    { key: "signal_direction", label: "方向", render: (row) => directionLabel(row.signal_direction) },
+    { key: "selected_strategy", label: "策略", render: (row) => strategyLabel(row.selected_strategy_display_name || row.selected_strategy) },
+    { key: "signal_direction", label: "策略信号", render: (row) => directionLabel(row.signal_direction) },
     { key: "previous_position_ratio", label: "调仓前", render: (row) => formatPosition(row.previous_position_ratio) },
     { key: "target_position_ratio", label: "目标仓位", render: (row) => formatPosition(row.target_position_ratio) },
-    { key: "effective_position_ratio", label: "有效仓位", render: (row) => formatPosition(row.effective_position_ratio) },
     { key: "position_change_ratio", label: "仓位变化", render: (row) => positionChangeText(row.position_change_ratio) },
-    { key: "effective_position_change_ratio", label: "有效变化", render: (row) => positionChangeText(row.effective_position_change_ratio) },
     { key: "position_change_notional", label: "变化金额", render: (row) => signedDecimal(row.position_change_notional, 2) },
     { key: "effective_position_notional", label: "有效名义金额", render: (row) => signedDecimal(row.effective_position_notional, 2) },
     { key: "simulated_execution_price", label: "模拟成交价", render: (row) => formatDecimal(row.simulated_execution_price, 2) },
     { key: "close_price", label: "收盘价", render: (row) => formatDecimal(row.close_price, 2) },
     { key: "liquidation_price", label: "估算强平价", render: (row) => formatDecimal(row.liquidation_price, 2) },
-    { key: "kline_return_pct", label: "K线涨跌", render: (row) => formatPercent(row.kline_return_pct) },
     { key: "fee", label: "手续费", render: (row) => formatDecimal(row.fee, 4) },
     { key: "equity", label: "权益", render: (row) => formatDecimal(row.equity, 2) },
     { key: "reason_code", label: "原因", render: (row) => reasonLabel(row.reason_code) },
   ];
   const gridTemplateColumns =
-    "70px 170px 100px 110px 150px 80px 90px 100px 100px 100px 100px 120px 140px 120px 120px 130px 100px 100px 110px 180px";
+    "70px 170px 150px 90px 90px 110px 150px 80px 90px 100px 100px 120px 140px 120px 120px 130px 100px 110px 180px";
   const from = periods.length > 0 ? (page - 1) * pageSize + 1 : 0;
   const to = Math.min((page - 1) * pageSize + periods.length, total);
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -235,7 +234,7 @@ function BacktestPeriodTable({
     <div className="space-y-3">
       <div className="flex flex-col gap-2 text-xs text-muted-foreground md:flex-row md:items-center md:justify-between">
         <div>
-          模拟成交价按该 UTC 4h 周期的开盘价计算，不是真实交易所订单价；仓位变化为目标仓位相对上一周期仓位的变化。
+          涨幅和振幅展示的是该 UTC 边界刚收完的 4h K 线；模拟成交价按下一周期的开盘价计算，不是真实交易所订单价；仓位变化为目标仓位相对上一周期仓位的变化。
           {total > periods.length ? ` 当前展示 ${from}-${to} 条，共 ${total} 条。` : ""}
         </div>
         {totalPages > 1 ? (
@@ -253,7 +252,7 @@ function BacktestPeriodTable({
         ) : null}
       </div>
       <div className="overflow-x-auto rounded-xl border bg-card text-card-foreground">
-        <div className="min-w-[2300px]">
+        <div className="min-w-[2240px]">
           <div
             className="grid h-10 items-center border-b bg-muted/30 text-sm font-medium text-muted-foreground"
             style={{ gridTemplateColumns }}
@@ -481,6 +480,26 @@ function directionLabel(value: unknown): string {
     bearish: "偏空",
     neutral: "中性",
     none: "无方向"
+  };
+  return (labels[text] ?? text) || "—";
+}
+
+function regimeLabel(value: unknown): string {
+  const text = String(value ?? "");
+  const labels: Record<string, string> = {
+    bullish_trend_continuation: "多头趋势延续",
+    bullish_breakout: "多头向上突破",
+    bullish_pullback: "多头回调",
+    bullish_high_range: "多头高位震荡",
+    bearish_trend_continuation: "空头趋势延续",
+    bearish_breakdown: "空头向下跌破",
+    bearish_rebound: "空头反弹",
+    bearish_low_range: "空头低位震荡",
+    bullish_top_reversal_candidate: "多头高位结构受压",
+    bearish_bottom_reversal_candidate: "空头低位结构受压",
+    neutral_range: "无方向震荡",
+    high_risk_environment: "高风险环境",
+    unclear_environment: "不明确环境"
   };
   return (labels[text] ?? text) || "—";
 }

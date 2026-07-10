@@ -266,8 +266,23 @@ def _risk(
     conditions: Iterable[Mapping[str, Any]],
     label_zh: str,
     severity_conditions: Iterable[Mapping[str, Any]] = (),
+    include_feature_values: Iterable[str] = (),
     aggregation: str = "all",
 ) -> AtomicSignalDefinitionTemplate:
+    extra_params: dict[str, Any] = {
+        "value_mode": "json",
+        "base_severity": "elevated",
+        "high_severity": "high",
+        "json_payload": {
+            "risk_category": risk_category,
+            "risk_direction": risk_direction,
+            "risk_severity": "none",
+        },
+        "severity_conditions": [dict(condition) for condition in severity_conditions],
+    }
+    included = [str(code) for code in include_feature_values if str(code).strip()]
+    if included:
+        extra_params["include_feature_values"] = included
     return _atomic(
         signal_code,
         category="risk_state",
@@ -276,17 +291,7 @@ def _risk(
         label_zh=label_zh,
         aggregation=aggregation,
         output_type=AtomicSignalOutputType.JSON,
-        extra_params={
-            "value_mode": "json",
-            "base_severity": "elevated",
-            "high_severity": "high",
-            "json_payload": {
-                "risk_category": risk_category,
-                "risk_direction": risk_direction,
-                "risk_severity": "none",
-            },
-            "severity_conditions": [dict(condition) for condition in severity_conditions],
-        },
+        extra_params=extra_params,
     )
 
 
@@ -704,6 +709,15 @@ def _risk_state() -> tuple[AtomicSignalDefinitionTemplate, ...]:
     return (
         _risk("risk_long_exposure_shock_down", risk_category="long_exposure_risk", risk_direction="downside", conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.04"), _c("candle_body_ratio_4h_latest", "gte", "0.60"), _c("risk_latest_close_location_ratio_4h", "lte", "0.35")], label_zh="下行冲击下的多头暴露风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.07"), _c("atr_percentile_4h_120", "gte", "0.95"), _c("structure_major_breakdown_below_support_pct_1d_365", "gt", "0")]),
         _risk("risk_short_exposure_shock_up", risk_category="short_exposure_risk", risk_direction="upside", conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.04"), _c("candle_body_ratio_4h_latest", "gte", "0.60"), _c("risk_latest_close_location_ratio_4h", "gte", "0.65")], label_zh="上行冲击下的空头暴露风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.07"), _c("atr_percentile_4h_120", "gte", "0.95"), _c("structure_major_breakout_above_resistance_pct_1d_365", "gt", "0")]),
+        _risk(
+            "risk_intrabar_extreme_range",
+            risk_category="signal_reliability_risk",
+            risk_direction="two_sided",
+            conditions=[_c("candle_range_pct_4h_latest", "gte", "0.07")],
+            label_zh="单根 4h 极端振幅事件",
+            severity_conditions=[_c("candle_range_pct_4h_latest", "gte", "0.07")],
+            include_feature_values=["candle_range_pct_4h_latest"],
+        ),
         _risk("risk_short_chase_after_down_shock", risk_category="short_chase_risk", risk_direction="downside", conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.04"), _c("atr_percentile_4h_120", "gte", "0.80"), _c("risk_latest_close_location_ratio_4h", "lte", "0.35")], label_zh="急跌后的追空风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "lte", "-0.07"), _c("risk_consecutive_large_bear_body_count_4h_20", "gte", "3")]),
         _risk("risk_long_chase_after_up_shock", risk_category="long_chase_risk", risk_direction="upside", conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.04"), _c("atr_percentile_4h_120", "gte", "0.80"), _c("risk_latest_close_location_ratio_4h", "gte", "0.65")], label_zh="急涨后的追多风险", severity_conditions=[_c("risk_latest_body_return_pct_4h", "gte", "0.07"), _c("risk_consecutive_large_bull_body_count_4h_20", "gte", "3")]),
         _risk("risk_false_breakout_rejection", risk_category="false_breakout_risk", risk_direction="upside", conditions=[_c("structure_minor_breakout_above_resistance_pct_4h_120", "gt", "0"), _c("upper_shadow_ratio_4h_latest", "gte", "0.45"), _c("risk_latest_close_location_ratio_4h", "lte", "0.55")], label_zh="向上突破快速失败风险", severity_conditions=[_c("atr_percentile_4h_120", "gte", "0.95"), _c("risk_latest_from_intrabar_high_reversal_pct_4h", "gte", "0.025")]),

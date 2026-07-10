@@ -31,10 +31,11 @@ P3 = 研究或观察项
 ## 当前主线
 
 ```text
-MarketRegime 状态延续与切换确认
-→ MarketRegime 如何消费 Structure 支撑/压力事实
-→ RiskState 极端冲击识别与冲击后观察
-→ Strategy 如何消费 MarketRegime / Structure
+领域层积木补全：RiskState 极端冲击、Trend 长短周期职责、Volatility 与 RiskState 联动、成交量确认
+→ 领域层复核通过后，再回到 MarketRegime 消费领域事实
+→ MarketRegime 按“日线级主环境 / 当前事件”重新划分职责
+→ MarketRegime 处理冲击震荡 / 高波动无方向 / 趋势失真环境
+→ Strategy 如何消费 MarketRegime / Structure / RiskState
 → 策略本身是否有效
 → 目标仓位到订单提交的正式后半链路验收
 ```
@@ -44,7 +45,7 @@ MarketRegime 状态延续与切换确认
 | 编号 | 状态 | 优先级 | 事项 | 归属文档 | 下一步 |
 |---|---|---:|---|---|---|
 | TODO-000 | 待复核 | P0 | 复核领域信号六个领域层的实现逻辑 | `docs/plans/domain_signal_review_checklist.md` | 逐一复核 market_context、trend、momentum、volatility、structure、risk_state 的 Feature/Atomic/DomainSignal 口径，确认是否存在“名字过重、算法过粗、主结论误导、可选证据越权”等问题 |
-| TODO-001 | 待补文档 | P0 | 新版支撑/压力算法：用有效局部低点/高点定义结构位 | `docs/plans/structure_v2_evidence_matrix.md` / `docs/requirements/domain_signals/structure_domain_signals_v2.md` | 先写清楚：宽价格聚类区只能叫历史反应区；真正支撑/压力必须来自局部低点/高点，并满足反弹/回落幅度、时间间隔、区间宽度和当前确认条件 |
+| TODO-001 | 已废弃 | P0 | 旧 Structure v2 支撑/压力文档占位 | `docs/plans/structure_v2_evidence_matrix.md` / `docs/requirements/domain_signals/structure_domain_signals_v2.md` | 已由 TODO-016 的拐点型支撑压力 v3 方案替代；不再单独补旧 v2 文档 |
 | TODO-002 | 已完成 | P0 | Structure v2 支撑/压力并存表达验证 | `docs/plans/structure_v2_evidence_matrix.md` | id59 / id60 已完成验证：Structure 输出包含 support_resistance_context，并补充说明“不是单边结构” |
 | TODO-004 | 待补文档 | P1 | 策略插件清单补全，包括保守/标准/进攻/公用策略 | `docs/requirements/strategy_portfolio_templates.md` | 建立 MarketRegime × 策略插件矩阵 |
 | TODO-005 | 暂缓 | P2 | 策略路由后台页面继续简化 | `docs/requirements/ops_console.md` | 等策略插件清单稳定后再改页面 |
@@ -52,10 +53,10 @@ MarketRegime 状态延续与切换确认
 | TODO-007 | 待确认 | P3 | 江恩时间机制作为实验性可选证据块 | 待新建或补充对应 Feature / Atomic 文档 | 先定义到底计算什么、如何验证 |
 | TODO-008 | 暂缓 | P1 | 正式交易后半链路验收 | `docs/plans/trading_execution_implementation_plan.md` | 策略和目标仓位稳定后再验收 |
 | TODO-009 | 暂缓 | P2 | 回测详情复盘页继续增强 | `docs/requirements/strategy_backtest.md` / `docs/requirements/ops_console.md` | 等 Structure / MarketRegime / Strategy 口径稳定后再做 |
-| TODO-010 | 待验证 | P1 | StrategyRouteRule 展示名数据迁移在本地库执行 | `apps/strategy_analysis/migrations/0019_strategy_route_rule_display_names.py` | 执行 `manage.py migrate strategy_analysis` 后确认策略路由页显示来源正确 |
+| TODO-010 | 已完成 | P1 | StrategyRouteRule 展示名数据迁移在本地库执行 | `apps/strategy_analysis/migrations/0019_strategy_route_rule_display_names.py` | 本地策略路由页面已正常显示策略名称；迁移文件继续保留用于新库初始化或旧库数据修正，不再作为待办挂起 |
 | TODO-011 | 暂缓 | P3 | MarketRegime 定义是否需要数据库化和后台管理 | `docs/requirements/strategy_routing.md` | 只有当 MarketRegime 需要后台编辑时再单独设计，目前保持代码契约 |
 | TODO-012 | 已完成 | P0 | MarketRegime v5 结构破坏确认版 | `docs/requirements/market_regime/context_structure_regime_v5.md` | 代码和第一轮回测已完成；问题收敛到 Structure 证据不足，不继续微调 v5 |
-| TODO-013 | ???? | P2 | ????????????? | `docs/requirements/ops_console.md` / `docs/requirements/domain_signals/strategy_domain_design.md` | ????? AtomicSignalDefinition ??????????????????????? definition_hash ????????? deprecated / disabled ?? |
+| TODO-013 | 已废弃 | P2 | 旧 AtomicSignalDefinition 禁用/替代关系展示占位 | `docs/requirements/ops_console.md` / `docs/requirements/domain_signals/strategy_domain_design.md` | 原内容已乱码且不再单独维护；组件依赖展示、互斥/替代关系统一并入 TODO-015 |
 
 ## 已完成但保留观察
 
@@ -87,13 +88,17 @@ MarketRegime 状态延续与切换确认
 
 | 编号 | 状态 | 优先级 | 事项 | 归属文档 | 下一步 |
 |---|---|---:|---|---|---|
-| TODO-014 | 暂缓 | P1 | 成交量没有真正进入六个领域判断，优先补动能领域的成交量确认 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/feature_layer/momentum_features.md` / `docs/requirements/atomic_signals/momentum_atomic_signals.md` | 先让 MarketRegime 学会消费已有 Structure 事实；成交量后续作为突破、跌破、支撑承接、压力压制的确认器补充 |
+| TODO-014 | 暂缓 | P1 | 成交量补入动能、突破、跌破与支撑/压力确认 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/feature_layer/momentum_features.md` / `docs/requirements/atomic_signals/momentum_atomic_signals.md` | 成交量目前没有真正进入六个领域判断；后续优先补动能确认，并作为突破、跌破、支撑承接、压力压制的确认器补充 |
 | TODO-015 | 待补充 | P2 | 组件依赖高级展示与互斥/替代关系：后台需要让人看清“领域需要哪些原子、原子需要哪些特征”，并支持后续互斥/替代关系 | `docs/requirements/strategy_analysis_release.md` / `docs/requirements/ops_console.md` | 自动过滤已在生成版本包时落地；后续只补页面解释、依赖声明展示、互斥/替代关系和开发者模式 |
 | TODO-016 | 已完成 | P0 | 拐点型支撑压力 AtomicSignal 与 Structure 新版聚合 | `docs/plans/structure_pivot_support_resistance_implementation_slice.md` / `docs/requirements/feature_layer/support_resistance_level_features.md` / `docs/requirements/atomic_signals/structure_pivot_support_resistance_atomic_signals.md` / `docs/requirements/domain_signals/structure_domain_signals_v3.md` | 回测 64–68 第一轮复核基本及格；Structure v3 作为“市场事实表达层”阶段通过，暂时冻结，不再对单个行情微调 |
 | TODO-017 | 已完成 | P0 | MarketRegime v6：独立消费 Structure 的市场环境算法 | `docs/requirements/market_regime/context_structure_regime_v6.md` / `docs/plans/market_regime_acceptance_matrix.md` | v6 calculator、默认定义注册、单元测试和多轮回测已完成；主要问题收敛为连续区间内候选状态跳变频繁，因此下一步进入 v6.1 稳定性验证 |
 | TODO-018 | 暂缓 | P1 | Strategy 如何消费 MarketRegime 与 Structure 的验收 | `docs/requirements/strategy_routing.md` / `docs/requirements/strategy_portfolio_templates.md` / `docs/requirements/strategy_signals/*.md` | 等 MarketRegime 状态延续和 Structure 消费规则稳定后，再讨论策略是否等待、追随、降低仓位、不开仓或只做确认；RiskState 极端冲击可并行或后置补充 |
 | TODO-019 | 已完成 | P0 | MarketRegime v6.1：在 v6 基础上补主环境稳定规则，避免候选状态导致高频跳变 | `docs/requirements/market_regime/context_structure_regime_v6_1.md` / `docs/plans/market_regime_acceptance_matrix.md` | 回测 80–84 结论已写入验收矩阵：v6.1 能减少部分同方向子状态跳变，但不能解决顶部转熊阶段跨环境反复切换；下一步进入 TODO-021 状态延续与切换确认机制 |
-| TODO-020 | 待补文档 | P1 | RiskState v2：极端盘中冲击与冲击后观察期 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/domain_signals/risk_state_domain_signals_v2.md` | 针对 2025-10-10 这类 4h 极端下杀/上冲，补 open-low/open-high、高低波动、ATR、成交量放大、冲击后 N 根观察期；该问题重要但不排在当前第一步，先修 MarketRegime 反复切换 |
-| TODO-021 | 已实现，待回测验收 | P0 | MarketRegime v7：状态延续与切换确认机制 | `docs/requirements/market_regime/context_structure_regime_v7.md` / `docs/plans/market_regime_acceptance_matrix.md` | v7 calculator 已实现并接入上一周期 MarketRegime 状态；13 个市场环境暂不变；下一步 seed MarketRegimeDefinition、发布包含 v7 的测试版本包，并用 80–84 对应窗口和 v6.1 对照回测 |
+| TODO-020 | 部分完成 | P0 | RiskState v2：信号可靠性、冲击后观察期与高波动无方向 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/domain_signals/risk_state_domain_signals_v2.md` | 第一轮已实现：假突破/假跌破进入聚合，新增 risk_score / market_event_score / signal_distortion_score / directional_exposure_score / chase_risk_score / direction_stability_score；单根 4h 振幅 >= 7% 已改为“极端振幅事件/市场冲击”，不再笼统等同于做多或做空风险；下一步回测验证后，再补极端冲击后观察期和高波动无方向识别 |
+| TODO-021 | 暂停，待领域层补完后复验 | P0 | MarketRegime v7：状态延续与切换确认机制 | `docs/requirements/market_regime/context_structure_regime_v7.md` / `docs/plans/market_regime_acceptance_matrix.md` | v7 calculator 已实现并完成一轮回测；当前不继续硬调 MarketRegime，等 RiskState、Trend、Volatility、成交量等领域事实补齐后，再复验 v7 是否仍需要保留或调整 |
 | TODO-022 | 待复核 | P1 | Trend 领域职责重新确认：长期趋势与短期趋势是否需要拆分 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/domain_signals/trend_domain_signals.md` | 当前 Trend 更像“1d 主趋势 + 4h 注释”，在拐点阶段偏慢；复核是否需要新增更当前的短周期趋势证据，避免 MarketRegime 把长期惯性当作当前趋势 |
 | TODO-023 | 待补文档 | P1 | MarketRegime 消费 Structure 支撑/压力事实的统一规则 | `docs/requirements/market_regime/context_structure_regime_v6_1.md` / `docs/requirements/domain_signals/structure_domain_signals_v3.md` | 统一定义支撑测试、支撑守住、支撑跌破候选、压力测试、压力压住、压力突破候选、支撑压力夹层如何影响 MarketRegime，避免只对单个回测窗口调规则 |
+| TODO-024 | 暂缓 | P1 | MarketRegime 后续需要表达冲击震荡 / 高波动无方向 / 趋势失真环境 | `docs/plans/market_regime_acceptance_matrix.md` / 待补 MarketRegime 需求 | 先不继续硬调 MarketRegime；等 RiskState、Trend、Volatility、成交量等领域事实补齐后，再判断是否新增市场环境或只用 RiskState/低可信状态表达 |
+| TODO-025 | 待复核 | P1 | Volatility 与 RiskState 的边界和联动规则 | `docs/plans/domain_signal_review_checklist.md` / `docs/requirements/domain_signals/volatility_domain_signals_v1.md` / `docs/requirements/domain_signals/risk_state_domain_signals_v2.md` | 复核高波动何时只是波动事实、何时会造成信号失真；明确 Volatility 只描述波动状态，RiskState 负责判断这种波动是否导致市场混乱、冲击后观察或普通分类失真 |
+| TODO-026 | 待确认 | P2 | 当前周期事件是否需要独立成层 | `docs/requirements/domain_signals/strategy_domain_design.md` / 待补充设计 | 先观察 RiskState v2、Volatility、Trend 补完后是否仍需要单独表达“当前周期事件”；如果只是冲击、假突破、假跌破、高波动无方向，则优先留在 RiskState / Volatility 内，不急着新增独立领域 |
+| TODO-027 | 暂缓 | P0 | MarketRegime 主环境与当前事件边界重构 | `docs/requirements/market_regime/stage_event_boundary.md` | 当前先不开发；等领域层积木补完后，重新评估 13 个市场环境：日线级可持续行情阶段保留为主环境，支撑测试、压力测试、突破、跌破、急涨急跌、高位受压等降级为当前事件 / 结构证据 / 风险事件，再新建独立 MarketRegime 算法版本 |

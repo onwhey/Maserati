@@ -308,7 +308,7 @@ percentile = 参照窗口中小于或等于当前波动值的历史波动值数�
 计算口径：
 
 ```text
-candle_range_pct = (high - low) / close
+candle_range_pct = (high - low) / open
 candle_body_pct = abs(close - open) / close
 candle_body_ratio = abs(close - open) / (high - low)
 upper_shadow_ratio = (high - max(open, close)) / (high - low)
@@ -321,8 +321,8 @@ lower_shadow_ratio = (min(open, close) - low) / (high - low)
 
 | FeatureCode | 含义 | 输出类型 | warmup |
 |---|---|---|---:|
-| candle_range_pct_1d_latest | 最新 1d K 线高低振幅相对收盘价比例 | decimal | 1 |
-| candle_range_pct_4h_latest | 最新 4h K 线高低振幅相对收盘价比例 | decimal | 1 |
+| candle_range_pct_1d_latest | 最新 1d K 线高低振幅相对开盘价比例 | decimal | 1 |
+| candle_range_pct_4h_latest | 最新 4h K 线高低振幅相对开盘价比例 | decimal | 1 |
 | candle_body_pct_4h_latest | 最新 4h K 线实体相对收盘价比例 | decimal | 1 |
 | candle_body_ratio_4h_latest | 最新 4h K 线实体占高低振幅比例 | decimal | 1 |
 | upper_shadow_ratio_4h_latest | 最新 4h K 线上影线占高低振幅比例 | decimal | 1 |

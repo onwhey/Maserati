@@ -482,6 +482,46 @@ atr_percentile_4h_120 >= 0.95
 最新 4h 同时出现明显上扫和下扫，普通突破 / 跌破判断容易失真。
 ```
 
+### 6.10 单根 4h 极端振幅事件
+
+```text
+signal_code = risk_intrabar_extreme_range
+risk_category = signal_reliability_risk
+risk_direction = two_sided
+```
+
+成立条件：
+
+```text
+candle_range_pct_4h_latest >= 7.0%
+```
+
+强化条件：
+
+```text
+candle_range_pct_4h_latest >= 7.0%
+```
+
+业务含义：
+
+```text
+最新 4h K 线的高低点振幅已经达到极端水平。
+即使收盘涨跌幅不大，盘中也可能出现多空剧烈扫动，普通趋势、突破、跌破解释的可靠性下降。
+该原子只描述“市场冲击 / 信号失真事件”，不直接说明做多或做空是否有利。
+```
+
+它不表示：
+
+```text
+直接看多；
+直接看空；
+直接停止交易；
+直接调整仓位；
+直接生成目标仓位。
+```
+
+这个原子用于补足“只看开盘到收盘涨跌幅会漏掉极端盘中波动”的缺口。
+
 ## 7. 不应放入 risk_state AtomicSignal 的判断
 
 禁止：

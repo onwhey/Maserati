@@ -22,6 +22,7 @@ class StrategyAnalysisConfig(AppConfig):
             GroupedAtomicAggregationV11Calculator,
             GroupedAtomicAggregationV2Calculator,
             GroupedAtomicAggregationV3Calculator,
+            RiskStateAggregationV2Calculator,
             SingleAtomicPassthroughCalculator,
         )
         from apps.strategy_calculator.errors import DuplicateCalculatorError
@@ -55,6 +56,7 @@ class StrategyAnalysisConfig(AppConfig):
             GroupedAtomicAggregationV11Calculator(),
             GroupedAtomicAggregationV2Calculator(),
             GroupedAtomicAggregationV3Calculator(),
+            RiskStateAggregationV2Calculator(),
             SingleAtomicPassthroughCalculator(),
             ContextStructureRegimeCalculator(),
             ContextStructureRegimeV2Calculator(),

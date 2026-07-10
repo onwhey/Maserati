@@ -290,8 +290,8 @@ def _risk_state() -> DomainSignalDefinitionTemplate:
         description="聚合冲击、假突破、追单和市场扰动类原子事实，形成非交易动作的风险状态。",
         category="risk_state",
         output_mode=DomainSignalOutputMode.STATE,
-        algorithm_name="grouped_atomic_aggregation",
-        algorithm_version="1.0.0",
+        algorithm_name="risk_state_aggregation",
+        algorithm_version="2.0.0",
         params=_base_params("risk_state"),
     )
 

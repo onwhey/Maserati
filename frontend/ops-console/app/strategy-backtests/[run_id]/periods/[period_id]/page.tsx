@@ -179,7 +179,7 @@ function PeriodSummaryCard({ period }: { period: Record<string, unknown> }) {
         <Metric label="UTC 周期" value={formatUtcMinute(period.analysis_close_time_utc)} />
         <Metric label="状态" value={<StatusBadge value={period.status} />} />
         <Metric label="周期收益" value={<ReturnPercent value={period.period_return_pct} />} />
-        <Metric label="策略" value={strategyLabel(period.selected_strategy)} />
+        <Metric label="策略" value={strategyLabel(period.selected_strategy_display_name || period.selected_strategy)} />
         <Metric label="目标仓位" value={formatPosition(period.target_position_ratio)} />
         <Metric label="有效仓位" value={formatPosition(period.effective_position_ratio)} />
         <Metric label="模拟成交价" value={formatDecimal(period.simulated_execution_price, 2)} />
@@ -212,7 +212,7 @@ function OverallConclusion({
   const trend = findByCode(domains, "domain_code", "trend");
   const structure = findByCode(domains, "domain_code", "structure");
   const risk = findByCode(domains, "domain_code", "risk_state");
-  const selectedStrategy = period.selected_strategy || signal.strategy_code;
+  const selectedStrategy = period.selected_strategy_display_name || period.selected_strategy || signal.strategy_code;
   const targetPosition = decision.target_position_ratio ?? period.target_position_ratio;
 
   return (
@@ -389,7 +389,11 @@ function DecisionChainReview({
         />
         <DecisionStep
           title="2. 为什么选这个策略"
-          conclusion={routing.route_outcome === "selected" ? strategyLabel(period.selected_strategy || signal.strategy_code) : routeOutcomeLabel(routing.route_outcome)}
+          conclusion={
+            routing.route_outcome === "selected"
+              ? strategyLabel(period.selected_strategy_display_name || period.selected_strategy || signal.strategy_code)
+              : routeOutcomeLabel(routing.route_outcome)
+          }
           evidence={routing.evidence_text_zh || routing.selection_reason}
           hint="如果市场环境对，但策略选错，应检查 StrategyRouting 的路由规则，而不是先改特征。"
         />

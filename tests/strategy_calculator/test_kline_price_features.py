@@ -96,10 +96,12 @@ def test_kline_price_features_calculates_slope_and_return_delta() -> None:
 def test_kline_price_features_calculates_atr_and_candle_shape() -> None:
     atr = _value({"operation": "atr", "timeframe": "4h", "window": 3})
     atr_pct = _value({"operation": "atr_pct", "timeframe": "4h", "window": 3})
+    range_pct = _value({"operation": "candle_range_pct_latest", "timeframe": "4h"})
     body_ratio = _value({"operation": "candle_body_ratio_latest", "timeframe": "4h"})
 
     assert atr == Decimal("2")
     assert atr_pct == Decimal("2") / Decimal("109")
+    assert range_pct == Decimal("2") / Decimal("108.5")
     assert body_ratio == Decimal("0.5") / Decimal("2")
 
 

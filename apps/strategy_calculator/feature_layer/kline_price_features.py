@@ -355,7 +355,7 @@ class KlinePriceFeatureCalculator:
     @staticmethod
     def _candle_range_pct_latest(bars: list[KlineBar], _params: dict[str, Any]) -> Decimal:
         bar = _latest(bars)
-        return _safe_div(bar.high - bar.low, bar.close, "latest_close_non_positive")
+        return _safe_div(bar.high - bar.low, bar.open, "latest_open_non_positive")
 
     @staticmethod
     def _candle_body_pct_latest(bars: list[KlineBar], _params: dict[str, Any]) -> Decimal:

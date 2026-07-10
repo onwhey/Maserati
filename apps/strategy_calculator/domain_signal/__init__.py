@@ -6,6 +6,7 @@ from .grouped_atomic_aggregation import (
     GroupedAtomicAggregationV2Calculator,
     GroupedAtomicAggregationV3Calculator,
 )
+from .risk_state_aggregation import RiskStateAggregationV2Calculator
 from .single_atomic_passthrough import SingleAtomicPassthroughCalculator
 
 __all__ = [
@@ -13,5 +14,6 @@ __all__ = [
     "GroupedAtomicAggregationV11Calculator",
     "GroupedAtomicAggregationV2Calculator",
     "GroupedAtomicAggregationV3Calculator",
+    "RiskStateAggregationV2Calculator",
     "SingleAtomicPassthroughCalculator",
 ]

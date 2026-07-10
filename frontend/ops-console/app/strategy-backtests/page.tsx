@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Eye } from "lucide-react";
+import type { ReactNode } from "react";
 
 import { ApiError } from "@/components/ops/api-error";
 import { PageHeader } from "@/components/ops/page-header";
@@ -14,6 +15,8 @@ import { asRows } from "@/lib/ops-data";
 import { StrategyBacktestForm } from "./backtest-form";
 import { DeleteStrategyBacktestRunButton } from "./delete-run-button";
 
+const RUN_PAGE_SIZE = 20;
+
 type PageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
@@ -23,12 +26,16 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
   const selectedRunId = firstParam(params.run_id) ?? "";
   const deletedRunId = firstParam(params.deleted_run_id) ?? "";
   const deleteError = firstParam(params.delete_error) ?? "";
+  const runPage = positivePage(firstParam(params.run_page));
+  const runOffset = (runPage - 1) * RUN_PAGE_SIZE;
   if (selectedRunId) {
     redirect(`/strategy-backtests/${encodeURIComponent(selectedRunId)}`);
   }
 
   const releasesResult = await opsFetch<Paginated<Record<string, unknown>>>("/api/ops/strategy-releases/?limit=100");
-  const runsResult = await opsFetch<Paginated<Record<string, unknown>>>("/api/ops/strategy-backtests/runs/?limit=20");
+  const runsResult = await opsFetch<Paginated<Record<string, unknown>>>(
+    `/api/ops/strategy-backtests/runs/?limit=${RUN_PAGE_SIZE}&offset=${runOffset}`
+  );
 
   if (!releasesResult.ok) {
     return <ApiError reason={releasesResult.reason_code} message={releasesResult.message_zh} />;
@@ -39,6 +46,8 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
 
   const releases = asRows(releasesResult.data.items);
   const runs = asRows(runsResult.data.items);
+  const runPagination = runsResult.data.pagination;
+  const totalRunPages = Math.max(1, Math.ceil(runPagination.total / runPagination.limit));
 
   return (
     <>
@@ -117,6 +126,19 @@ export default async function StrategyBacktestsPage({ searchParams }: PageProps)
                 },
               ]}
             />
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
+              <span>
+                共 {runPagination.total} 条回测，当前第 {runPage} / {totalRunPages} 页
+              </span>
+              <div className="flex items-center gap-2">
+                <BacktestRunPageLink page={runPage - 1} disabled={runPage <= 1}>
+                  上一页
+                </BacktestRunPageLink>
+                <BacktestRunPageLink page={runPage + 1} disabled={runPage >= totalRunPages}>
+                  下一页
+                </BacktestRunPageLink>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -172,6 +194,26 @@ function ReturnPercent({ value }: { value: unknown }) {
     return <span className="font-medium text-red-600 dark:text-red-400">{text}</span>;
   }
   return <span>{text}</span>;
+}
+
+function BacktestRunPageLink({ page, disabled, children }: { page: number; disabled: boolean; children: ReactNode }) {
+  if (disabled) {
+    return <span className="rounded border px-2 py-1 text-muted-foreground/60">{children}</span>;
+  }
+  const href = page <= 1 ? "/strategy-backtests" : `/strategy-backtests?run_page=${page}`;
+  return (
+    <Link className="rounded border px-2 py-1 no-underline hover:bg-muted" href={href}>
+      {children}
+    </Link>
+  );
+}
+
+function positivePage(value: string | undefined): number {
+  const number = Number(value ?? 1);
+  if (!Number.isInteger(number) || number < 1) {
+    return 1;
+  }
+  return number;
 }
 
 function firstParam(value: string | string[] | undefined): string | undefined {

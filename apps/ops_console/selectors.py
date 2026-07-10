@@ -40,7 +40,8 @@ from apps.review_dataset.selectors import (
 from apps.runtime_config.models import RuntimeTradingConfig
 from apps.runtime_config.services import get_effective_real_trading_permission
 from apps.runtime_guard.models import RuntimeGuardIssue, RuntimeGuardIssueStatus
-from apps.market_data.models import MarketSnapshot
+from apps.market_data.domain import TIMEFRAME_4H, configured_collection_domain
+from apps.market_data.models import Kline, MarketSnapshot
 from apps.strategy_analysis.market_regime_catalog import (
     market_regime_description_from_match_conditions,
     market_regime_display_name_from_match_conditions,
@@ -931,8 +932,13 @@ def get_strategy_backtest_run_detail(run_id: int) -> dict[str, Any]:
     }
 
 
-def _strategy_backtest_period_result_row(result: StrategyBacktestPeriodResult) -> dict[str, Any]:
-    return _model_summary(
+def _strategy_backtest_period_result_row(
+    result: StrategyBacktestPeriodResult,
+    *,
+    strategy_display_names: Mapping[str, str] | None = None,
+    current_kline_stats_by_time: Mapping[datetime, Mapping[str, str]] | None = None,
+) -> dict[str, Any]:
+    row = _model_summary(
         result,
         (
             "id",
@@ -967,11 +973,95 @@ def _strategy_backtest_period_result_row(result: StrategyBacktestPeriodResult) -
             "created_at_utc",
         ),
     ) or {}
+    selected_strategy = str(row.get("selected_strategy") or "")
+    row["selected_strategy_display_name"] = _strategy_backtest_strategy_display_name(
+        selected_strategy,
+        strategy_display_names=strategy_display_names,
+    )
+    if current_kline_stats_by_time is not None:
+        current_stats = current_kline_stats_by_time.get(result.analysis_close_time_utc, {})
+        row["current_kline_return_pct"] = current_stats.get("current_kline_return_pct", "")
+        row["kline_amplitude_pct"] = current_stats.get("kline_amplitude_pct", "")
+    return row
+
+
+def _current_kline_stats_by_analysis_close_time(analysis_close_times: list[datetime]) -> dict[datetime, dict[str, str]]:
+    if not analysis_close_times:
+        return {}
+    domain = configured_collection_domain()
+    open_time_by_analysis_close = {
+        analysis_close_time - timedelta(hours=4): analysis_close_time
+        for analysis_close_time in analysis_close_times
+    }
+    rows = Kline.objects.filter(
+        exchange=domain.exchange,
+        market_type=domain.market_type,
+        symbol=domain.symbol,
+        timeframe=TIMEFRAME_4H,
+        open_time_utc__in=open_time_by_analysis_close.keys(),
+    ).only("open_time_utc", "open_price", "high_price", "low_price", "close_price")
+    values: dict[datetime, dict[str, str]] = {}
+    for row in rows:
+        if row.open_price <= 0:
+            continue
+        analysis_close_time = open_time_by_analysis_close.get(row.open_time_utc)
+        if analysis_close_time is None:
+            continue
+        values[analysis_close_time] = {
+            "current_kline_return_pct": _decimal_text((row.close_price - row.open_price) / row.open_price),
+            "kline_amplitude_pct": _decimal_text((row.high_price - row.low_price) / row.open_price),
+        }
+    return values
+
+
+def _strategy_backtest_strategy_display_name(
+    strategy_code: str,
+    *,
+    strategy_display_names: Mapping[str, str] | None = None,
+) -> str:
+    if not strategy_code:
+        return ""
+    if strategy_display_names is not None:
+        return strategy_display_names.get(strategy_code, strategy_code)
+    definition = (
+        StrategyDefinition.objects.filter(strategy_code=strategy_code)
+        .order_by("-updated_at_utc", "-id")
+        .values("display_name")
+        .first()
+    )
+    if not definition:
+        return strategy_code
+    return str(definition.get("display_name") or strategy_code)
+
+
+def _strategy_display_names_for_backtest_run(run: StrategyBacktestRun) -> dict[str, str]:
+    release_id = run.strategy_analysis_release_id
+    if not release_id:
+        return {}
+    strategy_ids = list(
+        StrategyAnalysisReleaseItem.objects.filter(
+            release_id=release_id,
+            component_type=ReleaseItemComponentType.STRATEGY_DEFINITION,
+            component_object_id__isnull=False,
+        ).values_list("component_object_id", flat=True)
+    )
+    if not strategy_ids:
+        return {}
+    definitions = StrategyDefinition.objects.filter(id__in=strategy_ids).values(
+        "strategy_code",
+        "display_name",
+    )
+    return {
+        str(definition["strategy_code"]): str(definition.get("display_name") or definition["strategy_code"])
+        for definition in definitions
+    }
 
 
 def list_strategy_backtest_period_results(run_id: int, params: Mapping[str, Any]) -> dict[str, Any]:
-    if not StrategyBacktestRun.objects.filter(id=run_id).exists():
+    run = StrategyBacktestRun.objects.filter(id=run_id).only("id", "strategy_analysis_release_id").first()
+    if run is None:
         raise OpsConsoleObjectNotFound(f"StrategyBacktestRun {run_id} not found")
+    strategy_display_names = _strategy_display_names_for_backtest_run(run)
     queryset = StrategyBacktestPeriodResult.objects.filter(strategy_backtest_run_id=run_id).order_by("period_index")
     if status := params.get("status"):
         queryset = queryset.filter(status=status)
@@ -981,8 +1071,19 @@ def list_strategy_backtest_period_results(run_id: int, params: Mapping[str, Any]
     offset = _int_param(params, "offset", default=0, min_value=0, max_value=100000)
     total = queryset.count()
     rows = list(queryset[offset : offset + limit])
+    current_kline_stats_by_time = _current_kline_stats_by_analysis_close_time([row.analysis_close_time_utc for row in rows])
     pagination = {"limit": limit, "offset": offset, "total": total}
-    return {"items": [_strategy_backtest_period_result_row(result) for result in rows], "pagination": pagination}
+    return {
+        "items": [
+            _strategy_backtest_period_result_row(
+                result,
+                strategy_display_names=strategy_display_names,
+                current_kline_stats_by_time=current_kline_stats_by_time,
+            )
+            for result in rows
+        ],
+        "pagination": pagination,
+    }
 
 
 def get_strategy_backtest_period_analysis_detail(run_id: int, period_result_id: int) -> dict[str, Any]:

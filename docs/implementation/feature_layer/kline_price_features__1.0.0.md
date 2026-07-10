@@ -149,6 +149,14 @@ atr_pct = atr / latest_close
 
 其中 `atr` 输出绝对价格幅度，`atr_pct` 输出相对当前收盘价的比例。
 
+单根 K 线振幅：
+
+```text
+candle_range_pct_latest = (high - low) / open
+```
+
+该口径用于和回测详情页展示保持一致，表达“这一根 K 从开盘开始，盘中最高到最低一共扫动了多少”。
+
 收盘位置：
 
 ```text
